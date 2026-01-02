@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{ app_name }}</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+
+  <body>
+    <div class="app">
+      <div class="toolbar">
+        <div class="brand">
+          <img id="brandLogo" src="/static/logo.svg" alt="{{ app_name }}" />
+          <div class="brandText">
+            <div class="brandName">{{ app_name }}</div>
+            <div class="brandSub">Media library insights</div>
+          </div>
+        </div>
+
+        <button id="loadBtn">Load</button>
+        <button id="refreshBtn">Refresh</button>
+        <div class="column-menu">
+          <button id="columnsBtn" type="button">Columns</button>
+          <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns">
+  <div class="column-panel-header">
+    <input id="columnSearch" class="column-search" type="search" placeholder="Search columns" />
+    <div class="column-actions">
+      <button id="columnsShowAll" type="button">Show all</button>
+      <button id="columnsHideAll" type="button">Hide all</button>
+      <button id="columnsReset" type="button">Reset</button>
+    </div>
+  </div>
+  <div class="column-group">
+    <div class="column-group-title">Core</div>
+    <label class="column-row"><input type="checkbox" data-col="Title" /> Title</label>
+    <label class="column-row"><input type="checkbox" data-col="Path" /> Path</label>
+  </div>
+          <div class="column-group" data-app="sonarr">
+            <div class="column-group-title">Sonarr</div>
+            <label class="column-row"><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
+            <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
+          </div>
+          <div class="column-group" data-app="radarr">
+            <div class="column-group-title">Radarr</div>
+            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> Runtime (min)</label>
+            <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> Size (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
+          </div>
+  <div class="column-group">
+    <div class="column-group-title">Video</div>
+    <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> Video Quality</label>
+    <label class="column-row"><input type="checkbox" data-col="Resolution" /> Resolution</label>
+    <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> Video Codec</label>
+    <label class="column-row"><input type="checkbox" data-col="VideoHDR" /> Video HDR</label>
+  </div>
+  <div class="column-group">
+    <div class="column-group-title">Audio</div>
+    <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioProfile" /> Audio Profile</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
+  </div>
+</div>
+        </div>
+        <button id="themeBtn" title="Toggle theme">☀️</button>
+        <span class="status" id="status"></span>
+        <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
+        <span class="last-updated" id="lastUpdated"></span>
+        <span class="version-badge">v{{ app_version }}</span>
+      </div>
+
+      <div class="filters">
+        <div class="filter-row">
+          <div class="filter-inputs" id="filterInputs">
+            <div class="simple-filters" id="simpleFilters">
+              <input id="titleFilter" placeholder="Filter title (supports * and ?)" />
+              <input id="pathFilter" placeholder="Filter path (supports * and ?)" />
+            </div>
+            <input
+              id="advancedFilter"
+              class="advanced-filter"
+              placeholder="Advanced filtering examples: path:C:\ | audio:eac3 | audio:Atmos | audiochannels>=6 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
+            />
+          </div>
+          <div class="filter-controls">
+            <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">Advanced</button>
+            <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
+          </div>
+        </div>
+        <div id="advancedHelp" class="advanced-help hidden">
+          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiochannels>=6 gbperhour:1 totalsize:10 videocodec:x265 videohdr:hdr
+          Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, episodes, totalsize, avgepisode, runtime, filesize, gbperhour
+        </div>
+        <div id="advancedWarnings" class="advanced-warnings hidden"></div>
+        <div class="chip-wrap">
+          <div class="chip-groups">
+            <div class="chip-group">
+              <div class="chip-group-title">Audio</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-query="audio:Atmos">Atmos</button>
+                <button class="chip" type="button" data-query="audio:eac3">DD+</button>
+                <button class="chip" type="button" data-query="audio:truehd">TrueHD</button>
+                <button class="chip" type="button" data-query="audiochannels>=6">5.1+</button>
+                <button class="chip" type="button" data-query="audiochannels>=8">7.1+</button>
+                <button class="chip" type="button" data-query="audiochannels<=2">Stereo</button>
+              </div>
+            </div>
+            <div class="chip-group">
+              <div class="chip-group-title">Resolution</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-query="resolution:2160p">4K</button>
+                <button class="chip" type="button" data-query="resolution:1080p">1080p</button>
+                <button class="chip" type="button" data-query="resolution:720p">720p</button>
+                <button class="chip" type="button" data-query="resolution:480p">480p</button>
+              </div>
+            </div>
+            <div class="chip-group">
+              <div class="chip-group-title">Source</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-query="videoquality:webdl">WEB-DL</button>
+                <button class="chip" type="button" data-query="videoquality:webrip">WEBRip</button>
+                <button class="chip" type="button" data-query="videoquality:bluray">BluRay</button>
+                <button class="chip" type="button" data-query="videoquality:remux">Remux</button>
+              </div>
+            </div>
+            <div class="chip-group">
+            <div class="chip-group-title">Video Tags</div>
+            <div class="chip-row">
+              <button class="chip" type="button" data-query="videocodec:x265">x265</button>
+              <button class="chip" type="button" data-query="videocodec:x264">x264</button>
+              <button class="chip" type="button" data-query="videohdr:dolby">Dolby Vision</button>
+              <button class="chip" type="button" data-query="videohdr:hdr">HDR</button>
+            </div>
+          </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active" id="tabSonarr">Sonarr</button>
+        <button class="tab" id="tabRadarr">Radarr</button>
+        <span class="spacer"></span>
+        <button id="exportCsvBtn">Export CSV</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
+
+            <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
+
+            <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">GiB / Hour <span class="sort-indicator"></span></th>
+
+            <th data-sort="VideoQuality" data-col="VideoQuality">Video Quality <span class="sort-indicator"></span></th>
+            <th data-sort="Resolution" data-col="Resolution">Resolution <span class="sort-indicator"></span></th>
+            <th data-sort="VideoCodec" data-col="VideoCodec">Video Codec <span class="sort-indicator"></span></th>
+            <th data-sort="VideoHDR" data-col="VideoHDR">Video HDR <span class="sort-indicator"></span></th>
+            <th data-sort="AudioCodec" data-col="AudioCodec">Audio Codec <span class="sort-indicator"></span></th>
+            <th data-sort="AudioProfile" data-col="AudioProfile">Audio Profile <span class="sort-indicator"></span></th>
+            <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
+
+            <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+
+      <div class="footer">{{ app_name }} v{{ app_version }} - Sonarr & Radarr efficiency view</div>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

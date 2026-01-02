@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  sonarr-avgsize:
+    build: .
+    container_name: sonarr-avgsize
+    ports:
+      - "8787:8787"
+    environment:
+      - ENV_FILE_PATH=/data/Sortarr.env
+      - CACHE_SECONDS=300
+    volumes:
+      - "./data:/data"
+
+    restart: unless-stopped

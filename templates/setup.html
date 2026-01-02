@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{ app_name }} Setup</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/setup.css" />
+  </head>
+  <body>
+    <div class="setup-wrap">
+      <div class="setup-card">
+        <div class="setup-header">
+          <img class="setup-logo" src="/static/logo.svg" alt="{{ app_name }}" />
+          <div>
+            <div class="setup-title">{{ app_name }} Setup v{{ app_version }}</div>
+            <div class="setup-sub">Add Sonarr and Radarr details to create your env file</div>
+          </div>
+        </div>
+
+        {% if error %}
+        <div class="setup-error">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" class="setup-form">
+          <div class="setup-section-title">Sonarr</div>
+          <label>
+            Sonarr URL
+            <input name="sonarr_url" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url }}" />
+          </label>
+          <label>
+            Sonarr API key
+            <input name="sonarr_api_key" placeholder="your-api-key" value="{{ values.sonarr_api_key }}" />
+          </label>
+
+          <div class="setup-section-title">Radarr</div>
+          <label>
+            Radarr URL
+            <input name="radarr_url" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url }}" />
+          </label>
+          <label>
+            Radarr API key
+            <input name="radarr_api_key" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
+          </label>
+
+          <div class="setup-section-title">Security</div>
+          <label>
+            Basic auth username
+            <input name="basic_auth_user" placeholder="optional" value="{{ values.basic_auth_user }}" />
+          </label>
+          <label>
+            Basic auth password
+            <input name="basic_auth_pass" type="password" placeholder="optional" value="{{ values.basic_auth_pass }}" />
+          </label>
+
+          <div class="setup-section-title">Performance</div>
+          <label>
+            Cache seconds
+            <input name="cache_seconds" type="number" min="30" step="1" value="{{ values.cache_seconds }}" />
+          </label>
+
+          <div class="setup-hint">Env file path: {{ env_path }}</div>
+          <button class="setup-submit" type="submit">Save and continue</button>
+        </form>
+      </div>
+    </div>
+  </body>
+</html>
