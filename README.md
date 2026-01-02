@@ -1,30 +1,39 @@
 # Sortarr
 
-Sortarr is a lightweight dashboard for Sonarr and Radarr that surfaces library size metrics
-(average episode size, movie GB/hour, and more) with filtering, sorting, and CSV export.
+Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
+
+Core functionality is complete. Current work focuses on performance improvements and expanding analysis views.
+
+## Who it's for
+
+- Runs Sonarr and/or Radarr and wants deeper storage insight
+- Cares about balancing quality and disk space
+- Manages large or growing libraries and wants to spot inefficiencies early
+- Prefers analysis and visibility over automation
+
+## How it works
+
+Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency metrics, caches results for performance, and serves a small read-only UI and HTTP API. It does not modify files or take any actions against your media.
 
 ## Features
 
 - Sonarr series size stats (total and average per episode)
-- Radarr movie size stats (file size and GB/hour)
-- Advanced filtering (wildcards, comparisons, and numeric bucketing)
-- Column toggles with per-user preferences
+- Radarr movie size stats (file size and GiB per hour)
+- Sorting, filtering, and column toggles
 - CSV export for Sonarr and Radarr
-- Optional basic auth and configurable cache duration
+- Optional basic auth and configurable cache
 
-## Quick start (Docker)
+## Deployment (Docker)
 
 ```bash
 docker compose up -d --build
 ```
 
-Open `http://<host>:8787`. The first visit redirects to `/setup` where you can enter
-Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH`
-(defaults to `./data/Sortarr.env` in `docker-compose.yaml`).
+Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`).
 
 ## Configuration
 
-The setup page writes these keys:
+Sortarr writes and reads:
 
 - `SONARR_URL`
 - `SONARR_API_KEY`
@@ -33,48 +42,45 @@ The setup page writes these keys:
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
 - `CACHE_SECONDS`
-- `ENV_FILE_PATH` (optional override)
+
+Requirements and notes:
+
+- Sonarr/Radarr API keys are required (read-only keys recommended)
+- Basic auth is optional but recommended if exposed beyond your LAN
+- Designed for on-demand queries with caching (no background polling)
+- No database or media filesystem access required
 
 ## Advanced filtering
 
-Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as
-`>=` (use `=` for exact). For `gbperhour` and `totalsize`, integer values use a
-whole-number bucket (e.g., `gbperhour:1` matches 1.0–1.99).
+Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as `>=` (use `=` for exact). `gbperhour` and `totalsize` with integer values use whole-number buckets (e.g., `gbperhour:1` matches 1.0-1.99).
 
-Examples:
+Examples: `audio:Atmos` `audiocodec:eac3` `audiochannels>=6` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-- `audio:Atmos`
-- `audiocodec:eac3`
-- `audiochannels>=6`
-- `gbperhour:1`
-- `totalsize:10`
-- `videocodec:x265`
-- `videohdr:hdr`
-
-Fields: `title`, `path`, `videoquality`, `videocodec`, `videohdr`, `resolution`,
-`audio`, `audiocodec`, `audioprofile`, `audiochannels`, `episodes`, `totalsize`,
-`avgepisode`, `runtime`, `filesize`, `gbperhour`.
+Fields: `title`, `path`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
 
 ### Audio profile note
 
-`AudioProfile` is shown only when Arr reports `audioProfile` or
-`audioAdditionalFeatures`. If the metadata is missing, Sortarr displays
-"Not reported" (no inference).
+`AudioProfile` only appears when Arr reports `audioProfile` or `audioAdditionalFeatures`. If the metadata is missing, Sortarr displays "Not reported" (no inference).
 
-## CSV export
+## HTTP API
 
-- Sonarr: `/api/shows.csv`
-- Radarr: `/api/movies.csv`
+- `/api/shows`
+- `/api/movies`
+- `/api/shows.csv`
+- `/api/movies.csv`
 
-## Health
+## Non-goals
 
-- `/health`
+- Replace Sonarr or Radarr, or duplicate their core functionality
+- Modify, manage, or automate media files
+- Act as a downloader, indexer, or media manager
+- Provide real-time, event-driven monitoring
 
-## Development
+## Planned features
 
-The container runs via gunicorn:
+- Expanded efficiency views and comparisons
+- Performance improvements for very large libraries
+- More grouping and filtering options
 
-```bash
-gunicorn --bind 0.0.0.0:8787 --workers 2 --timeout 120 app:app
-```
+Feedback and ideas are welcome.
 
