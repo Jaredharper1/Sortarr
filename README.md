@@ -22,6 +22,8 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Sorting, filtering, and column toggles
 - CSV export for Sonarr and Radarr
 - Optional basic auth and configurable cache
+- Optional Tautulli playback stats (play count, last watched, watch time, users)
+- Audio/subtitle language columns with filters and quick chips
 
 ## Deployment (Docker)
 
@@ -41,6 +43,8 @@ Sortarr writes and reads:
 - `SONARR_API_KEY`
 - `RADARR_URL`
 - `RADARR_API_KEY`
+- `TAUTULLI_URL` (optional)
+- `TAUTULLI_API_KEY` (optional)
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
 - `CACHE_SECONDS`
@@ -48,6 +52,7 @@ Sortarr writes and reads:
 Requirements and notes:
 
 - Sonarr/Radarr API keys are required (read-only keys recommended)
+- Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
 - Basic auth is optional but recommended if exposed beyond your LAN
 - Designed for on-demand queries with caching (no background polling)
 - No database or media filesystem access required
@@ -56,9 +61,11 @@ Requirements and notes:
 
 Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as `>=` (use `=` for exact). `gbperhour` and `totalsize` with integer values use whole-number buckets (e.g., `gbperhour:1` matches 1.0-1.99).
 
-Examples: `audio:Atmos` `audiocodec:eac3` `audiochannels>=6` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
+Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `dayssincewatched>=365` `watchtime>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-Fields: `title`, `path`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+Fields: `title`, `path`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `audiolang`, `sublang`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+
+Note: Language lists are shortened in the table; use "Show all" to expand them.
 
 ### Audio profile note
 

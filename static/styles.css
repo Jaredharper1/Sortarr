@@ -341,13 +341,73 @@ html[data-theme="dark"] .advanced-warnings {
 }
 
 
+.mixed-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
 .mixed-badge {
-  margin-left: 6px;
   padding: 1px 6px;
   border-radius: 10px;
   font-size: 0.75em;
   border: 1px solid var(--border);
   color: var(--muted);
+  white-space: nowrap;
+}
+
+.mixed-badge-inline {
+  margin-left: 6px;
+}
+
+.lang-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.lang-cell-truncated {
+  white-space: nowrap;
+}
+
+.lang-cell-truncated .lang-list {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lang-cell-truncated.is-expanded {
+  white-space: normal;
+  flex-wrap: wrap;
+}
+
+.lang-cell-truncated.is-expanded .lang-list {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.lang-list {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.lang-toggle {
+  border: 1px solid var(--border);
+  background: transparent;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 0.75em;
+  color: var(--muted);
+  margin-left: 6px;
+}
+
+.lang-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 button {
@@ -444,6 +504,20 @@ th {
 tbody tr:hover { background: var(--row-hover); }
 
 .right { text-align: left; }
+
+td[data-col="AudioLanguages"],
+td[data-col="SubtitleLanguages"] {
+  max-width: 360px;
+  white-space: normal;
+}
+
+td[data-col="Path"] {
+  white-space: nowrap;
+}
+
+td[data-col="Title"] {
+  white-space: nowrap;
+}
 
 .footer {
   margin-top: 10px;

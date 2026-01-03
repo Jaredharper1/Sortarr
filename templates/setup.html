@@ -15,7 +15,7 @@
           <img class="setup-logo" src="/static/logo.svg" alt="{{ app_name }}" />
           <div>
             <div class="setup-title">{{ app_name }} Setup v{{ app_version }}</div>
-            <div class="setup-sub">Add Sonarr and Radarr details to create your env file</div>
+            <div class="setup-sub">Add Sonarr/Radarr details. Tautulli is optional for playback stats.</div>
           </div>
         </div>
 
@@ -42,6 +42,16 @@
           <label>
             Radarr API key
             <input name="radarr_api_key" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
+          </label>
+
+          <div class="setup-section-title">Tautulli (optional)</div>
+          <label>
+            Tautulli URL
+            <input name="tautulli_url" placeholder="http://192.168.1.120:8181" value="{{ values.tautulli_url }}" />
+          </label>
+          <label>
+            Tautulli API key
+            <input name="tautulli_api_key" placeholder="optional" value="{{ values.tautulli_api_key }}" />
           </label>
 
           <div class="setup-section-title">Security</div>

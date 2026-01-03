@@ -22,7 +22,7 @@
         <button id="loadBtn">Load</button>
         <button id="refreshBtn">Refresh</button>
         <div class="column-menu">
-          <button id="columnsBtn" type="button">Columns</button>
+          <button id="columnsBtn" type="button" title="Adjust visible columns">Columns</button>
           <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns">
   <div class="column-panel-header">
     <input id="columnSearch" class="column-search" type="search" placeholder="Search columns" />
@@ -61,6 +61,16 @@
     <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
     <label class="column-row"><input type="checkbox" data-col="AudioProfile" /> Audio Profile</label>
     <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioLanguages" /> Audio Languages</label>
+    <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> Subtitle Languages</label>
+  </div>
+  <div class="column-group">
+    <div class="column-group-title">Playback (Tautulli)</div>
+    <label class="column-row" data-app="radarr"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
+    <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
+    <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
+    <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time (hrs)</label>
+    <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> Users Watched</label>
   </div>
 </div>
         </div>
@@ -81,7 +91,7 @@
             <input
               id="advancedFilter"
               class="advanced-filter"
-              placeholder="Advanced filtering examples: path:C:\ | audio:eac3 | audio:Atmos | audiochannels>=6 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
+              placeholder="Advanced filtering examples: path:C:\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
             />
           </div>
           <div class="filter-controls">
@@ -90,8 +100,8 @@
           </div>
         </div>
         <div id="advancedHelp" class="advanced-help hidden">
-          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiochannels>=6 gbperhour:1 totalsize:10 videocodec:x265 videohdr:hdr
-          Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, episodes, totalsize, avgepisode, runtime, filesize, gbperhour
+          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr
+          Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour
         </div>
         <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="chip-wrap">
@@ -105,6 +115,38 @@
                 <button class="chip" type="button" data-query="audiochannels>=6">5.1+</button>
                 <button class="chip" type="button" data-query="audiochannels>=8">7.1+</button>
                 <button class="chip" type="button" data-query="audiochannels<=2">Stereo</button>
+              </div>
+            </div>
+            <div class="chip-group">
+              <div class="chip-group-title">Audio Language</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-query="audiolang:eng">English</button>
+                <button class="chip" type="button" data-query="audiolang:spa">Spanish</button>
+                <button class="chip" type="button" data-query="audiolang:fra">French</button>
+                <button class="chip" type="button" data-query="audiolang:deu">German</button>
+                <button class="chip" type="button" data-query="audiolang:jpn">Japanese</button>
+              </div>
+            </div>
+            <div class="chip-group">
+              <div class="chip-group-title">Subtitles</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-query="sublang:eng">English</button>
+                <button class="chip" type="button" data-query="sublang:spa">Spanish</button>
+                <button class="chip" type="button" data-query="sublang:fra">French</button>
+                <button class="chip" type="button" data-query="sublang:deu">German</button>
+                <button class="chip" type="button" data-query="sublang:jpn">Japanese</button>
+                <button class="chip" type="button" data-query="nosubs:true">No Subtitles</button>
+              </div>
+            </div>
+            <div class="chip-group" data-tautulli="true">
+              <div class="chip-group-title">Playback (Tautulli)</div>
+              <div class="chip-row">
+                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never Watched</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">Watched</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">Rewatched</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">Recent (30d)</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">Heavy (10+ hrs)</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="users>=2">Multi-user</button>
               </div>
             </div>
             <div class="chip-group">
@@ -165,6 +207,13 @@
             <th data-sort="AudioCodec" data-col="AudioCodec">Audio Codec <span class="sort-indicator"></span></th>
             <th data-sort="AudioProfile" data-col="AudioProfile">Audio Profile <span class="sort-indicator"></span></th>
             <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
+            <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
+            <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="PlayCount" data-col="PlayCount" data-app="radarr">Times Watched <span class="sort-indicator"></span></th>
+            <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hrs) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="UsersWatched" data-col="UsersWatched">Users Watched <span class="sort-indicator"></span></th>
 
             <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
           </tr>

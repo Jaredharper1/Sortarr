@@ -34,13 +34,46 @@ let sortDir = "desc";
 let isLoading = false;
 let advancedEnabled = false;
 let chipQuery = "";
+let tautulliEnabled = false;
+
+const TAUTULLI_COLUMNS = new Set([
+  "PlayCount",
+  "LastWatched",
+  "DaysSinceWatched",
+  "TotalWatchTimeHours",
+  "UsersWatched",
+]);
+const TAUTULLI_FILTER_FIELDS = new Set([
+  "playcount",
+  "lastwatched",
+  "dayssincewatched",
+  "watchtime",
+  "watchtimehours",
+  "totalwatchtime",
+  "userswatched",
+  "users",
+  "neverwatched",
+]);
+
+const ADVANCED_PLACEHOLDER_BASE =
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p";
+const ADVANCED_PLACEHOLDER_TAUTULLI =
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p";
+const ADVANCED_HELP_BASE =
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr " +
+  "Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+const ADVANCED_HELP_TAUTULLI =
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 videocodec:x265 videohdr:hdr " +
+  "Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, playcount, lastwatched, dayssincewatched, watchtime, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
 const lastUpdatedByApp = { sonarr: null, radarr: null };
+const configState = { sonarrConfigured: false, radarrConfigured: false };
 
 // Prevent stale fetches from rendering after you switch tabs
 let loadToken = 0;
+const prefetchTokens = { sonarr: 0, radarr: 0 };
 
 let sonarrBase = "";
 let radarrBase = "";
@@ -112,8 +145,215 @@ function matchPattern(value, pattern) {
 function formatMixedValue(value, mixed) {
   const base = escapeHtml(value ?? "");
   if (!mixed) return base;
-  const label = base || "Mixed";
-  return `${label} <span class="mixed-badge">Mixed</span>`;
+  if (!base) return '<span class="mixed-badge">Mixed</span>';
+  return `<span class="mixed-wrap">${base}<span class="mixed-badge">Mixed</span></span>`;
+}
+
+const LANGUAGE_NAME_MAP = {
+  und: "Unknown",
+  mul: "Multiple",
+  ave: "Avestan",
+  eng: "English",
+  en: "English",
+  spa: "Spanish",
+  es: "Spanish",
+  baq: "Basque",
+  eus: "Basque",
+  ben: "Bengali",
+  bn: "Bengali",
+  cat: "Catalan",
+  ca: "Catalan",
+  ces: "Czech",
+  cze: "Czech",
+  cs: "Czech",
+  dan: "Danish",
+  da: "Danish",
+  deu: "German",
+  ger: "German",
+  de: "German",
+  ell: "Greek",
+  gre: "Greek",
+  el: "Greek",
+  fra: "French",
+  fre: "French",
+  fr: "French",
+  hrv: "Croatian",
+  scr: "Croatian",
+  ita: "Italian",
+  it: "Italian",
+  est: "Estonian",
+  et: "Estonian",
+  fin: "Finnish",
+  fi: "Finnish",
+  fil: "Filipino",
+  tgl: "Filipino",
+  phi: "Philippine",
+  glg: "Galician",
+  guj: "Gujarati",
+  por: "Portuguese",
+  pt: "Portuguese",
+  ptbr: "Portuguese (Brazil)",
+  ptpt: "Portuguese (Portugal)",
+  rus: "Russian",
+  ru: "Russian",
+  jpn: "Japanese",
+  ja: "Japanese",
+  kor: "Korean",
+  ko: "Korean",
+  zho: "Chinese",
+  chi: "Chinese",
+  zh: "Chinese",
+  hin: "Hindi",
+  hi: "Hindi",
+  heb: "Hebrew",
+  he: "Hebrew",
+  hun: "Hungarian",
+  hu: "Hungarian",
+  ind: "Indonesian",
+  id: "Indonesian",
+  ara: "Arabic",
+  ar: "Arabic",
+  nld: "Dutch",
+  dut: "Dutch",
+  nl: "Dutch",
+  swe: "Swedish",
+  sv: "Swedish",
+  nob: "Norwegian Bokmal",
+  nb: "Norwegian Bokmal",
+  nor: "Norwegian",
+  no: "Norwegian",
+  pol: "Polish",
+  pl: "Polish",
+  pan: "Punjabi",
+  pa: "Punjabi",
+  nep: "Nepali",
+  ne: "Nepali",
+  tur: "Turkish",
+  tr: "Turkish",
+  tha: "Thai",
+  th: "Thai",
+  vie: "Vietnamese",
+  vi: "Vietnamese",
+  ukr: "Ukrainian",
+  uk: "Ukrainian",
+  lit: "Lithuanian",
+  lt: "Lithuanian",
+  lav: "Latvian",
+  lv: "Latvian",
+  ice: "Icelandic",
+  isl: "Icelandic",
+  is: "Icelandic",
+  ron: "Romanian",
+  rum: "Romanian",
+  ro: "Romanian",
+  rom: "Romani",
+  bul: "Bulgarian",
+  bg: "Bulgarian",
+  srp: "Serbian",
+  sr: "Serbian",
+  slk: "Slovak",
+  slo: "Slovak",
+  sk: "Slovak",
+  slv: "Slovenian",
+  sl: "Slovenian",
+  may: "Malay",
+  msa: "Malay",
+  mal: "Malayalam",
+  kan: "Kannada",
+  mar: "Marathi",
+  mac: "Macedonian",
+  mkd: "Macedonian",
+  tam: "Tamil",
+  ta: "Tamil",
+  tel: "Telugu",
+  te: "Telugu",
+  ms: "Malay",
+  urd: "Urdu",
+  ur: "Urdu",
+  sin: "Sinhala",
+  si: "Sinhala",
+  fas: "Persian",
+  per: "Persian",
+  fa: "Persian",
+};
+
+function languageCodeToName(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const lower = raw.toLowerCase();
+  const compact = lower.replace(/[^a-z0-9]/g, "");
+  if (LANGUAGE_NAME_MAP[compact]) return LANGUAGE_NAME_MAP[compact];
+  const base = lower.split(/[-_]/)[0];
+  if (LANGUAGE_NAME_MAP[base]) {
+    const region = lower.split(/[-_]/)[1];
+    if (region) {
+      return `${LANGUAGE_NAME_MAP[base]} (${region.toUpperCase()})`;
+    }
+    return LANGUAGE_NAME_MAP[base];
+  }
+  return raw;
+}
+
+function normalizeLanguageLabel(value) {
+  const raw = String(value ?? "");
+  if (!raw) return "";
+  const parts = raw.split(",").map(part => part.trim()).filter(Boolean);
+  if (!parts.length) return "";
+  return parts
+    .map(part => languageCodeToName(part))
+    .join(", ");
+}
+
+function normalizeLanguageQuery(value) {
+  return languageCodeToName(value);
+}
+
+function summarizeLanguageValue(value) {
+  const normalized = normalizeLanguageLabel(value);
+  if (!normalized) return { display: "", full: "", truncated: false };
+  const parts = normalized.split(",").map(part => part.trim()).filter(Boolean);
+  const full = parts.join(", ");
+  const limit = 4;
+  if (parts.length <= limit) return { display: full, full, truncated: false };
+  const display = `${parts.slice(0, limit).join(", ")}, +${parts.length - limit} more`;
+  return { display, full, truncated: true };
+}
+
+function formatLanguageValue(value, mixed, options = {}) {
+  const { allowToggle = false } = options;
+  const summary = summarizeLanguageValue(value);
+  const base = escapeHtml(summary.display);
+  if (!base && mixed) return '<span class="mixed-badge">Mixed</span>';
+  if (!base) return "";
+
+  const full = escapeHtml(summary.full);
+  const classes = summary.truncated ? "lang-cell lang-cell-truncated" : "lang-cell";
+  const list = `<span class="lang-list" data-lang-full="${full}" data-lang-short="${base}" data-lang-state="short"${full ? ` title="${full}"` : ""}>${base}</span>`;
+  const toggle = allowToggle && summary.truncated
+    ? '<button class="lang-toggle" type="button" aria-expanded="false">Show all</button>'
+    : "";
+  const badge = mixed ? '<span class="mixed-badge mixed-badge-inline">Mixed</span>' : "";
+  return `<span class="${classes}">${list}${toggle}${badge}</span>`;
+}
+
+function formatLastWatched(value) {
+  if (!value) return '<span class="muted">Never</span>';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  return escapeHtml(date.toLocaleString());
+}
+
+function formatDaysSince(value, lastWatched) {
+  if (!lastWatched) return '<span class="muted">Never</span>';
+  const num = Number(value);
+  if (!Number.isFinite(num)) return escapeHtml(value ?? "");
+  return escapeHtml(num);
+}
+
+function formatWatchTimeHours(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  return escapeHtml(num.toFixed(2));
 }
 
 const FIELD_MAP = {
@@ -126,6 +366,20 @@ const FIELD_MAP = {
   audiocodec: "AudioCodec",
   audioprofile: "AudioProfile",
   audiochannels: "AudioChannels",
+  audiolanguages: "AudioLanguages",
+  audiolang: "AudioLanguages",
+  subtitlelanguages: "SubtitleLanguages",
+  sublanguages: "SubtitleLanguages",
+  sublang: "SubtitleLanguages",
+  subtitles: "SubtitleLanguages",
+  playcount: "PlayCount",
+  lastwatched: "LastWatched",
+  dayssincewatched: "DaysSinceWatched",
+  watchtime: "TotalWatchTimeHours",
+  watchtimehours: "TotalWatchTimeHours",
+  totalwatchtime: "TotalWatchTimeHours",
+  userswatched: "UsersWatched",
+  users: "UsersWatched",
   episodes: "EpisodesCounted",
   totalsize: "TotalSizeGB",
   avgepisode: "AvgEpisodeSizeGB",
@@ -142,6 +396,13 @@ const NUMERIC_FIELDS = new Set([
   "filesize",
   "gbperhour",
   "audiochannels",
+  "playcount",
+  "dayssincewatched",
+  "watchtime",
+  "watchtimehours",
+  "totalwatchtime",
+  "userswatched",
+  "users",
 ]);
 
 const BUCKET_FIELDS = new Set(["gbperhour", "totalsize"]);
@@ -163,15 +424,45 @@ function compareNumber(left, op, right) {
   return left === right;
 }
 
+function parseNumberValue(value) {
+  if (value === "" || value === null || value === undefined) return NaN;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : NaN;
+}
+
+function parseBoolValue(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "y"].includes(raw)) return true;
+  if (["0", "false", "no", "n"].includes(raw)) return false;
+  return null;
+}
+
+function hasSubtitleLanguages(row) {
+  const raw = String(getFieldValue(row, "SubtitleLanguages") ?? "").trim();
+  if (!raw) return false;
+  const parts = raw.split(",").map(part => part.trim()).filter(Boolean);
+  return parts.length > 0;
+}
+
 function parseAdvancedQuery(query) {
   const tokens = String(query ?? "").trim().split(/\s+/).filter(Boolean);
   const preds = [];
   const warnings = [];
+  const tautulliWarning = "Tautulli filters are unavailable until configured.";
+  let tautulliWarned = false;
 
   for (const token of tokens) {
     const comp = token.match(/^([a-zA-Z]+)(>=|<=|=|>|<)(.+)$/);
     if (comp) {
       const field = comp[1].toLowerCase();
+      if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
+        if (!tautulliWarned) {
+          warnings.push(tautulliWarning);
+          tautulliWarned = true;
+        }
+        preds.push(() => false);
+        continue;
+      }
       if (!NUMERIC_FIELDS.has(field)) {
         warnings.push(`Field '${field}' does not support numeric comparisons.`);
         preds.push(() => false);
@@ -183,18 +474,63 @@ function parseAdvancedQuery(query) {
         preds.push(() => false);
         continue;
       }
-      preds.push(row => compareNumber(Number(getFieldValue(row, field)), comp[2], val));
+      preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), comp[2], val));
       continue;
     }
 
     const idx = token.indexOf(":");
     if (idx > 0) {
       const field = token.slice(0, idx).toLowerCase();
+      if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
+        if (!tautulliWarned) {
+          warnings.push(tautulliWarning);
+          tautulliWarned = true;
+        }
+        preds.push(() => false);
+        continue;
+      }
       const value = token.slice(idx + 1);
+      if (field === "nosubs") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(`Invalid value for '${field}' (use true/false).`);
+          preds.push(() => false);
+          continue;
+        }
+        preds.push(row => {
+          const hasSubs = hasSubtitleLanguages(row);
+          return boolVal ? !hasSubs : hasSubs;
+        });
+        continue;
+      }
       if (field === "audio") {
         preds.push(row => (
           matchPattern(getFieldValue(row, "AudioCodec"), value) ||
           matchPattern(getFieldValue(row, "AudioProfile"), value)
+        ));
+        continue;
+      }
+      if (field === "neverwatched") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(`Invalid value for '${field}' (use true/false).`);
+          preds.push(() => false);
+          continue;
+        }
+        preds.push(row => {
+          const matched = row.TautulliMatched === true;
+          const never = matched && !row.LastWatched;
+          return boolVal ? never : !never;
+        });
+        continue;
+      }
+      if (field === "audiolanguages" || field === "audiolang" ||
+          field === "subtitlelanguages" || field === "sublanguages" ||
+          field === "sublang" || field === "subtitles") {
+        const queryValue = normalizeLanguageQuery(value);
+        preds.push(row => matchPattern(
+          normalizeLanguageLabel(getFieldValue(row, field)),
+          queryValue
         ));
         continue;
       }
@@ -207,12 +543,12 @@ function parseAdvancedQuery(query) {
         }
         if (Number.isInteger(val)) {
           preds.push(row => {
-            const num = Number(getFieldValue(row, field));
+            const num = parseNumberValue(getFieldValue(row, field));
             return Number.isFinite(num) && num >= val && num < val + 1;
           });
           continue;
         }
-        preds.push(row => compareNumber(Number(getFieldValue(row, field)), ">=", val));
+        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), ">=", val));
         continue;
       }
       if (NUMERIC_FIELDS.has(field)) {
@@ -222,7 +558,7 @@ function parseAdvancedQuery(query) {
           preds.push(() => false);
           continue;
         }
-        preds.push(row => compareNumber(Number(getFieldValue(row, field)), ">=", val));
+        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), ">=", val));
         continue;
       }
       if (field === "videoquality") {
@@ -319,7 +655,9 @@ function sortData(arr) {
 
     const an = Number(av);
     const bn = Number(bv);
-    const bothNum = Number.isFinite(an) && Number.isFinite(bn);
+    const bothNum = Number.isFinite(an) && Number.isFinite(bn) &&
+      av !== "" && av !== null && av !== undefined &&
+      bv !== "" && bv !== null && bv !== undefined;
 
     if (bothNum) return (an - bn) * dir;
 
@@ -332,6 +670,18 @@ function sortData(arr) {
 }
 
 const COLUMN_STORAGE_KEY = "Sortarr-columns";
+const DEFAULT_HIDDEN_COLUMNS = new Set([
+  "AudioProfile",
+  "AudioLanguages",
+  "SubtitleLanguages",
+  "TotalSizeGB",
+  "VideoHDR",
+  "PlayCount",
+  "LastWatched",
+  "DaysSinceWatched",
+  "TotalWatchTimeHours",
+  "UsersWatched",
+]);
 
 function loadColumnPrefs() {
   if (!columnsPanel) return;
@@ -347,7 +697,7 @@ function loadColumnPrefs() {
     if (prefs && Object.prototype.hasOwnProperty.call(prefs, col)) {
       input.checked = Boolean(prefs[col]);
     } else {
-      input.checked = col !== "AudioProfile";
+      input.checked = !DEFAULT_HIDDEN_COLUMNS.has(col);
     }
   });
 }
@@ -377,7 +727,13 @@ function updateColumnFilter() {
   const query = String(columnSearch?.value ?? "").trim().toLowerCase();
   columnsPanel.querySelectorAll(".column-row").forEach(row => {
     const label = row.textContent.toLowerCase();
-    const show = !query || label.includes(query);
+    const app = row.getAttribute("data-app");
+    const appMatch = !app || app === activeApp;
+    const input = row.querySelector("input[data-col]");
+    const col = input?.getAttribute("data-col");
+    const isTautulli = col && TAUTULLI_COLUMNS.has(col);
+    const tautulliMatch = !isTautulli || tautulliEnabled;
+    const show = appMatch && tautulliMatch && (!query || label.includes(query));
     row.style.display = show ? "" : "none";
   });
 
@@ -433,7 +789,8 @@ function updateColumnVisibility() {
     const app = el.getAttribute("data-app");
     const hideByApp = app && app !== activeApp;
     const hideByCol = hidden.has(col);
-    el.classList.toggle("col-hidden", hideByApp || hideByCol);
+    const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
+    el.classList.toggle("col-hidden", hideByApp || hideByCol || hideByTautulli);
   });
 }
 
@@ -441,7 +798,8 @@ function updateChipVisibility() {
   const hiddenQueries = new Set();
   document.querySelectorAll(".chip-group").forEach(group => {
     const app = group.getAttribute("data-app");
-    const hideGroup = app && app !== activeApp;
+    const isTautulli = group.getAttribute("data-tautulli") === "true";
+    const hideGroup = (app && app !== activeApp) || (isTautulli && !tautulliEnabled);
     group.classList.toggle("hidden", hideGroup);
     if (hideGroup) {
       group.querySelectorAll(".chip").forEach(btn => {
@@ -454,7 +812,8 @@ function updateChipVisibility() {
 
   document.querySelectorAll(".chip").forEach(btn => {
     const app = btn.getAttribute("data-app");
-    const hideChip = app && app !== activeApp;
+    const isTautulli = btn.getAttribute("data-tautulli") === "true";
+    const hideChip = (app && app !== activeApp) || (isTautulli && !tautulliEnabled);
     btn.classList.toggle("hidden", hideChip);
     if (hideChip) {
       const query = btn.getAttribute("data-query") || "";
@@ -560,13 +919,37 @@ function render(data) {
   clearTable();
 
   for (const row of sorted) {
-    const tr = document.createElement("tr");
-    const audioCodec = formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed);
-    const rawAudioProfile = row.AudioProfile ?? "";
-    const audioProfileValue = formatMixedValue(rawAudioProfile, row.AudioProfileMixed);
-    const audioProfile = (rawAudioProfile || row.AudioProfileMixed)
-      ? audioProfileValue
-      : '<span class="muted">Not reported</span>';
+  const tr = document.createElement("tr");
+  const audioCodec = formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed);
+  const rawAudioProfile = row.AudioProfile ?? "";
+  const audioProfileValue = formatMixedValue(rawAudioProfile, row.AudioProfileMixed);
+  const audioProfile = (rawAudioProfile || row.AudioProfileMixed)
+    ? audioProfileValue
+    : '<span class="muted">Not reported</span>';
+  const rawAudioLanguages = row.AudioLanguages ?? "";
+  const audioLanguages = (rawAudioLanguages || row.AudioLanguagesMixed)
+    ? formatLanguageValue(rawAudioLanguages, row.AudioLanguagesMixed, { allowToggle: true })
+    : '<span class="muted">Not reported</span>';
+  const rawSubtitleLanguages = row.SubtitleLanguages ?? "";
+  const subtitleLanguages = (rawSubtitleLanguages || row.SubtitleLanguagesMixed)
+    ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, { allowToggle: true })
+    : '<span class="muted">Not reported</span>';
+  const tautulliMatched = row.TautulliMatched === true;
+  const playCount = tautulliMatched
+    ? escapeHtml(row.PlayCount ?? 0)
+    : '<span class="muted">Not reported</span>';
+  const lastWatched = tautulliMatched
+    ? formatLastWatched(row.LastWatched)
+    : '<span class="muted">Not reported</span>';
+  const daysSinceWatched = tautulliMatched
+    ? formatDaysSince(row.DaysSinceWatched, row.LastWatched)
+    : '<span class="muted">Not reported</span>';
+  const watchTimeHours = tautulliMatched
+    ? formatWatchTimeHours(row.TotalWatchTimeHours ?? 0)
+    : '<span class="muted">Not reported</span>';
+  const usersWatched = tautulliMatched
+    ? escapeHtml(row.UsersWatched ?? 0)
+    : '<span class="muted">Not reported</span>';
 
     if (activeApp === "sonarr") {
       tr.innerHTML = `
@@ -581,6 +964,13 @@ function render(data) {
         <td data-col="AudioCodec">${audioCodec}</td>
         <td data-col="AudioProfile">${audioProfile}</td>
         <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
+        <td data-col="AudioLanguages">${audioLanguages}</td>
+        <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+        <td class="right" data-col="PlayCount" data-app="radarr">${playCount}</td>
+        <td data-col="LastWatched">${lastWatched}</td>
+        <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+        <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+        <td class="right" data-col="UsersWatched">${usersWatched}</td>
         <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
       `;
     } else {
@@ -596,6 +986,13 @@ function render(data) {
         <td data-col="AudioCodec">${audioCodec}</td>
         <td data-col="AudioProfile">${audioProfile}</td>
         <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
+        <td data-col="AudioLanguages">${audioLanguages}</td>
+        <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+        <td class="right" data-col="PlayCount" data-app="radarr">${playCount}</td>
+        <td data-col="LastWatched">${lastWatched}</td>
+        <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+        <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+        <td class="right" data-col="UsersWatched">${usersWatched}</td>
         <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
       `;
     }
@@ -699,6 +1096,56 @@ function setAdvancedMode(enabled) {
   if (!enabled && advancedWarnings) updateAdvancedWarnings([]);
 }
 
+function updateAdvancedHelpText() {
+  if (advancedFilter) {
+    advancedFilter.placeholder = tautulliEnabled
+      ? ADVANCED_PLACEHOLDER_TAUTULLI
+      : ADVANCED_PLACEHOLDER_BASE;
+  }
+  if (advancedHelp) {
+    advancedHelp.textContent = tautulliEnabled
+      ? ADVANCED_HELP_TAUTULLI
+      : ADVANCED_HELP_BASE;
+  }
+}
+
+async function prefetch(app, refresh) {
+  const existing = dataByApp[app] || [];
+  if (existing.length && !refresh) return;
+
+  const token = ++prefetchTokens[app];
+  try {
+    const base = app === "sonarr" ? "/api/shows" : "/api/movies";
+    const url = refresh ? `${base}?refresh=1` : base;
+    const res = await fetch(url);
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(`${res.status} ${res.statusText}: ${txt}`);
+    }
+    const json = await res.json();
+    if (token !== prefetchTokens[app]) return;
+    dataByApp[app] = json;
+    lastUpdatedByApp[app] = Date.now();
+    if (app === activeApp) {
+      render(dataByApp[app]);
+      updateLastUpdatedDisplay();
+    }
+  } catch (e) {
+    console.warn(`Prefetch ${app} failed`, e);
+  }
+}
+
+function setTautulliEnabled(enabled) {
+  tautulliEnabled = Boolean(enabled);
+  updateAdvancedHelpText();
+  const chipsChanged = updateChipVisibility();
+  updateColumnFilter();
+  updateColumnVisibility();
+  if (chipsChanged && (dataByApp[activeApp] || []).length) {
+    render(dataByApp[activeApp]);
+  }
+}
+
 if (titleFilter) {
   titleFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
 }
@@ -741,6 +1188,34 @@ document.querySelectorAll(".chip").forEach(btn => {
     render(dataByApp[activeApp] || []);
   });
 });
+
+if (tbody) {
+  tbody.addEventListener("click", e => {
+    const btn = e.target.closest(".lang-toggle");
+    if (!btn) return;
+    const cell = btn.closest(".lang-cell");
+    const list = cell?.querySelector(".lang-list");
+    if (!list) return;
+
+    const expanded = list.getAttribute("data-lang-state") === "full";
+    const full = list.getAttribute("data-lang-full") || "";
+    const short = list.getAttribute("data-lang-short") || "";
+
+    if (expanded) {
+      list.textContent = short;
+      list.setAttribute("data-lang-state", "short");
+      cell.classList.remove("is-expanded");
+      btn.textContent = "Show all";
+      btn.setAttribute("aria-expanded", "false");
+    } else {
+      list.textContent = full || short;
+      list.setAttribute("data-lang-state", "full");
+      cell.classList.add("is-expanded");
+      btn.textContent = "Show less";
+      btn.setAttribute("aria-expanded", "true");
+    }
+  });
+}
 
 if (columnsBtn && columnsPanel) {
   columnsBtn.addEventListener("click", e => {
@@ -829,6 +1304,9 @@ async function loadConfig() {
     const cfg = await res.json();
     sonarrBase = cfg.sonarr_url || "";
     radarrBase = cfg.radarr_url || "";
+    configState.sonarrConfigured = Boolean(cfg.sonarr_url);
+    configState.radarrConfigured = Boolean(cfg.radarr_url);
+    setTautulliEnabled(cfg.tautulli_configured);
   } catch (e) {
     console.warn("config load failed", e);
   }
@@ -837,6 +1315,7 @@ async function loadConfig() {
 /* init */
 (async function init() {
   loadColumnPrefs();
+  setTautulliEnabled(false);
   updateColumnFilter();
   updateColumnVisibility();
   updateChipVisibility();
@@ -844,6 +1323,11 @@ async function loadConfig() {
   updateSortIndicators();
   setAdvancedMode(false);
   await loadConfig();
+  const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
+  if ((otherApp === "sonarr" && configState.sonarrConfigured) ||
+      (otherApp === "radarr" && configState.radarrConfigured)) {
+    prefetch(otherApp, false);
+  }
   await load(false);
 })();
 
