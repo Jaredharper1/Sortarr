@@ -27,7 +27,12 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 
 ## Screenshots
 
+### Sonarr view
+
 ![Sonarr view](docs/sonarr.png)
+
+### Radarr view
+
 ![Radarr view](docs/radarr.png)
 
 ## Deployment (Docker)
