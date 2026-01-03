@@ -25,6 +25,11 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Optional Tautulli playback stats (play count, last watched, watch time, users)
 - Audio/subtitle language columns with filters and quick chips
 
+## Screenshots
+
+![Sonarr view](docs/sonarr.png)
+![Radarr view](docs/radarr.png)
+
 ## Deployment (Docker)
 
 ```bash
