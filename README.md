@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.5.5-blue)
+![Version](https://img.shields.io/badge/version-0.5.6-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -25,6 +25,11 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Optional basic auth and configurable cache
 - Optional Tautulli playback stats (play count, last watched, watch time, users)
 - Audio/subtitle language columns with filters and quick chips
+
+## Screenshots
+
+![Sonarr view](docs/sonarr.png)
+![Radarr view](docs/radarr.png)
 
 ## Deployment (Docker)
 
