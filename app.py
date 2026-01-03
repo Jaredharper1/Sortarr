@@ -4,15 +4,27 @@ import time
 import datetime
 import csv
 import io
+import logging
 from functools import wraps
 
 import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.5"
 
 app = Flask(__name__)
+
+LOG_LEVEL = os.environ.get("SORTARR_LOG_LEVEL", "INFO").upper()
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=LOG_LEVEL,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+logger = logging.getLogger("sortarr")
+logger.setLevel(LOG_LEVEL)
+
+_http = requests.Session()
 
 _cache = {
     "sonarr": {"ts": 0, "data": []},
@@ -75,7 +87,13 @@ def _normalize_url(value: str) -> str:
     value = (value or "").strip()
     if not value:
         return ""
-    if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value):
+    scheme_match = re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", value)
+    if scheme_match:
+        scheme = scheme_match.group(0)
+        rest = value[len(scheme) :]
+        rest = re.sub(r"^(?:[a-zA-Z][a-zA-Z0-9+.-]*://)+", "", rest)
+        value = f"{scheme}{rest}"
+    else:
         value = f"http://{value}"
     return value.rstrip("/")
 
@@ -182,9 +200,19 @@ def _arr_get(base_url: str, api_key: str, path: str, params: dict | None = None)
 
     url = f"{base_url}{path}"
     headers = {"X-Api-Key": api_key}
-    r = requests.get(url, headers=headers, params=params, timeout=45)
+    r = _http.get(url, headers=headers, params=params, timeout=45)
     r.raise_for_status()
     return r.json()
+
+
+def _group_by(items: list[dict], key: str) -> dict:
+    grouped = {}
+    for item in items or []:
+        item_key = item.get(key)
+        if item_key is None:
+            continue
+        grouped.setdefault(item_key, []).append(item)
+    return grouped
 
 
 def _safe_int(value) -> int:
@@ -225,7 +253,7 @@ def _tautulli_get(base_url: str, api_key: str, cmd: str, params: dict | None = N
     if params:
         query.update(params)
 
-    r = requests.get(url, params=query, timeout=45)
+    r = _http.get(url, params=query, timeout=45)
     r.raise_for_status()
     payload = r.json()
     response = payload.get("response", {})
@@ -242,9 +270,9 @@ def _tautulli_extract_ids(item: dict) -> dict:
         if not value:
             return
         text = str(value)
-        tmdb_match = re.search(r"(?:tmdb|themoviedb)://(\\d+)", text)
-        tvdb_match = re.search(r"(?:tvdb|thetvdb)://(\\d+)", text)
-        imdb_match = re.search(r"imdb://(tt\\d+)", text)
+        tmdb_match = re.search(r"(?:tmdb|themoviedb)://(\d+)", text)
+        tvdb_match = re.search(r"(?:tvdb|thetvdb)://(\d+)", text)
+        imdb_match = re.search(r"imdb://(tt\d+)", text)
         if tmdb_match and "tmdb" not in ids:
             ids["tmdb"] = tmdb_match.group(1)
         if tvdb_match and "tvdb" not in ids:
@@ -855,6 +883,7 @@ def _video_hdr_from_file(f: dict) -> str:
 
 def _compute_sonarr(base_url: str, api_key: str, exclude_specials: bool = True):
     series = _arr_get(base_url, api_key, "/api/v3/series")
+    files_by_series = None
 
     results = []
     for s in series:
@@ -969,32 +998,40 @@ def _compute_radarr(base_url: str, api_key: str):
         audio_profile_mixed = False
         audio_languages_mixed = False
         subtitle_languages_mixed = False
-        if m.get("hasFile"):
+        files = []
+        movie_file = m.get("movieFile")
+        if movie_file:
+            if isinstance(movie_file, list):
+                files = movie_file
+            else:
+                files = [movie_file]
+        elif m.get("hasFile"):
             files = _arr_get(
                 base_url,
                 api_key,
                 "/api/v3/moviefile",
                 params={"movieId": radarr_internal_id},
             )
-            primary = None
-            for f in files:
-                size = int(f.get("size") or 0)
-                file_size_bytes += size
-                if not primary or size > int(primary.get("size") or 0):
-                    primary = f
 
-            if primary:
-                video_quality = _quality_from_file(primary)
-                resolution = _resolution_from_file(primary)
-                audio_format = _audio_format_from_file(primary)
-                audio_profile = _audio_profile_from_file(primary)
-                audio_channels = str(_audio_channels_from_file(primary) or "")
-                audio_languages = _audio_languages_from_file(primary)
-                subtitle_languages = _subtitle_languages_from_file(primary)
-                audio_languages_mixed = _languages_mixed([audio_languages])
-                subtitle_languages_mixed = _languages_mixed([subtitle_languages])
-                video_codec = _video_codec_from_file(primary)
-                video_hdr = _video_hdr_from_file(primary)
+        primary = None
+        for f in files:
+            size = int(f.get("size") or 0)
+            file_size_bytes += size
+            if not primary or size > int(primary.get("size") or 0):
+                primary = f
+
+        if primary:
+            video_quality = _quality_from_file(primary)
+            resolution = _resolution_from_file(primary)
+            audio_format = _audio_format_from_file(primary)
+            audio_profile = _audio_profile_from_file(primary)
+            audio_channels = str(_audio_channels_from_file(primary) or "")
+            audio_languages = _audio_languages_from_file(primary)
+            subtitle_languages = _subtitle_languages_from_file(primary)
+            audio_languages_mixed = _languages_mixed([audio_languages])
+            subtitle_languages_mixed = _languages_mixed([subtitle_languages])
+            video_codec = _video_codec_from_file(primary)
+            video_hdr = _video_hdr_from_file(primary)
 
         size_gib = _bytes_to_gib(file_size_bytes)
 
@@ -1059,8 +1096,8 @@ def _get_cached(app_name: str, force: bool = False):
                     _apply_tautulli_stats(entry["data"], tautulli_index, "shows")
                 else:
                     _apply_tautulli_stats(entry["data"], tautulli_index, "movies")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Tautulli stats fetch failed: %s", exc)
     return entry["data"]
 
 
@@ -1097,6 +1134,18 @@ def setup():
         except ValueError:
             cache_seconds = None
 
+        basic_auth_user = request.form.get("basic_auth_user", "").strip()
+        basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
+        clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
+        if not basic_auth_user:
+            basic_auth_pass = ""
+        elif clear_basic_auth_pass:
+            basic_auth_pass = ""
+        elif basic_auth_pass_raw:
+            basic_auth_pass = basic_auth_pass_raw
+        else:
+            basic_auth_pass = cfg["basic_auth_pass"]
+
         data = {
             "SONARR_URL": _normalize_url(request.form.get("sonarr_url", "")),
             "SONARR_API_KEY": request.form.get("sonarr_api_key", "").strip(),
@@ -1104,8 +1153,8 @@ def setup():
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
-            "BASIC_AUTH_USER": request.form.get("basic_auth_user", "").strip(),
-            "BASIC_AUTH_PASS": request.form.get("basic_auth_pass", "").strip(),
+            "BASIC_AUTH_USER": basic_auth_user,
+            "BASIC_AUTH_PASS": basic_auth_pass,
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
 

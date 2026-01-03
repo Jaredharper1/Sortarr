@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{ app_name }} Setup</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/styles.css" />
-    <link rel="stylesheet" href="/static/setup.css" />
+    <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
+    <link rel="stylesheet" href="/static/setup.css?v={{ app_version }}" />
   </head>
   <body>
     <div class="setup-wrap">
@@ -61,8 +61,13 @@
           </label>
           <label>
             Basic auth password
-            <input name="basic_auth_pass" type="password" placeholder="optional" value="{{ values.basic_auth_pass }}" />
+            <input name="basic_auth_pass" type="password" placeholder="optional" value="" autocomplete="new-password" />
           </label>
+          <label class="setup-checkbox">
+            <input type="checkbox" name="clear_basic_auth_pass" value="1" />
+            <span>Clear existing password</span>
+          </label>
+          <div class="setup-hint">Leave blank to keep current password.</div>
 
           <div class="setup-section-title">Performance</div>
           <label>
@@ -77,3 +82,4 @@
     </div>
   </body>
 </html>
+

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{ app_name }}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
   </head>
 
   <body>
@@ -19,8 +19,8 @@
           </div>
         </div>
 
-        <button id="loadBtn">Load</button>
-        <button id="refreshBtn">Refresh</button>
+        <button id="loadBtn" title="Shift+Click to force refresh from API">Load</button>
+        <button id="resetUiBtn" title="Clear UI settings and reload">Reset UI</button>
         <div class="column-menu">
           <button id="columnsBtn" type="button" title="Adjust visible columns">Columns</button>
           <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns">
@@ -66,7 +66,7 @@
   </div>
   <div class="column-group">
     <div class="column-group-title">Playback (Tautulli)</div>
-    <label class="column-row" data-app="radarr"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
+    <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
     <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
     <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
     <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time (hrs)</label>
@@ -209,7 +209,7 @@
             <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
             <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
             <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="PlayCount" data-col="PlayCount" data-app="radarr">Times Watched <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
             <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
             <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
             <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hrs) <span class="sort-indicator"></span></th>
@@ -224,6 +224,6 @@
       <div class="footer">{{ app_name }} v{{ app_version }} - Sonarr & Radarr efficiency view</div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v={{ app_version }}"></script>
   </body>
 </html>

@@ -484,6 +484,10 @@ table {
   border: 1px solid var(--border);
 }
 
+table.is-batching {
+  table-layout: fixed;
+}
+
 th, td {
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
@@ -517,6 +521,12 @@ td[data-col="Path"] {
 
 td[data-col="Title"] {
   white-space: nowrap;
+}
+
+table.is-batching td[data-col="Title"],
+table.is-batching td[data-col="Path"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .footer {

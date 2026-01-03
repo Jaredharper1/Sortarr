@@ -69,6 +69,16 @@ label {
   font-size: 0.9rem;
 }
 
+.setup-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.setup-checkbox input {
+  margin: 0;
+}
 .setup-error {
   background: #ffe2e2;
   color: #8a1f1f;
@@ -97,3 +107,4 @@ html[data-theme="dark"] .setup-error {
   font-weight: 600;
   border: 1px solid var(--border);
 }
+

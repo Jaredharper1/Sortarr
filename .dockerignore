@@ -1,2 +1,4 @@
 docs/
 *.png
+smoke_test.py
+data/

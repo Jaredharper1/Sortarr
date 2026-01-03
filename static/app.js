@@ -3,7 +3,7 @@ const statusEl = document.getElementById("status");
 const loadingIndicator = document.getElementById("loadingIndicator");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const loadBtn = document.getElementById("loadBtn");
-const refreshBtn = document.getElementById("refreshBtn");
+const resetUiBtn = document.getElementById("resetUiBtn");
 const titleFilter = document.getElementById("titleFilter");
 const pathFilter = document.getElementById("pathFilter");
 const filterInputs = document.getElementById("filterInputs");
@@ -27,6 +27,7 @@ const columnsReset = document.getElementById("columnsReset");
 const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
 const root = document.documentElement; // <html>
+const tableEl = document.querySelector("table");
 
 let activeApp = "sonarr"; // "sonarr" | "radarr"
 let sortKey = "AvgEpisodeSizeGB";
@@ -72,11 +73,15 @@ const lastUpdatedByApp = { sonarr: null, radarr: null };
 const configState = { sonarrConfigured: false, radarrConfigured: false };
 
 // Prevent stale fetches from rendering after you switch tabs
-let loadToken = 0;
+const loadTokens = { sonarr: 0, radarr: 0 };
 const prefetchTokens = { sonarr: 0, radarr: 0 };
+const RENDER_BATCH_SIZE = 300;
+const RENDER_BATCH_MIN = 1200;
 
 let sonarrBase = "";
 let radarrBase = "";
+let renderToken = 0;
+const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 
 function setStatus(msg) {
   statusEl.textContent = msg || "";
@@ -88,8 +93,12 @@ function setLoading(loading, label) {
     loadingIndicator.classList.toggle("hidden", !loading);
   }
   if (loadBtn) loadBtn.disabled = loading;
-  if (refreshBtn) refreshBtn.disabled = loading;
   if (label) setStatus(label);
+}
+
+function resetUiState() {
+  localStorage.removeItem(COLUMN_STORAGE_KEY);
+  localStorage.removeItem("Sortarr-theme");
 }
 
 function updateLastUpdatedDisplay() {
@@ -140,6 +149,30 @@ function matchPattern(value, pattern) {
     return globToRegex(raw).test(text);
   }
   return text.toLowerCase().includes(raw.toLowerCase());
+}
+
+function buildRowKey(row, app) {
+  if (app === "sonarr") {
+    return String(
+      row.SeriesId ?? row.seriesId ?? row.TvdbId ?? row.tvdbId ?? row.TitleSlug ?? row.titleSlug ?? row.Title ?? row.Path ?? ""
+    );
+  }
+  return String(
+    row.MovieId ?? row.movieId ?? row.TmdbId ?? row.tmdbId ?? row.ImdbId ?? row.imdbId ?? row.Title ?? row.Path ?? ""
+  );
+}
+
+function assignRowKeys(rows, app) {
+  const seen = new Map();
+  for (const row of rows || []) {
+    let key = buildRowKey(row, app) || "row";
+    const count = seen.get(key) || 0;
+    seen.set(key, count + 1);
+    if (count) {
+      key = `${key}#${count}`;
+    }
+    row.__sortarrKey = key;
+  }
 }
 
 function formatMixedValue(value, mixed) {
@@ -424,10 +457,14 @@ function compareNumber(left, op, right) {
   return left === right;
 }
 
-function parseNumberValue(value) {
+function parseNumberValue(value, field) {
   if (value === "" || value === null || value === undefined) return NaN;
   const num = Number(value);
-  return Number.isFinite(num) ? num : NaN;
+  if (!Number.isFinite(num)) return NaN;
+  if (field === "audiochannels") {
+    return Math.ceil(num);
+  }
+  return num;
 }
 
 function parseBoolValue(value) {
@@ -474,7 +511,7 @@ function parseAdvancedQuery(query) {
         preds.push(() => false);
         continue;
       }
-      preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), comp[2], val));
+      preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), comp[2], val));
       continue;
     }
 
@@ -543,12 +580,12 @@ function parseAdvancedQuery(query) {
         }
         if (Number.isInteger(val)) {
           preds.push(row => {
-            const num = parseNumberValue(getFieldValue(row, field));
+            const num = parseNumberValue(getFieldValue(row, field), field);
             return Number.isFinite(num) && num >= val && num < val + 1;
           });
           continue;
         }
-        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), ">=", val));
+        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), ">=", val));
         continue;
       }
       if (NUMERIC_FIELDS.has(field)) {
@@ -558,7 +595,7 @@ function parseAdvancedQuery(query) {
           preds.push(() => false);
           continue;
         }
-        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field)), ">=", val));
+        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), ">=", val));
         continue;
       }
       if (field === "videoquality") {
@@ -781,9 +818,10 @@ function updateSortIndicators() {
   if (ind) ind.textContent = sortDir === "asc" ? "^" : "v";
 }
 
-function updateColumnVisibility() {
+function updateColumnVisibility(rootEl = document) {
   const hidden = getHiddenColumns();
-  document.querySelectorAll("[data-col]").forEach(el => {
+  const scope = rootEl && rootEl.querySelectorAll ? rootEl : document;
+  scope.querySelectorAll("[data-col]").forEach(el => {
     if (columnsPanel && columnsPanel.contains(el)) return;
     const col = el.getAttribute("data-col");
     const app = el.getAttribute("data-app");
@@ -838,6 +876,11 @@ function clearTable() {
   tbody.innerHTML = "";
 }
 
+function setBatching(active) {
+  if (!tableEl) return;
+  tableEl.classList.toggle("is-batching", Boolean(active));
+}
+
 function setActiveTab(app) {
   if (activeApp === app) return;
 
@@ -845,6 +888,8 @@ function setActiveTab(app) {
 
   tabSonarr.classList.toggle("active", activeApp === "sonarr");
   tabRadarr.classList.toggle("active", activeApp === "radarr");
+  setLoading(false);
+  setStatus("");
 
   // default sorts per tab
   if (activeApp === "sonarr") {
@@ -868,8 +913,8 @@ function setActiveTab(app) {
   const chipsChanged = updateChipVisibility();
 
   if ((dataByApp[activeApp] || []).length) {
-    render(dataByApp[activeApp]);
-    if (chipsChanged) render(dataByApp[activeApp]);
+    render(dataByApp[activeApp], { allowBatch: false });
+    if (chipsChanged) render(dataByApp[activeApp], { allowBatch: false });
     return;
   }
 
@@ -889,8 +934,8 @@ function sonarrSlugFromTitle(title) {
     .replace(/^-|-$/g, "");
 }
 
-function buildTitleLink(row) {
-  if (activeApp === "sonarr") {
+function buildTitleLink(row, app) {
+  if (app === "sonarr") {
     const slug =
       row.TitleSlug ??
       row.titleSlug ??
@@ -912,13 +957,7 @@ function buildTitleLink(row) {
   }
 }
 
-function render(data) {
-  const filtered = applyFilters(data || []);
-  const sorted = sortData(filtered);
-
-  clearTable();
-
-  for (const row of sorted) {
+function buildRow(row, app) {
   const tr = document.createElement("tr");
   const audioCodec = formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed);
   const rawAudioProfile = row.AudioProfile ?? "";
@@ -951,67 +990,129 @@ function render(data) {
     ? escapeHtml(row.UsersWatched ?? 0)
     : '<span class="muted">Not reported</span>';
 
-    if (activeApp === "sonarr") {
-      tr.innerHTML = `
-        <td data-col="Title">${buildTitleLink(row)}</td>
-        <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
-        <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
-        <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
-        <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
-        <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
-        <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
-        <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
-        <td data-col="AudioCodec">${audioCodec}</td>
-        <td data-col="AudioProfile">${audioProfile}</td>
-        <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
-        <td data-col="AudioLanguages">${audioLanguages}</td>
-        <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-        <td class="right" data-col="PlayCount" data-app="radarr">${playCount}</td>
-        <td data-col="LastWatched">${lastWatched}</td>
-        <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
-        <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
-        <td class="right" data-col="UsersWatched">${usersWatched}</td>
-        <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
-      `;
-    } else {
-      tr.innerHTML = `
-        <td data-col="Title">${buildTitleLink(row)}</td>
-        <td class="right" data-col="RuntimeMins" data-app="radarr">${row.RuntimeMins ?? ""}</td>
-        <td class="right" data-col="FileSizeGB" data-app="radarr">${row.FileSizeGB ?? ""}</td>
-        <td class="right" data-col="GBPerHour" data-app="radarr">${row.GBPerHour ?? ""}</td>
-        <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
-        <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
-        <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
-        <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
-        <td data-col="AudioCodec">${audioCodec}</td>
-        <td data-col="AudioProfile">${audioProfile}</td>
-        <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
-        <td data-col="AudioLanguages">${audioLanguages}</td>
-        <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-        <td class="right" data-col="PlayCount" data-app="radarr">${playCount}</td>
-        <td data-col="LastWatched">${lastWatched}</td>
-        <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
-        <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
-        <td class="right" data-col="UsersWatched">${usersWatched}</td>
-        <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
-      `;
-    }
-
-    tbody.appendChild(tr);
+  if (app === "sonarr") {
+    tr.innerHTML = `
+      <td data-col="Title">${buildTitleLink(row, app)}</td>
+      <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
+      <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
+      <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
+      <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
+      <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
+      <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
+      <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
+      <td data-col="AudioCodec">${audioCodec}</td>
+      <td data-col="AudioProfile">${audioProfile}</td>
+      <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
+      <td data-col="AudioLanguages">${audioLanguages}</td>
+      <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+      <td class="right" data-col="PlayCount">${playCount}</td>
+      <td data-col="LastWatched">${lastWatched}</td>
+      <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+      <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+      <td class="right" data-col="UsersWatched">${usersWatched}</td>
+      <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
+    `;
+  } else {
+    tr.innerHTML = `
+      <td data-col="Title">${buildTitleLink(row, app)}</td>
+      <td class="right" data-col="RuntimeMins" data-app="radarr">${row.RuntimeMins ?? ""}</td>
+      <td class="right" data-col="FileSizeGB" data-app="radarr">${row.FileSizeGB ?? ""}</td>
+      <td class="right" data-col="GBPerHour" data-app="radarr">${row.GBPerHour ?? ""}</td>
+      <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
+      <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
+      <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
+      <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
+      <td data-col="AudioCodec">${audioCodec}</td>
+      <td data-col="AudioProfile">${audioProfile}</td>
+      <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
+      <td data-col="AudioLanguages">${audioLanguages}</td>
+      <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+      <td class="right" data-col="PlayCount">${playCount}</td>
+      <td data-col="LastWatched">${lastWatched}</td>
+      <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+      <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+      <td class="right" data-col="UsersWatched">${usersWatched}</td>
+      <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
+    `;
   }
 
-  setStatus(`Loaded ${sorted.length} / ${data.length}`);
-  updateColumnVisibility();
+  return tr;
+}
+
+function getRowElement(row, app) {
+  const key = row.__sortarrKey || buildRowKey(row, app);
+  const cache = rowCacheByApp[app];
+  const existing = cache.get(key);
+  if (existing) return existing;
+  const tr = buildRow(row, app);
+  cache.set(key, tr);
+  return tr;
+}
+
+function renderBatch(rows, token, start, totalRows, totalAll, app) {
+  if (token !== renderToken) return;
+  const end = Math.min(start + RENDER_BATCH_SIZE, rows.length);
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < end; i += 1) {
+    frag.appendChild(getRowElement(rows[i], app));
+  }
+  tbody.appendChild(frag);
+  updateColumnVisibility(tbody);
+
+  if (end < rows.length) {
+    requestAnimationFrame(() => renderBatch(rows, token, end, totalRows, totalAll, app));
+    return;
+  }
+
+  if (token !== renderToken) return;
+  setBatching(false);
+  setStatus(`Loaded ${totalRows} / ${totalAll}`);
+}
+
+function render(data, options = {}) {
+  const app = activeApp;
+  const filtered = applyFilters(data || []);
+  const sorted = sortData(filtered);
+  const allowBatch = options.allowBatch !== false;
+  const shouldBatch = allowBatch && sorted.length > RENDER_BATCH_MIN;
+  const token = ++renderToken;
+
+  setBatching(shouldBatch);
+  clearTable();
+
+  if (!sorted.length) {
+    setBatching(false);
+    setStatus(`Loaded 0 / ${data.length}`);
+    updateColumnVisibility();
+    return;
+  }
+
+  if (!shouldBatch) {
+    const frag = document.createDocumentFragment();
+    for (const row of sorted) {
+      frag.appendChild(getRowElement(row, app));
+    }
+    tbody.appendChild(frag);
+    updateColumnVisibility(tbody);
+    setBatching(false);
+    setStatus(`Loaded ${sorted.length} / ${data.length}`);
+    return;
+  }
+
+  renderBatch(sorted, token, 0, sorted.length, data.length, app);
 }
 
 async function load(refresh) {
-  const myToken = ++loadToken;
+  const app = activeApp;
+  const myToken = ++loadTokens[app];
 
   try {
-    const label = activeApp === "sonarr" ? "Loading Sonarr..." : "Loading Radarr...";
-    setLoading(true, label);
+    const label = app === "sonarr" ? "Loading Sonarr..." : "Loading Radarr...";
+    if (app === activeApp) {
+      setLoading(true, label);
+    }
 
-    const base = activeApp === "sonarr" ? "/api/shows" : "/api/movies";
+    const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const url = refresh ? `${base}?refresh=1` : base;
 
     const res = await fetch(url);
@@ -1022,20 +1123,26 @@ async function load(refresh) {
 
     const json = await res.json();
 
-    // If user switched tabs while this request was in flight, ignore it
-    if (myToken !== loadToken) return;
+    // If a newer request for this app is in flight, ignore this response
+    if (myToken !== loadTokens[app]) return;
 
-    dataByApp[activeApp] = json;
-    render(dataByApp[activeApp]);
-    lastUpdatedByApp[activeApp] = Date.now();
-    updateLastUpdatedDisplay();
+    rowCacheByApp[app].clear();
+    dataByApp[app] = json;
+    assignRowKeys(dataByApp[app], app);
+    lastUpdatedByApp[app] = Date.now();
+    if (app === activeApp) {
+      render(dataByApp[app], { allowBatch: true });
+      updateLastUpdatedDisplay();
+    }
   } catch (e) {
-    // Only show error if this is still the latest request
-    if (myToken !== loadToken) return;
-    setStatus(`Error: ${e.message}`);
+    // Only show error if this is still the latest request for this app
+    if (myToken !== loadTokens[app]) return;
+    if (app === activeApp) {
+      setStatus(`Error: ${e.message}`);
+    }
     console.error(e);
   } finally {
-    if (myToken === loadToken) {
+    if (myToken === loadTokens[app] && app === activeApp) {
       setLoading(false);
     }
   }
@@ -1059,7 +1166,9 @@ document.querySelectorAll("th[data-sort]").forEach(th => {
     }
 
     updateSortIndicators();
-    render(dataByApp[activeApp] || []);
+    requestAnimationFrame(() => {
+      render(dataByApp[activeApp] || [], { allowBatch: false });
+    });
   });
 });
 
@@ -1075,10 +1184,15 @@ exportCsvBtn.addEventListener("click", () => {
 
 /* buttons */
 if (loadBtn) {
-  loadBtn.addEventListener("click", () => load(false));
+  loadBtn.addEventListener("click", e => load(Boolean(e.shiftKey)));
 }
-if (refreshBtn) {
-  refreshBtn.addEventListener("click", () => load(true));
+if (resetUiBtn) {
+  resetUiBtn.addEventListener("click", () => {
+    resetUiState();
+    const url = new URL(window.location.href);
+    url.searchParams.set("refresh", Date.now().toString());
+    window.location.href = url.toString();
+  });
 }
 
 function setAdvancedMode(enabled) {
@@ -1124,10 +1238,12 @@ async function prefetch(app, refresh) {
     }
     const json = await res.json();
     if (token !== prefetchTokens[app]) return;
+    rowCacheByApp[app].clear();
     dataByApp[app] = json;
+    assignRowKeys(dataByApp[app], app);
     lastUpdatedByApp[app] = Date.now();
     if (app === activeApp) {
-      render(dataByApp[app]);
+      render(dataByApp[app], { allowBatch: true });
       updateLastUpdatedDisplay();
     }
   } catch (e) {
@@ -1142,26 +1258,26 @@ function setTautulliEnabled(enabled) {
   updateColumnFilter();
   updateColumnVisibility();
   if (chipsChanged && (dataByApp[activeApp] || []).length) {
-    render(dataByApp[activeApp]);
+    render(dataByApp[activeApp], { allowBatch: false });
   }
 }
 
 if (titleFilter) {
-  titleFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
+  titleFilter.addEventListener("input", () => render(dataByApp[activeApp] || [], { allowBatch: false }));
 }
 
 if (pathFilter) {
-  pathFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
+  pathFilter.addEventListener("input", () => render(dataByApp[activeApp] || [], { allowBatch: false }));
 }
 
 if (advancedFilter) {
-  advancedFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
+  advancedFilter.addEventListener("input", () => render(dataByApp[activeApp] || [], { allowBatch: false }));
 }
 
 if (advancedToggle) {
   advancedToggle.addEventListener("click", () => {
     setAdvancedMode(!advancedEnabled);
-    render(dataByApp[activeApp] || []);
+    render(dataByApp[activeApp] || [], { allowBatch: false });
   });
 }
 
@@ -1185,7 +1301,7 @@ document.querySelectorAll(".chip").forEach(btn => {
       btn.classList.add("active");
     }
     chipQuery = Array.from(next).join(" ");
-    render(dataByApp[activeApp] || []);
+    render(dataByApp[activeApp] || [], { allowBatch: false });
   });
 });
 
@@ -1330,5 +1446,3 @@ async function loadConfig() {
   }
   await load(false);
 })();
-
-

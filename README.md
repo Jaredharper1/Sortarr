@@ -1,4 +1,5 @@
 # Sortarr
+![Version](https://img.shields.io/badge/version-0.5.5-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -25,16 +26,6 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Optional Tautulli playback stats (play count, last watched, watch time, users)
 - Audio/subtitle language columns with filters and quick chips
 
-## Screenshots
-
-### Sonarr view
-
-![Sonarr view](docs/sonarr.png)
-
-### Radarr view
-
-![Radarr view](docs/radarr.png)
-
 ## Deployment (Docker)
 
 ```bash
@@ -43,7 +34,10 @@ docker compose up -d
 
 The default `docker-compose.yaml` pulls `ghcr.io/jaredharper1/sortarr:latest` (release builds). To use Docker Hub instead, set `image: docker.io/jaredharper1/sortarr:latest`.
 
-Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`).
+Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized.
+
+Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
+Load uses cached data by default; Shift+Click Load forces a refresh from the Arr APIs. The Reset UI button clears local UI settings if the page looks stale.
 
 ## Configuration
 
@@ -102,4 +96,3 @@ Note: Language lists are shortened in the table; use "Show all" to expand them.
 - More grouping and filtering options
 
 Feedback and ideas are welcome.
-

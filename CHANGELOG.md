@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.5.5
+
+- Normalize duplicate URL schemes in setup (e.g., http://http://host -> http://host)
+- Bump requests to 2.32.4
+- Always fetch Sonarr episode files per series to avoid unsupported bulk calls
+- Prefer Radarr /movie movieFile payload and fall back to per-movie fetches
+
+## 0.5.4
+
+- Reduce Arr API calls by bulk-fetching files with safe fallback
+- Reuse HTTP session and log Tautulli/Arr fetch failures
+- Batch table rendering for large libraries
+- Improve table sorting performance and reduce layout jitter during large renders
+- Show playback "Times Watched" for Sonarr too
+- Fix Tautulli ID matching for Radarr playback stats
+- Keep basic auth password hidden and allow clearing it
+- Cache-bust CSS/JS assets using the app version
+- Replace Refresh button with Shift+Click on Load (fixes stale UI error)
+- Add Reset UI button to clear local UI settings
+- Fix audio channel filters for 5.1/7.1 values
+
 ## 0.5.3
 
 - Optional Tautulli playback stats (play count, last watched, watch time, users watched)
