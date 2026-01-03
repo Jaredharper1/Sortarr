@@ -10,7 +10,6 @@
 - Prefetch the other tab in the background after load for faster switching
 - Setup page includes optional Tautulli fields
 - Reload config when the env file changes
-- Ignore local data/ config files in Git
 
 ## 0.5.2
 
