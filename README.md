@@ -26,8 +26,10 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 ## Deployment (Docker)
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
+
+The default `docker-compose.yaml` pulls `ghcr.io/jaredharper1/sortarr:latest` (release builds). To use Docker Hub instead, set `image: docker.io/jaredharper1/sortarr:latest`.
 
 Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`).
 

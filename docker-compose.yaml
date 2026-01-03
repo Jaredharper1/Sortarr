@@ -1,8 +1,8 @@
 version: "3.8"
 services:
-  sonarr-avgsize:
-    build: .
-    container_name: sonarr-avgsize
+  sortarr:
+    image: ghcr.io/jaredharper1/sortarr:latest
+    container_name: sortarr
     ports:
       - "8787:8787"
     environment:
@@ -10,5 +10,4 @@ services:
       - CACHE_SECONDS=300
     volumes:
       - "./data:/data"
-
     restart: unless-stopped
