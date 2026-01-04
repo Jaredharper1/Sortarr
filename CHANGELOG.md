@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.7
+
+- Docker compose uses the published `ghcr.io/jaredharper1/sortarr:latest` image by default again
+
 ## 0.5.6
 
 - Return generic API errors and log detailed failures server-side
