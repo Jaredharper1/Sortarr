@@ -63,6 +63,41 @@ body {
   font-weight: 600;
 }
 
+.setup-advanced {
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+html[data-theme="dark"] .setup-advanced {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.setup-advanced > summary {
+  cursor: pointer;
+  font-weight: 600;
+  list-style: none;
+}
+
+.setup-advanced > summary::before {
+  content: "+ ";
+}
+
+.setup-advanced[open] > summary::before {
+  content: "- ";
+}
+
+.setup-advanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.setup-advanced-body {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
 label {
   display: grid;
   gap: 6px;

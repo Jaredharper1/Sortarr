@@ -1,3 +1,7 @@
 data/
 smoke_test.py
+selenium_stress_test.py
 Thumbs.db
+__pycache__/
+sortarr_err.log
+sortarr_run.log

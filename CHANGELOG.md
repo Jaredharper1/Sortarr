@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.6
+
+- Return generic API errors and log detailed failures server-side
+- Make resolution filters tolerant of near-matches, common aliases (e.g., 4k/uhd/hd), and wide 1920x8xx sources (treat as 1080p)
+- Add multi-instance Sonarr/Radarr support with optional friendly names
+- Show Instance column/chips (and include Instance in CSV exports) when multiple instances are configured
+- Add instance filter support (`instance:`) in advanced filtering
+- Add Advanced setup sections for additional Sonarr/Radarr instances with name validation rules
+
 ## 0.5.5
 
 - Normalize duplicate URL schemes in setup (e.g., http://http://host -> http://host)

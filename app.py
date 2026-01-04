@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import os
 import re
 import time
@@ -11,7 +13,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.5.6"
 
 app = Flask(__name__)
 
@@ -27,8 +29,8 @@ logger.setLevel(LOG_LEVEL)
 _http = requests.Session()
 
 _cache = {
-    "sonarr": {"ts": 0, "data": []},
-    "radarr": {"ts": 0, "data": []},
+    "sonarr": {},
+    "radarr": {},
     "tautulli": {"ts": 0, "data": {}},
 }
 
@@ -122,31 +124,146 @@ def _write_env_file(path: str, values: dict):
     dir_path = os.path.dirname(path)
     if dir_path:
         os.makedirs(dir_path, exist_ok=True)
-    lines = []
-    for key in [
+
+    standard_keys = [
         "SONARR_URL",
         "SONARR_API_KEY",
+        "SONARR_NAME",
+        "SONARR_URL_2",
+        "SONARR_API_KEY_2",
+        "SONARR_NAME_2",
+        "SONARR_URL_3",
+        "SONARR_API_KEY_3",
+        "SONARR_NAME_3",
         "RADARR_URL",
         "RADARR_API_KEY",
+        "RADARR_NAME",
+        "RADARR_URL_2",
+        "RADARR_API_KEY_2",
+        "RADARR_NAME_2",
+        "RADARR_URL_3",
+        "RADARR_API_KEY_3",
+        "RADARR_NAME_3",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
         "CACHE_SECONDS",
-    ]:
+    ]
+
+    existing_standard = {}
+    extra_lines = []
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if stripped == "":
+                        extra_lines.append("")
+                        continue
+                    if stripped.startswith("#") or "=" not in line:
+                        extra_lines.append(line.rstrip("\n"))
+                        continue
+                    key, _ = line.split("=", 1)
+                    key = key.strip()
+                    if key in standard_keys:
+                        existing_standard[key] = line.rstrip("\n")
+                    else:
+                        extra_lines.append(line.rstrip("\n"))
+        except OSError:
+            extra_lines = []
+
+    lines = []
+    for key in standard_keys:
         if key in values:
             lines.append(f"{key}={_quote_env_value(values[key])}")
+        elif key in existing_standard:
+            lines.append(existing_standard[key])
+
+    lines.extend(extra_lines)
+
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
 
+def _collect_instance_indexes(prefix: str) -> list[int]:
+    indexes = set()
+    for key in os.environ.keys():
+        if key.startswith(f"{prefix}_URL_") or key.startswith(f"{prefix}_API_KEY_") or key.startswith(f"{prefix}_NAME_"):
+            suffix = key.split("_")[-1]
+            if suffix.isdigit():
+                indexes.add(int(suffix))
+    if os.environ.get(f"{prefix}_URL") or os.environ.get(f"{prefix}_API_KEY") or os.environ.get(f"{prefix}_NAME"):
+        indexes.add(1)
+    return sorted(indexes)
+
+
+def _build_instances(prefix: str, label: str) -> list[dict]:
+    instances = []
+    for idx in _collect_instance_indexes(prefix):
+        suffix = "" if idx == 1 else f"_{idx}"
+        url = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
+        api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
+        name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
+        if not (url and api_key):
+            continue
+        instances.append(
+            {
+                "id": f"{label.lower()}-{idx}",
+                "index": idx,
+                "name": name,
+                "url": url,
+                "api_key": api_key,
+            }
+        )
+    if len(instances) == 1:
+        if not instances[0]["name"]:
+            instances[0]["name"] = label
+    elif len(instances) > 1:
+        for inst in instances:
+            if not inst["name"]:
+                inst["name"] = f"{label} {inst['index']}"
+    return instances
+
+
+def _public_instances(instances: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": inst.get("id", ""),
+            "name": inst.get("name", ""),
+            "url": inst.get("url", ""),
+        }
+        for inst in instances
+    ]
+
+
 def _get_config():
     _ensure_env_loaded()
+    sonarr_instances = _build_instances("SONARR", "Sonarr")
+    radarr_instances = _build_instances("RADARR", "Radarr")
+    sonarr_primary = sonarr_instances[0] if sonarr_instances else None
+    radarr_primary = radarr_instances[0] if radarr_instances else None
     return {
-        "sonarr_url": _normalize_url(os.environ.get("SONARR_URL", "")),
-        "sonarr_api_key": os.environ.get("SONARR_API_KEY", ""),
-        "radarr_url": _normalize_url(os.environ.get("RADARR_URL", "")),
-        "radarr_api_key": os.environ.get("RADARR_API_KEY", ""),
+        "sonarr_url": sonarr_primary["url"] if sonarr_primary else _normalize_url(os.environ.get("SONARR_URL", "")),
+        "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else os.environ.get("SONARR_API_KEY", ""),
+        "sonarr_name": os.environ.get("SONARR_NAME", ""),
+        "sonarr_url_2": _normalize_url(os.environ.get("SONARR_URL_2", "")),
+        "sonarr_api_key_2": os.environ.get("SONARR_API_KEY_2", ""),
+        "sonarr_name_2": os.environ.get("SONARR_NAME_2", ""),
+        "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
+        "sonarr_api_key_3": os.environ.get("SONARR_API_KEY_3", ""),
+        "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
+        "radarr_url": radarr_primary["url"] if radarr_primary else _normalize_url(os.environ.get("RADARR_URL", "")),
+        "radarr_api_key": radarr_primary["api_key"] if radarr_primary else os.environ.get("RADARR_API_KEY", ""),
+        "radarr_name": os.environ.get("RADARR_NAME", ""),
+        "radarr_url_2": _normalize_url(os.environ.get("RADARR_URL_2", "")),
+        "radarr_api_key_2": os.environ.get("RADARR_API_KEY_2", ""),
+        "radarr_name_2": os.environ.get("RADARR_NAME_2", ""),
+        "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
+        "radarr_api_key_3": os.environ.get("RADARR_API_KEY_3", ""),
+        "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
+        "sonarr_instances": sonarr_instances,
+        "radarr_instances": radarr_instances,
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
         "tautulli_api_key": os.environ.get("TAUTULLI_API_KEY", ""),
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
@@ -155,16 +272,18 @@ def _get_config():
     }
 
 
+
 def _config_complete(cfg: dict) -> bool:
-    has_sonarr = cfg["sonarr_url"] and cfg["sonarr_api_key"]
-    has_radarr = cfg["radarr_url"] and cfg["radarr_api_key"]
-    return bool(has_sonarr or has_radarr)
+    return bool(cfg.get("sonarr_instances") or cfg.get("radarr_instances"))
+
 
 
 def _invalidate_cache():
-    for entry in _cache.values():
-        entry["ts"] = 0
-        entry["data"] = []
+    _cache["sonarr"].clear()
+    _cache["radarr"].clear()
+    _cache["tautulli"]["ts"] = 0
+    _cache["tautulli"]["data"] = {}
+
 
 
 def _get_basic_auth():
@@ -1072,33 +1191,76 @@ def _compute_radarr(base_url: str, api_key: str):
     return results
 
 
-def _get_cached(app_name: str, force: bool = False):
-    cfg = _get_config()
+def _apply_instance_meta(rows: list[dict], instance: dict):
+    for row in rows:
+        row["InstanceId"] = instance.get("id", "")
+        row["InstanceName"] = instance.get("name", "")
+
+
+def _get_cache_entry(app_name: str, instance_id: str) -> dict:
+    store = _cache[app_name]
+    entry = store.get(instance_id)
+    if not entry:
+        entry = {"ts": 0, "data": []}
+        store[instance_id] = entry
+    return entry
+
+
+def _get_cached_instance(
+    app_name: str,
+    instance: dict,
+    cache_seconds: int,
+    force: bool,
+    tautulli_index: dict | None,
+):
     now = time.time()
-    entry = _cache[app_name]
-    if force or (now - entry["ts"] > cfg["cache_seconds"]):
+    entry = _get_cache_entry(app_name, instance["id"])
+    if force or (now - entry["ts"] > cache_seconds):
         if app_name == "sonarr":
             entry["data"] = _compute_sonarr(
-                cfg["sonarr_url"],
-                cfg["sonarr_api_key"],
+                instance["url"],
+                instance["api_key"],
                 exclude_specials=True,
             )
         else:
             entry["data"] = _compute_radarr(
-                cfg["radarr_url"],
-                cfg["radarr_api_key"],
+                instance["url"],
+                instance["api_key"],
             )
         entry["ts"] = now
-        try:
-            tautulli_index = _get_tautulli_index(cfg, force=force)
-            if tautulli_index:
-                if app_name == "sonarr":
-                    _apply_tautulli_stats(entry["data"], tautulli_index, "shows")
-                else:
-                    _apply_tautulli_stats(entry["data"], tautulli_index, "movies")
-        except Exception as exc:
-            logger.warning("Tautulli stats fetch failed: %s", exc)
+        if tautulli_index:
+            if app_name == "sonarr":
+                _apply_tautulli_stats(entry["data"], tautulli_index, "shows")
+            else:
+                _apply_tautulli_stats(entry["data"], tautulli_index, "movies")
+
+    if entry["data"]:
+        _apply_instance_meta(entry["data"], instance)
     return entry["data"]
+
+
+def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool = False):
+    if not instances:
+        return []
+
+    tautulli_index = None
+    try:
+        tautulli_index = _get_tautulli_index(cfg, force=force)
+    except Exception as exc:
+        logger.warning("Tautulli stats fetch failed: %s", exc)
+
+    results = []
+    for instance in instances:
+        data = _get_cached_instance(
+            app_name,
+            instance,
+            cfg["cache_seconds"],
+            force,
+            tautulli_index,
+        )
+        results.extend(data)
+    return results
+
 
 
 @app.route("/")
@@ -1147,10 +1309,24 @@ def setup():
             basic_auth_pass = cfg["basic_auth_pass"]
 
         data = {
+            "SONARR_NAME": request.form.get("sonarr_name", "").strip(),
             "SONARR_URL": _normalize_url(request.form.get("sonarr_url", "")),
             "SONARR_API_KEY": request.form.get("sonarr_api_key", "").strip(),
+            "SONARR_NAME_2": request.form.get("sonarr_name_2", "").strip(),
+            "SONARR_URL_2": _normalize_url(request.form.get("sonarr_url_2", "")),
+            "SONARR_API_KEY_2": request.form.get("sonarr_api_key_2", "").strip(),
+            "SONARR_NAME_3": request.form.get("sonarr_name_3", "").strip(),
+            "SONARR_URL_3": _normalize_url(request.form.get("sonarr_url_3", "")),
+            "SONARR_API_KEY_3": request.form.get("sonarr_api_key_3", "").strip(),
+            "RADARR_NAME": request.form.get("radarr_name", "").strip(),
             "RADARR_URL": _normalize_url(request.form.get("radarr_url", "")),
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
+            "RADARR_NAME_2": request.form.get("radarr_name_2", "").strip(),
+            "RADARR_URL_2": _normalize_url(request.form.get("radarr_url_2", "")),
+            "RADARR_API_KEY_2": request.form.get("radarr_api_key_2", "").strip(),
+            "RADARR_NAME_3": request.form.get("radarr_name_3", "").strip(),
+            "RADARR_URL_3": _normalize_url(request.form.get("radarr_url_3", "")),
+            "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
             "BASIC_AUTH_USER": basic_auth_user,
@@ -1162,11 +1338,36 @@ def setup():
             error = "Cache seconds must be a whole number."
         elif cache_seconds < 30:
             error = "Cache seconds must be at least 30."
-        elif not (data["SONARR_URL"] and data["SONARR_API_KEY"]) and not (
-            data["RADARR_URL"] and data["RADARR_API_KEY"]
-        ):
-            error = "Provide Sonarr or Radarr URL and API key."
         else:
+            has_sonarr = any(
+                data.get(f"SONARR_URL{suffix}") and data.get(f"SONARR_API_KEY{suffix}")
+                for suffix in ("", "_2", "_3")
+            )
+            has_radarr = any(
+                data.get(f"RADARR_URL{suffix}") and data.get(f"RADARR_API_KEY{suffix}")
+                for suffix in ("", "_2", "_3")
+            )
+            if not has_sonarr and not has_radarr:
+                error = "Provide Sonarr or Radarr URL and API key."
+            else:
+                sonarr2 = data.get("SONARR_URL_2") and data.get("SONARR_API_KEY_2")
+                sonarr3 = data.get("SONARR_URL_3") and data.get("SONARR_API_KEY_3")
+                radarr2 = data.get("RADARR_URL_2") and data.get("RADARR_API_KEY_2")
+                radarr3 = data.get("RADARR_URL_3") and data.get("RADARR_API_KEY_3")
+
+                if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
+                    error = "Sonarr instance 1 name is required when additional instances are configured."
+                elif sonarr2 and not data.get("SONARR_NAME_2"):
+                    error = "Sonarr instance 2 name is required when it is configured."
+                elif sonarr3 and not data.get("SONARR_NAME_3"):
+                    error = "Sonarr instance 3 name is required when it is configured."
+                elif (radarr2 or radarr3) and not data.get("RADARR_NAME"):
+                    error = "Radarr instance 1 name is required when additional instances are configured."
+                elif radarr2 and not data.get("RADARR_NAME_2"):
+                    error = "Radarr instance 2 name is required when it is configured."
+                elif radarr3 and not data.get("RADARR_NAME_3"):
+                    error = "Radarr instance 3 name is required when it is configured."
+        if not error:
             try:
                 _write_env_file(ENV_FILE_PATH, data)
                 for k, v in data.items():
@@ -1196,6 +1397,8 @@ def api_config():
             "app_version": APP_VERSION,
             "sonarr_url": cfg["sonarr_url"],
             "radarr_url": cfg["radarr_url"],
+            "sonarr_instances": _public_instances(cfg.get("sonarr_instances", [])),
+            "radarr_instances": _public_instances(cfg.get("radarr_instances", [])),
             "tautulli_configured": bool(cfg["tautulli_url"] and cfg["tautulli_api_key"]),
             "configured": _config_complete(cfg),
         }
@@ -1211,46 +1414,54 @@ def api_version():
 @_auth_required
 def api_shows():
     cfg = _get_config()
-    if not (cfg["sonarr_url"] and cfg["sonarr_api_key"]):
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
         return jsonify({"error": "Sonarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
     try:
-        data = _get_cached("sonarr", force=force)
+        data = _get_cached_all("sonarr", instances, cfg, force=force)
         return jsonify(data)
-    except Exception as exc:
-        return jsonify({"error": "Sonarr request failed", "detail": str(exc)}), 502
+    except Exception:
+        logger.exception("Sonarr request failed")
+        return jsonify({"error": "Sonarr request failed"}), 502
 
 
 @app.route("/api/movies")
 @_auth_required
 def api_movies():
     cfg = _get_config()
-    if not (cfg["radarr_url"] and cfg["radarr_api_key"]):
+    instances = cfg.get("radarr_instances", [])
+    if not instances:
         return jsonify({"error": "Radarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
     try:
-        data = _get_cached("radarr", force=force)
+        data = _get_cached_all("radarr", instances, cfg, force=force)
         return jsonify(data)
-    except Exception as exc:
-        return jsonify({"error": "Radarr request failed", "detail": str(exc)}), 502
+    except Exception:
+        logger.exception("Radarr request failed")
+        return jsonify({"error": "Radarr request failed"}), 502
 
 
 @app.route("/api/shows.csv")
 @_auth_required
 def shows_csv():
     cfg = _get_config()
-    if not (cfg["sonarr_url"] and cfg["sonarr_api_key"]):
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
         return jsonify({"error": "Sonarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
     try:
-        data = _get_cached("sonarr", force=force)
-    except Exception as exc:
-        return jsonify({"error": "Sonarr request failed", "detail": str(exc)}), 502
+        data = _get_cached_all("sonarr", instances, cfg, force=force)
+    except Exception:
+        logger.exception("Sonarr request failed")
+        return jsonify({"error": "Sonarr request failed"}), 502
 
-    out = io.StringIO()
-    w = csv.DictWriter(
-        out,
-        fieldnames=[
+    include_instance = len(instances) > 1
+    fieldnames = []
+    if include_instance:
+        fieldnames.append("Instance")
+    fieldnames.extend(
+        [
             "Title",
             "TitleSlug",
             "EpisodesCounted",
@@ -1275,11 +1486,17 @@ def shows_csv():
             "TotalWatchTimeHours",
             "UsersWatched",
             "Path",
-        ],
+        ]
     )
+
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=fieldnames)
     w.writeheader()
     for r in data:
-        w.writerow({k: r.get(k, "") for k in w.fieldnames})
+        row = {k: r.get(k, "") for k in fieldnames}
+        if include_instance:
+            row["Instance"] = r.get("InstanceName", "")
+        w.writerow(row)
 
     return Response(
         out.getvalue(),
@@ -1292,18 +1509,22 @@ def shows_csv():
 @_auth_required
 def movies_csv():
     cfg = _get_config()
-    if not (cfg["radarr_url"] and cfg["radarr_api_key"]):
+    instances = cfg.get("radarr_instances", [])
+    if not instances:
         return jsonify({"error": "Radarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
     try:
-        data = _get_cached("radarr", force=force)
-    except Exception as exc:
-        return jsonify({"error": "Radarr request failed", "detail": str(exc)}), 502
+        data = _get_cached_all("radarr", instances, cfg, force=force)
+    except Exception:
+        logger.exception("Radarr request failed")
+        return jsonify({"error": "Radarr request failed"}), 502
 
-    out = io.StringIO()
-    w = csv.DictWriter(
-        out,
-        fieldnames=[
+    include_instance = len(instances) > 1
+    fieldnames = []
+    if include_instance:
+        fieldnames.append("Instance")
+    fieldnames.extend(
+        [
             "Title",
             "TmdbId",
             "RuntimeMins",
@@ -1328,11 +1549,17 @@ def movies_csv():
             "TotalWatchTimeHours",
             "UsersWatched",
             "Path",
-        ],
+        ]
     )
+
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=fieldnames)
     w.writeheader()
     for r in data:
-        w.writerow({k: r.get(k, "") for k in w.fieldnames})
+        row = {k: r.get(k, "") for k in fieldnames}
+        if include_instance:
+            row["Instance"] = r.get("InstanceName", "")
+        w.writerow(row)
 
     return Response(
         out.getvalue(),
@@ -1342,6 +1569,7 @@ def movies_csv():
 
 
 @app.route("/health")
+
 def health():
     return "ok", 200
 

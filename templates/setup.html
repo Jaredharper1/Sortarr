@@ -24,7 +24,11 @@
         {% endif %}
 
         <form method="post" class="setup-form">
-          <div class="setup-section-title">Sonarr</div>
+          <div class="setup-section-title">Sonarr Instance 1</div>
+          <label>
+            Instance name
+            <input name="sonarr_name" placeholder="Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)" value="{{ values.sonarr_name }}" />
+          </label>
           <label>
             Sonarr URL
             <input name="sonarr_url" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url }}" />
@@ -34,7 +38,45 @@
             <input name="sonarr_api_key" placeholder="your-api-key" value="{{ values.sonarr_api_key }}" />
           </label>
 
-          <div class="setup-section-title">Radarr</div>
+          <details class="setup-advanced">
+            <summary>Advanced Sonarr instances</summary>
+            <div class="setup-advanced-body">
+              <div class="setup-section-title">Sonarr Instance 2 (optional)</div>
+              <label>
+                Instance name
+                <input name="sonarr_name_2" placeholder="4k / Anime / Cartoons" value="{{ values.sonarr_name_2 }}" />
+              </label>
+              <label>
+                Sonarr URL
+                <input name="sonarr_url_2" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url_2 }}" />
+              </label>
+              <label>
+                Sonarr API key
+                <input name="sonarr_api_key_2" placeholder="your-api-key" value="{{ values.sonarr_api_key_2 }}" />
+              </label>
+
+              <div class="setup-section-title">Sonarr Instance 3 (optional)</div>
+              <label>
+                Instance name
+                <input name="sonarr_name_3" placeholder="4k / Anime / Cartoons" value="{{ values.sonarr_name_3 }}" />
+              </label>
+              <label>
+                Sonarr URL
+                <input name="sonarr_url_3" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url_3 }}" />
+              </label>
+              <label>
+                Sonarr API key
+                <input name="sonarr_api_key_3" placeholder="your-api-key" value="{{ values.sonarr_api_key_3 }}" />
+              </label>
+              <div class="setup-hint">If you add another Sonarr instance, name all configured Sonarr instances so chips and columns stay clear.</div>
+            </div>
+          </details>
+
+          <div class="setup-section-title">Radarr Instance 1</div>
+          <label>
+            Instance name
+            <input name="radarr_name" placeholder="Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)" value="{{ values.radarr_name }}" />
+          </label>
           <label>
             Radarr URL
             <input name="radarr_url" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url }}" />
@@ -43,6 +85,40 @@
             Radarr API key
             <input name="radarr_api_key" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
           </label>
+
+          <details class="setup-advanced">
+            <summary>Advanced Radarr instances</summary>
+            <div class="setup-advanced-body">
+              <div class="setup-section-title">Radarr Instance 2 (optional)</div>
+              <label>
+                Instance name
+                <input name="radarr_name_2" placeholder="4k / Anime / Cartoons" value="{{ values.radarr_name_2 }}" />
+              </label>
+              <label>
+                Radarr URL
+                <input name="radarr_url_2" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url_2 }}" />
+              </label>
+              <label>
+                Radarr API key
+                <input name="radarr_api_key_2" placeholder="your-api-key" value="{{ values.radarr_api_key_2 }}" />
+              </label>
+
+              <div class="setup-section-title">Radarr Instance 3 (optional)</div>
+              <label>
+                Instance name
+                <input name="radarr_name_3" placeholder="4k / Anime / Cartoons" value="{{ values.radarr_name_3 }}" />
+              </label>
+              <label>
+                Radarr URL
+                <input name="radarr_url_3" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url_3 }}" />
+              </label>
+              <label>
+                Radarr API key
+                <input name="radarr_api_key_3" placeholder="your-api-key" value="{{ values.radarr_api_key_3 }}" />
+              </label>
+              <div class="setup-hint">If you add another Radarr instance, name all configured Radarr instances so chips and columns stay clear.</div>
+            </div>
+          </details>
 
           <div class="setup-section-title">Tautulli (optional)</div>
           <label>

@@ -13,6 +13,8 @@ const advancedFilter = document.getElementById("advancedFilter");
 const advancedHelpBtn = document.getElementById("advancedHelpBtn");
 const advancedHelp = document.getElementById("advancedHelp");
 const advancedWarnings = document.getElementById("advancedWarnings");
+const instanceChipsSonarr = document.getElementById("instanceChipsSonarr");
+const instanceChipsRadarr = document.getElementById("instanceChipsRadarr");
 
 const tabSonarr = document.getElementById("tabSonarr");
 const tabRadarr = document.getElementById("tabRadarr");
@@ -57,20 +59,22 @@ const TAUTULLI_FILTER_FIELDS = new Set([
 ]);
 
 const ADVANCED_PLACEHOLDER_BASE =
-  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p";
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p";
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_HELP_BASE =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr " +
-  "Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr instance:sonarr-2 " +
+  "Fields: title, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
 const ADVANCED_HELP_TAUTULLI =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 videocodec:x265 videohdr:hdr " +
-  "Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, playcount, lastwatched, dayssincewatched, watchtime, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
+  "Fields: title, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, playcount, lastwatched, dayssincewatched, watchtime, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
 const lastUpdatedByApp = { sonarr: null, radarr: null };
 const configState = { sonarrConfigured: false, radarrConfigured: false };
+const instanceConfig = { sonarr: [], radarr: [] };
+const instanceBaseById = { sonarr: {}, radarr: {} };
 
 // Prevent stale fetches from rendering after you switch tabs
 const loadTokens = { sonarr: 0, radarr: 0 };
@@ -99,6 +103,61 @@ function setLoading(loading, label) {
 function resetUiState() {
   localStorage.removeItem(COLUMN_STORAGE_KEY);
   localStorage.removeItem("Sortarr-theme");
+}
+
+function getInstanceCount(app) {
+  return (instanceConfig[app] || []).length;
+}
+
+function bindChipButtons(rootEl = document) {
+  rootEl.querySelectorAll(".chip").forEach(btn => {
+    if (btn.dataset.chipBound === "1") return;
+    btn.dataset.chipBound = "1";
+    btn.addEventListener("click", () => {
+      const query = btn.getAttribute("data-query") || "";
+      if (!query) return;
+      const next = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
+      if (next.has(query)) {
+        next.delete(query);
+        btn.classList.remove("active");
+      } else {
+        next.add(query);
+        btn.classList.add("active");
+      }
+      chipQuery = Array.from(next).join(" ");
+      render(dataByApp[activeApp] || [], { allowBatch: false });
+    });
+  });
+}
+
+function buildInstanceChips() {
+  const configs = [
+    { app: "sonarr", container: instanceChipsSonarr, instances: instanceConfig.sonarr },
+    { app: "radarr", container: instanceChipsRadarr, instances: instanceConfig.radarr },
+  ];
+
+  configs.forEach(({ app, container, instances }) => {
+    if (!container) return;
+    container.textContent = "";
+    (instances || []).forEach((inst) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "chip";
+      btn.textContent = inst.name || (app === "sonarr" ? "Sonarr" : "Radarr");
+      btn.setAttribute("data-app", app);
+      btn.setAttribute("data-instance", "true");
+      if (inst.id) {
+        const query = `instance:${inst.id}`;
+        btn.setAttribute("data-query", query);
+        if ((chipQuery || "").split(/\s+/).includes(query)) {
+          btn.classList.add("active");
+        }
+      }
+      container.appendChild(btn);
+    });
+  });
+
+  bindChipButtons();
 }
 
 function updateLastUpdatedDisplay() {
@@ -151,15 +210,100 @@ function matchPattern(value, pattern) {
   return text.toLowerCase().includes(raw.toLowerCase());
 }
 
+const RESOLUTION_ALIASES = {
+  "4k": 2160,
+  uhd: 2160,
+  fhd: 1080,
+  fullhd: 1080,
+  hd: 720,
+  sd: 480,
+};
+
+function parseResolutionDimensions(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return { width: null, height: null };
+  if (RESOLUTION_ALIASES[raw]) return { width: null, height: RESOLUTION_ALIASES[raw] };
+  const dimMatch = raw.match(/(\d{3,4})\s*x\s*(\d{3,4})/);
+  if (dimMatch) {
+    return { width: Number(dimMatch[1]), height: Number(dimMatch[2]) };
+  }
+  const match = raw.match(/(\d{3,4})\s*[pi]?/);
+  if (match) return { width: null, height: Number(match[1]) };
+  return { width: null, height: null };
+}
+
+function extractResolutionSuffix(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  const match = raw.match(/(\d{3,4})\s*[pi]?$/);
+  return match ? match[1] : "";
+}
+
+function resolveResolutionInfo(value) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  const { width, height } = parseResolutionDimensions(raw);
+  const suffix = extractResolutionSuffix(raw);
+  return { raw, width, height, suffix };
+}
+
+function resolutionMatches(value, query) {
+  const rawQuery = String(query ?? "").trim();
+  if (!rawQuery) return true;
+  if (rawQuery.includes("*") || rawQuery.includes("?")) {
+    return matchPattern(value, rawQuery);
+  }
+  const target = resolveResolutionInfo(rawQuery);
+  if (!target.height) return matchPattern(value, rawQuery);
+  const actual = resolveResolutionInfo(value);
+  if (!actual.height) return matchPattern(value, rawQuery);
+  const tolerance = 80;
+  const diff = Math.abs(actual.height - target.height);
+  if (diff <= tolerance) {
+    if (
+      target.height === 720 &&
+      actual.width &&
+      actual.width >= 1600 &&
+      actual.height >= 760
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  if (actual.width) {
+    if (
+      target.height === 1080 &&
+      actual.width >= 1600 &&
+      actual.width < 3000 &&
+      actual.height >= 760 &&
+      actual.height <= 1080
+    ) {
+      return true;
+    }
+    if (
+      target.height === 2160 &&
+      actual.width >= 3000 &&
+      actual.height >= 1500 &&
+      actual.height <= 2160
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function buildRowKey(row, app) {
+  const instanceId = row.InstanceId ?? row.instanceId ?? "";
   if (app === "sonarr") {
-    return String(
+    const base = String(
       row.SeriesId ?? row.seriesId ?? row.TvdbId ?? row.tvdbId ?? row.TitleSlug ?? row.titleSlug ?? row.Title ?? row.Path ?? ""
     );
+    return instanceId ? `${instanceId}::${base}` : base;
   }
-  return String(
+  const base = String(
     row.MovieId ?? row.movieId ?? row.TmdbId ?? row.tmdbId ?? row.ImdbId ?? row.imdbId ?? row.Title ?? row.Path ?? ""
   );
+  return instanceId ? `${instanceId}::${base}` : base;
 }
 
 function assignRowKeys(rows, app) {
@@ -561,6 +705,13 @@ function parseAdvancedQuery(query) {
         });
         continue;
       }
+      if (field === "instance") {
+        preds.push(row => (
+          matchPattern(row?.InstanceName ?? "", value) ||
+          matchPattern(row?.InstanceId ?? "", value)
+        ));
+        continue;
+      }
       if (field === "audiolanguages" || field === "audiolang" ||
           field === "subtitlelanguages" || field === "sublanguages" ||
           field === "sublang" || field === "subtitles") {
@@ -614,6 +765,10 @@ function parseAdvancedQuery(query) {
           const needle = normalizeToken(value);
           preds.push(row => normalizeToken(getFieldValue(row, field)).includes(needle));
         }
+        continue;
+      }
+      if (field === "resolution") {
+        preds.push(row => resolutionMatches(getFieldValue(row, field), value));
         continue;
       }
       if (!FIELD_MAP[field]) {
@@ -708,6 +863,7 @@ function sortData(arr) {
 
 const COLUMN_STORAGE_KEY = "Sortarr-columns";
 const DEFAULT_HIDDEN_COLUMNS = new Set([
+  "Instance",
   "AudioProfile",
   "AudioLanguages",
   "SubtitleLanguages",
@@ -770,7 +926,8 @@ function updateColumnFilter() {
     const col = input?.getAttribute("data-col");
     const isTautulli = col && TAUTULLI_COLUMNS.has(col);
     const tautulliMatch = !isTautulli || tautulliEnabled;
-    const show = appMatch && tautulliMatch && (!query || label.includes(query));
+    const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
+    const show = appMatch && tautulliMatch && !hideByInstance && (!query || label.includes(query));
     row.style.display = show ? "" : "none";
   });
 
@@ -821,23 +978,40 @@ function updateSortIndicators() {
 function updateColumnVisibility(rootEl = document) {
   const hidden = getHiddenColumns();
   const scope = rootEl && rootEl.querySelectorAll ? rootEl : document;
-  scope.querySelectorAll("[data-col]").forEach(el => {
-    if (columnsPanel && columnsPanel.contains(el)) return;
-    const col = el.getAttribute("data-col");
-    const app = el.getAttribute("data-app");
-    const hideByApp = app && app !== activeApp;
-    const hideByCol = hidden.has(col);
-    const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
-    el.classList.toggle("col-hidden", hideByApp || hideByCol || hideByTautulli);
+  const scopes = [];
+  if (scope === document) {
+    scopes.push(document);
+  } else {
+    scopes.push(scope);
+    const thead = document.querySelector("thead");
+    if (thead) scopes.push(thead);
+  }
+
+  scopes.forEach(scopeEl => {
+    scopeEl.querySelectorAll("[data-col]").forEach(el => {
+      if (columnsPanel && columnsPanel.contains(el)) return;
+      const col = el.getAttribute("data-col");
+      const app = el.getAttribute("data-app");
+      const hideByApp = app && app !== activeApp;
+      const hideByCol = hidden.has(col);
+      const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
+      const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
+      el.classList.toggle("col-hidden", hideByApp || hideByCol || hideByTautulli || hideByInstance);
+    });
   });
 }
 
 function updateChipVisibility() {
   const hiddenQueries = new Set();
   document.querySelectorAll(".chip-group").forEach(group => {
-    const app = group.getAttribute("data-app");
+    const app = group.getAttribute("data-app") ||
+      (group.querySelector("#instanceChipsSonarr") ? "sonarr" :
+        (group.querySelector("#instanceChipsRadarr") ? "radarr" : ""));
     const isTautulli = group.getAttribute("data-tautulli") === "true";
-    const hideGroup = (app && app !== activeApp) || (isTautulli && !tautulliEnabled);
+    const isInstanceGroup = group.getAttribute("data-instance-group") === "true";
+    const instanceApp = app || activeApp;
+    const hideByInstance = isInstanceGroup && getInstanceCount(instanceApp) <= 1;
+    const hideGroup = (app && app !== activeApp) || (isTautulli && !tautulliEnabled) || hideByInstance;
     group.classList.toggle("hidden", hideGroup);
     if (hideGroup) {
       group.querySelectorAll(".chip").forEach(btn => {
@@ -851,7 +1025,10 @@ function updateChipVisibility() {
   document.querySelectorAll(".chip").forEach(btn => {
     const app = btn.getAttribute("data-app");
     const isTautulli = btn.getAttribute("data-tautulli") === "true";
-    const hideChip = (app && app !== activeApp) || (isTautulli && !tautulliEnabled);
+    const isInstance = btn.getAttribute("data-instance") === "true";
+    const instanceApp = app || activeApp;
+    const hideByInstance = isInstance && getInstanceCount(instanceApp) <= 1;
+    const hideChip = (app && app !== activeApp) || (isTautulli && !tautulliEnabled) || hideByInstance;
     btn.classList.toggle("hidden", hideChip);
     if (hideChip) {
       const query = btn.getAttribute("data-query") || "";
@@ -859,6 +1036,8 @@ function updateChipVisibility() {
       btn.classList.remove("active");
     }
   });
+
+  bindChipButtons();
 
   if (!hiddenQueries.size) return false;
   const current = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
@@ -943,16 +1122,20 @@ function buildTitleLink(row, app) {
       row.slug ??
       sonarrSlugFromTitle(row.Title);
 
-    if (!sonarrBase || !slug) return escapeHtml(row.Title);
+    const instanceId = row.InstanceId ?? row.instanceId;
+    const base = (instanceId && instanceBaseById.sonarr[instanceId]) || sonarrBase;
+    if (!base || !slug) return escapeHtml(row.Title);
 
-    const url = `${sonarrBase.replace(/\/$/, "")}/series/${slug}`;
+    const url = `${base.replace(/\/$/, "")}/series/${slug}`;
     return `<a class="title-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.Title)}</a>`;
   } else {
     // IMPORTANT: Radarr UI expects TMDB id for /movie/<id> in your setup
     const tmdbId = row.TmdbId ?? row.tmdbId;
-    if (!radarrBase || !tmdbId) return escapeHtml(row.Title);
+    const instanceId = row.InstanceId ?? row.instanceId;
+    const base = (instanceId && instanceBaseById.radarr[instanceId]) || radarrBase;
+    if (!base || !tmdbId) return escapeHtml(row.Title);
 
-    const url = `${radarrBase.replace(/\/$/, "")}/movie/${tmdbId}`;
+    const url = `${base.replace(/\/$/, "")}/movie/${tmdbId}`;
     return `<a class="title-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.Title)}</a>`;
   }
 }
@@ -989,10 +1172,12 @@ function buildRow(row, app) {
   const usersWatched = tautulliMatched
     ? escapeHtml(row.UsersWatched ?? 0)
     : '<span class="muted">Not reported</span>';
+  const instanceName = row.InstanceName ?? row.InstanceId ?? "";
 
   if (app === "sonarr") {
     tr.innerHTML = `
       <td data-col="Title">${buildTitleLink(row, app)}</td>
+      <td data-col="Instance">${escapeHtml(instanceName)}</td>
       <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
       <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
       <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
@@ -1015,6 +1200,7 @@ function buildRow(row, app) {
   } else {
     tr.innerHTML = `
       <td data-col="Title">${buildTitleLink(row, app)}</td>
+      <td data-col="Instance">${escapeHtml(instanceName)}</td>
       <td class="right" data-col="RuntimeMins" data-app="radarr">${row.RuntimeMins ?? ""}</td>
       <td class="right" data-col="FileSizeGB" data-app="radarr">${row.FileSizeGB ?? ""}</td>
       <td class="right" data-col="GBPerHour" data-app="radarr">${row.GBPerHour ?? ""}</td>
@@ -1288,22 +1474,7 @@ if (advancedHelpBtn) {
   });
 }
 
-document.querySelectorAll(".chip").forEach(btn => {
-  btn.addEventListener("click", () => {
-    const query = btn.getAttribute("data-query") || "";
-    if (!query) return;
-    const next = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
-    if (next.has(query)) {
-      next.delete(query);
-      btn.classList.remove("active");
-    } else {
-      next.add(query);
-      btn.classList.add("active");
-    }
-    chipQuery = Array.from(next).join(" ");
-    render(dataByApp[activeApp] || [], { allowBatch: false });
-  });
-});
+bindChipButtons();
 
 if (tbody) {
   tbody.addEventListener("click", e => {
@@ -1418,10 +1589,27 @@ async function loadConfig() {
     const res = await fetch("/api/config");
     if (!res.ok) return;
     const cfg = await res.json();
-    sonarrBase = cfg.sonarr_url || "";
-    radarrBase = cfg.radarr_url || "";
-    configState.sonarrConfigured = Boolean(cfg.sonarr_url);
-    configState.radarrConfigured = Boolean(cfg.radarr_url);
+    const sonarrInstances = Array.isArray(cfg.sonarr_instances) ? cfg.sonarr_instances : [];
+    const radarrInstances = Array.isArray(cfg.radarr_instances) ? cfg.radarr_instances : [];
+
+    instanceConfig.sonarr = sonarrInstances;
+    instanceConfig.radarr = radarrInstances;
+
+    instanceBaseById.sonarr = {};
+    instanceBaseById.radarr = {};
+    sonarrInstances.forEach(inst => {
+      if (inst?.id) instanceBaseById.sonarr[inst.id] = inst.url || "";
+    });
+    radarrInstances.forEach(inst => {
+      if (inst?.id) instanceBaseById.radarr[inst.id] = inst.url || "";
+    });
+
+    sonarrBase = cfg.sonarr_url || sonarrInstances[0]?.url || "";
+    radarrBase = cfg.radarr_url || radarrInstances[0]?.url || "";
+    configState.sonarrConfigured = sonarrInstances.length > 0;
+    configState.radarrConfigured = radarrInstances.length > 0;
+
+    buildInstanceChips();
     setTautulliEnabled(cfg.tautulli_configured);
   } catch (e) {
     console.warn("config load failed", e);

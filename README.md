@@ -22,6 +22,7 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Radarr movie size stats (file size and GiB per hour)
 - Sorting, filtering, and column toggles
 - CSV export for Sonarr and Radarr
+- Multiple Sonarr/Radarr instances with optional friendly names
 - Optional basic auth and configurable cache
 - Optional Tautulli playback stats (play count, last watched, watch time, users)
 - Audio/subtitle language columns with filters and quick chips
@@ -42,7 +43,7 @@ docker compose up -d
 
 The default `docker-compose.yaml` pulls `ghcr.io/jaredharper1/sortarr:latest` (release builds). To use Docker Hub instead, set `image: docker.io/jaredharper1/sortarr:latest`.
 
-Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized.
+Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
 Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
 Load uses cached data by default; Shift+Click Load forces a refresh from the Arr APIs. The Reset UI button clears local UI settings if the page looks stale.
@@ -53,8 +54,22 @@ Sortarr writes and reads:
 
 - `SONARR_URL`
 - `SONARR_API_KEY`
+- `SONARR_NAME` (optional unless additional Sonarr instances are configured)
+- `SONARR_URL_2`
+- `SONARR_API_KEY_2`
+- `SONARR_NAME_2`
+- `SONARR_URL_3`
+- `SONARR_API_KEY_3`
+- `SONARR_NAME_3`
 - `RADARR_URL`
 - `RADARR_API_KEY`
+- `RADARR_NAME` (optional unless additional Radarr instances are configured)
+- `RADARR_URL_2`
+- `RADARR_API_KEY_2`
+- `RADARR_NAME_2`
+- `RADARR_URL_3`
+- `RADARR_API_KEY_3`
+- `RADARR_NAME_3`
 - `TAUTULLI_URL` (optional)
 - `TAUTULLI_API_KEY` (optional)
 - `BASIC_AUTH_USER`
@@ -75,7 +90,9 @@ Use `field:value` for wildcards and comparisons. Numeric fields treat `field:val
 
 Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `dayssincewatched>=365` `watchtime>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-Fields: `title`, `path`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `audiolang`, `sublang`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+Fields: `title`, `path`, `instance`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `audiolang`, `sublang`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+
+Note: Resolution filters match by height with tolerance (e.g., 1920x1036p matches 1080p), treat wide 1920x8xx sources as 1080p, and accept aliases like 4k/uhd/fhd/hd/sd.
 
 Note: Language lists are shortened in the table; use "Show all" to expand them.
 

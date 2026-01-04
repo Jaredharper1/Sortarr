@@ -1,4 +1,8 @@
 docs/
 *.png
 smoke_test.py
+selenium_stress_test.py
 data/
+__pycache__/
+sortarr_err.log
+sortarr_run.log

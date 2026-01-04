@@ -35,6 +35,7 @@
   <div class="column-group">
     <div class="column-group-title">Core</div>
     <label class="column-row"><input type="checkbox" data-col="Title" /> Title</label>
+    <label class="column-row"><input type="checkbox" data-col="Instance" /> Instance</label>
     <label class="column-row"><input type="checkbox" data-col="Path" /> Path</label>
   </div>
           <div class="column-group" data-app="sonarr">
@@ -138,6 +139,14 @@
                 <button class="chip" type="button" data-query="nosubs:true">No Subtitles</button>
               </div>
             </div>
+            <div class="chip-group hidden" data-app="sonarr" data-instance-group="true">
+              <div class="chip-group-title">Instance</div>
+              <div class="chip-row" id="instanceChipsSonarr"></div>
+            </div>
+            <div class="chip-group hidden" data-app="radarr" data-instance-group="true">
+              <div class="chip-group-title">Instance</div>
+              <div class="chip-row" id="instanceChipsRadarr"></div>
+            </div>
             <div class="chip-group" data-tautulli="true">
               <div class="chip-group-title">Playback (Tautulli)</div>
               <div class="chip-row">
@@ -191,6 +200,7 @@
         <thead>
           <tr>
             <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
+            <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
             <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
