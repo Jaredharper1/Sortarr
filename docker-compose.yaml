@@ -1,10 +1,10 @@
 version: "3.8"
 services:
   sortarr:
-    # Revert to the registry image after testing:
-    # image: ghcr.io/jaredharper1/sortarr:latest
-    build: .
-    image: sortarr:local
+    image: ghcr.io/jaredharper1/sortarr:latest
+    # Local build (optional):
+    # build: .
+    # image: sortarr:local
     container_name: sortarr
     ports:
       - "8787:8787"
