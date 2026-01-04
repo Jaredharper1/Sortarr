@@ -13,7 +13,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.5.7"
+APP_VERSION = "0.5.8"
 
 app = Flask(__name__)
 
@@ -882,16 +882,16 @@ def _resolution_from_file(f: dict) -> str:
     is_interlaced = "interlaced" in scan or scan == "i"
     suffix = "i" if is_interlaced else "p"
 
-    match = re.search(r"(\d{3,4})\s*([pi])$", res.lower())
-    if match:
-        return f"{match.group(1)}{match.group(2)}"
-
     match = re.search(r"(\d{3,4})\s*x\s*(\d{3,4})\s*([pi])?$", res.lower())
     if match:
         width = match.group(1)
         height = match.group(2)
         existing = match.group(3)
         return f"{width}x{height}{existing or suffix}"
+
+    match = re.search(r"(\d{3,4})\s*([pi])$", res.lower())
+    if match:
+        return f"{match.group(1)}{match.group(2)}"
 
     match = re.search(r"(\d{3,4})", res)
     if match:

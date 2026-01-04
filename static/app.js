@@ -232,6 +232,15 @@ function parseResolutionDimensions(value) {
   return { width: null, height: null };
 }
 
+function classifyResolutionByWidth(info) {
+  if (!info.width || !info.height) return null;
+  if (info.width >= 3000 && info.height >= 1400) return 2160;
+  if (info.width >= 1800 && info.height >= 600) return 1080;
+  if (info.width >= 1200 && info.height >= 500) return 720;
+  if (info.width >= 900 && info.height >= 400) return 480;
+  return null;
+}
+
 function extractResolutionSuffix(value) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return "";
@@ -258,36 +267,19 @@ function resolutionMatches(value, query) {
   if (!actual.height) return matchPattern(value, rawQuery);
   const tolerance = 80;
   const diff = Math.abs(actual.height - target.height);
+  const widthHint = classifyResolutionByWidth(actual);
   if (diff <= tolerance) {
-    if (
-      target.height === 720 &&
-      actual.width &&
-      actual.width >= 1600 &&
-      actual.height >= 760
-    ) {
+    if (widthHint && target.height !== widthHint) {
+      return false;
+    }
+    if (target.height === 720 && widthHint === 1080) {
       return false;
     }
     return true;
   }
 
-  if (actual.width) {
-    if (
-      target.height === 1080 &&
-      actual.width >= 1600 &&
-      actual.width < 3000 &&
-      actual.height >= 760 &&
-      actual.height <= 1080
-    ) {
-      return true;
-    }
-    if (
-      target.height === 2160 &&
-      actual.width >= 3000 &&
-      actual.height >= 1500 &&
-      actual.height <= 2160
-    ) {
-      return true;
-    }
+  if (widthHint && target.height === widthHint) {
+    return true;
   }
   return false;
 }

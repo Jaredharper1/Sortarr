@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.8
+
+- Resolution chips now filter by video quality tags instead of file resolution
+- Resolution filter note clarified in README
+
 ## 0.5.7
 
 - Docker compose uses the published `ghcr.io/jaredharper1/sortarr:latest` image by default again
