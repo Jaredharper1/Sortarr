@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.5.8-blue)
+![Version](https://img.shields.io/badge/version-0.5.9-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -42,6 +42,7 @@ docker compose up -d
 ```
 
 The default `docker-compose.yaml` pulls `ghcr.io/jaredharper1/sortarr:latest` (release builds). To use Docker Hub instead, set `image: docker.io/jaredharper1/sortarr:latest`.
+Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, so Apple Silicon pulls work without changes. To force an architecture, set `platform` in `docker-compose.yaml` (e.g., `linux/arm64/v8` or `linux/amd64`).
 
 Open `http://<host>:8787`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 

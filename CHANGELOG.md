@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.9
+
+- Docker: publish multi-arch images (linux/amd64, linux/arm64/v8) to GHCR and Docker Hub
+- Docs: note Apple Silicon support and optional platform override
+
 ## 0.5.8
 
 - Resolution chips now filter by video quality tags instead of file resolution
