@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.10
+
+- Docker: change default compose port to 9595 to avoid 8787 conflicts
+- Docs: update default access URL
+
 ## 0.5.9
 
 - Docker: publish multi-arch images (linux/amd64, linux/arm64/v8) to GHCR and Docker Hub

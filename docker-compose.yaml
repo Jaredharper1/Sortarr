@@ -9,7 +9,7 @@ services:
     # image: sortarr:local
     container_name: sortarr
     ports:
-      - "8787:8787"
+      - "9595:8787"
     environment:
       - ENV_FILE_PATH=/data/Sortarr.env
       - CACHE_SECONDS=300
