@@ -1,8 +1,9 @@
-docs/
-*.png
+docs/Thumbs.db
 smoke_test.py
 selenium_stress_test.py
 data/
 __pycache__/
 sortarr_err.log
 sortarr_run.log
+docs/radarr.png
+docs/sonarr.png

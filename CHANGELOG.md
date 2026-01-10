@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.11
+
+- Docs: add Unraid template and deployment notes
+
 ## 0.5.10
 
 - Docker: change default compose port to 9595 to avoid 8787 conflicts

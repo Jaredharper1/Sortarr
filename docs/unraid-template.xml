@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<Container>
+  <Name>Sortarr</Name>
+  <Repository>ghcr.io/jaredharper1/sortarr:latest</Repository>
+  <Registry>https://github.com/jaredharper1/Sortarr/pkgs/container/sortarr</Registry>
+  <Network>bridge</Network>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/jaredharper1/sortarr/issues</Support>
+  <Project>https://github.com/jaredharper1/sortarr</Project>
+  <TemplateURL>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/docs/unraid-template.xml</TemplateURL>
+  <Overview>Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage.</Overview>
+  <Category>MediaApp:Video</Category>
+  <WebUI>http://[IP]:[PORT:8787]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/static/Logo.png</Icon>
+  <Config Name="WebUI Port" Target="8787" Default="9595" Mode="tcp" Description="Sortarr web port." Type="Port" Display="always" Required="true" Mask="false">9595</Config>
+  <Config Name="Appdata" Target="/data" Default="/mnt/user/appdata/sortarr" Mode="rw" Description="Persistent app data (env file and cache)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/sortarr</Config>
+  <Config Name="ENV_FILE_PATH" Target="ENV_FILE_PATH" Default="/data/Sortarr.env" Mode="" Description="Path to the .env file." Type="Variable" Display="advanced" Required="false" Mask="false">/data/Sortarr.env</Config>
+  <Config Name="CACHE_SECONDS" Target="CACHE_SECONDS" Default="300" Mode="" Description="Cache duration in seconds." Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
+</Container>
+

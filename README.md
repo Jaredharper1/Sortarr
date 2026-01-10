@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.5.10-blue)
+![Version](https://img.shields.io/badge/version-0.5.11-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -48,6 +48,16 @@ Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can 
 
 Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
 Load uses cached data by default; Shift+Click Load forces a refresh from the Arr APIs. The Reset UI button clears local UI settings if the page looks stale.
+
+## Deployment (Unraid)
+
+An Unraid template is provided at `docs/unraid-template.xml`.
+
+Support: until a forum thread exists, use GitHub Issues for Unraid support.
+
+- Copy it to `/boot/config/plugins/dockerMan/templates-user/` (for example, `sortarr.xml`).
+- Add the container in Unraid and set the WebUI port (default 9595) and appdata path.
+- Start the container and open the WebUI from the Docker page.
 
 ## Configuration
 
