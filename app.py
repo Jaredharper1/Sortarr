@@ -575,10 +575,7 @@ def _save_tautulli_metadata_cache(path: str, cache: dict[str, dict]) -> None:
             json.dump(payload, handle, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except OSError:
-        logger.warning(
-            "Failed to write Tautulli metadata cache: %s",
-            _safe_log_path(path) or "path redacted",
-        )
+        logger.warning("Failed to write Tautulli metadata cache (path redacted).")
 
 
 def _load_arr_cache(path: str) -> dict[str, dict]:
@@ -626,10 +623,7 @@ def _save_arr_cache(path: str, cache: dict[str, dict]) -> None:
             json.dump(payload, handle, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except OSError:
-        logger.warning(
-            "Failed to write Arr cache: %s",
-            _safe_log_path(path) or "path redacted",
-        )
+        logger.warning("Failed to write Arr cache (path redacted).")
 
 
 def _check_deadline(deadline: float | None, label: str):
