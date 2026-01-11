@@ -143,3 +143,43 @@ html[data-theme="dark"] .setup-error {
   border: 1px solid var(--border);
 }
 
+.setup-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: -2px;
+}
+
+.setup-test {
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.setup-inline-message {
+  font-size: 0.85rem;
+}
+
+.setup-inline-message.is-error {
+  color: #8a1f1f;
+}
+
+.setup-inline-message.is-ok {
+  color: #166534;
+}
+
+.setup-inline-message.is-pending {
+  color: var(--muted);
+}
+
+html[data-theme="dark"] .setup-inline-message.is-error {
+  color: #ffb4b4;
+}
+
+html[data-theme="dark"] .setup-inline-message.is-ok {
+  color: #86efac;
+}
+

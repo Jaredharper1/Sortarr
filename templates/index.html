@@ -19,8 +19,8 @@
           </div>
         </div>
 
-        <button id="loadBtn" title="Shift+Click to force refresh from API">Load</button>
-        <button id="resetUiBtn" title="Clear UI settings and reload">Reset UI</button>
+        <button id="loadBtn" title="Fetch fresh data from Sonarr/Radarr/Tautulli and update the cache">Fetch New Data</button>
+        <button id="resetUiBtn" title="Clear UI settings and reload cached data">Reset UI</button>
         <div class="column-menu">
           <button id="columnsBtn" type="button" title="Adjust visible columns">Columns</button>
           <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns">
@@ -43,6 +43,7 @@
             <label class="column-row"><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
             <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="ContentHours" /> Content (hh:mm)</label>
           </div>
           <div class="column-group" data-app="radarr">
             <div class="column-group-title">Radarr</div>
@@ -70,8 +71,18 @@
     <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
     <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
     <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
-    <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time (hrs)</label>
+    <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time (hh:mm)</label>
+    <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> Watch / Content (hh:mm)</label>
     <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> Users Watched</label>
+  </div>
+  <div class="column-group">
+    <div class="column-group-title">Advanced</div>
+    <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> Title Slug</label>
+    <label class="column-row"><input type="checkbox" data-col="TmdbId" /> TMDB ID</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> Audio Codec Mixed</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioProfileMixed" /> Audio Profile Mixed</label>
+    <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages Mixed</label>
+    <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages Mixed</label>
   </div>
 </div>
         </div>
@@ -102,7 +113,7 @@
         </div>
         <div id="advancedHelp" class="advanced-help hidden">
           Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr
-          Fields: title, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour
+          Fields: title, titleslug, tmdbid, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiochannels, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
         </div>
         <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="chip-wrap">
@@ -205,6 +216,7 @@
             <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
             <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Content (hh:mm) <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
@@ -222,8 +234,15 @@
             <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
             <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
             <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hrs) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hh:mm) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">Watch / Content (hh:mm) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="UsersWatched" data-col="UsersWatched">Users Watched <span class="sort-indicator"></span></th>
+            <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">Title Slug <span class="sort-indicator"></span></th>
+            <th data-sort="TmdbId" data-col="TmdbId">TMDB ID <span class="sort-indicator"></span></th>
+            <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">Audio Codec Mixed <span class="sort-indicator"></span></th>
+            <th data-sort="AudioProfileMixed" data-col="AudioProfileMixed">Audio Profile Mixed <span class="sort-indicator"></span></th>
+            <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">Audio Languages Mixed <span class="sort-indicator"></span></th>
+            <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">Subtitle Languages Mixed <span class="sort-indicator"></span></th>
 
             <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
           </tr>

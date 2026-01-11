@@ -1,12 +1,8 @@
-version: "3.8"
 services:
   sortarr:
     image: ghcr.io/jaredharper1/sortarr:latest
     # Optional: set platform (e.g., linux/arm64/v8 for Apple Silicon).
     # platform: linux/arm64/v8
-    # Local build (optional):
-    # build: .
-    # image: sortarr:local
     container_name: sortarr
     ports:
       - "9595:8787"

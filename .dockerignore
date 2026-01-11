@@ -1,6 +1,7 @@
 docs/Thumbs.db
 smoke_test.py
 selenium_stress_test.py
+tautulli_id_match_test.py
 data/
 __pycache__/
 sortarr_err.log

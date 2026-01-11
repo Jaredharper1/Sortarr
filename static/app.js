@@ -35,6 +35,8 @@ let activeApp = "sonarr"; // "sonarr" | "radarr"
 let sortKey = "AvgEpisodeSizeGB";
 let sortDir = "desc";
 let isLoading = false;
+let statusMessage = "";
+let statusNotice = "";
 let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
@@ -44,6 +46,7 @@ const TAUTULLI_COLUMNS = new Set([
   "LastWatched",
   "DaysSinceWatched",
   "TotalWatchTimeHours",
+  "WatchContentRatio",
   "UsersWatched",
 ]);
 const TAUTULLI_FILTER_FIELDS = new Set([
@@ -53,6 +56,9 @@ const TAUTULLI_FILTER_FIELDS = new Set([
   "watchtime",
   "watchtimehours",
   "totalwatchtime",
+  "contenthours",
+  "watchratio",
+  "watchvs",
   "userswatched",
   "users",
   "neverwatched",
@@ -61,13 +67,13 @@ const TAUTULLI_FILTER_FIELDS = new Set([
 const ADVANCED_PLACEHOLDER_BASE =
   "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_HELP_BASE =
   "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr instance:sonarr-2 " +
-  "Fields: title, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Fields: title, titleslug, tmdbid, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
 const ADVANCED_HELP_TAUTULLI =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
-  "Fields: title, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiochannels, audiolang, sublang, nosubs, playcount, lastwatched, dayssincewatched, watchtime, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 contenthours>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
+  "Fields: title, titleslug, tmdbid, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
@@ -87,8 +93,22 @@ let radarrBase = "";
 let renderToken = 0;
 const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 
+function updateStatusText() {
+  if (!statusEl) return;
+  const parts = [];
+  if (statusMessage) parts.push(statusMessage);
+  if (statusNotice) parts.push(statusNotice);
+  statusEl.textContent = parts.join(" | ");
+}
+
 function setStatus(msg) {
-  statusEl.textContent = msg || "";
+  statusMessage = msg || "";
+  updateStatusText();
+}
+
+function setStatusNotice(msg) {
+  statusNotice = msg || "";
+  updateStatusText();
 }
 
 function setLoading(loading, label) {
@@ -519,14 +539,42 @@ function formatDaysSince(value, lastWatched) {
   return escapeHtml(num);
 }
 
-function formatWatchTimeHours(value) {
+function formatHoursClock(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) return "";
-  return escapeHtml(num.toFixed(2));
+  const totalMinutes = Math.round(num * 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
+function formatWatchTimeHours(value) {
+  const text = formatHoursClock(value);
+  return text ? escapeHtml(text) : "";
+}
+
+function formatWatchContentHours(watchHours, contentHours) {
+  const contentText = formatHoursClock(contentHours);
+  if (!contentText) return "";
+  const watchText = formatHoursClock(
+    Number.isFinite(Number(watchHours)) ? watchHours : 0
+  ) || "0:00";
+  return `${escapeHtml(watchText)} / ${escapeHtml(contentText)}`;
+}
+
+function formatBoolValue(value) {
+  if (typeof value === "string") {
+    const raw = value.trim().toLowerCase();
+    if (raw === "true") return "true";
+    if (raw === "false") return "false";
+  }
+  return value ? "true" : "false";
 }
 
 const FIELD_MAP = {
   title: "Title",
+  titleslug: "TitleSlug",
+  tmdbid: "TmdbId",
   path: "Path",
   videoquality: "VideoQuality",
   videocodec: "VideoCodec",
@@ -534,19 +582,26 @@ const FIELD_MAP = {
   resolution: "Resolution",
   audiocodec: "AudioCodec",
   audioprofile: "AudioProfile",
+  audiocodecmixed: "AudioCodecMixed",
+  audioprofilemixed: "AudioProfileMixed",
   audiochannels: "AudioChannels",
   audiolanguages: "AudioLanguages",
   audiolang: "AudioLanguages",
+  audiolanguagesmixed: "AudioLanguagesMixed",
   subtitlelanguages: "SubtitleLanguages",
   sublanguages: "SubtitleLanguages",
   sublang: "SubtitleLanguages",
   subtitles: "SubtitleLanguages",
+  subtitlelanguagesmixed: "SubtitleLanguagesMixed",
   playcount: "PlayCount",
   lastwatched: "LastWatched",
   dayssincewatched: "DaysSinceWatched",
   watchtime: "TotalWatchTimeHours",
   watchtimehours: "TotalWatchTimeHours",
   totalwatchtime: "TotalWatchTimeHours",
+  contenthours: "ContentHours",
+  watchratio: "WatchContentRatio",
+  watchvs: "WatchContentRatio",
   userswatched: "UsersWatched",
   users: "UsersWatched",
   episodes: "EpisodesCounted",
@@ -570,6 +625,9 @@ const NUMERIC_FIELDS = new Set([
   "watchtime",
   "watchtimehours",
   "totalwatchtime",
+  "contenthours",
+  "watchratio",
+  "watchvs",
   "userswatched",
   "users",
 ]);
@@ -859,12 +917,19 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "AudioProfile",
   "AudioLanguages",
   "SubtitleLanguages",
+  "TitleSlug",
+  "TmdbId",
+  "AudioCodecMixed",
+  "AudioProfileMixed",
+  "AudioLanguagesMixed",
+  "SubtitleLanguagesMixed",
   "TotalSizeGB",
   "VideoHDR",
   "PlayCount",
   "LastWatched",
   "DaysSinceWatched",
   "TotalWatchTimeHours",
+  "WatchContentRatio",
   "UsersWatched",
 ]);
 
@@ -1161,9 +1226,26 @@ function buildRow(row, app) {
   const watchTimeHours = tautulliMatched
     ? formatWatchTimeHours(row.TotalWatchTimeHours ?? 0)
     : '<span class="muted">Not reported</span>';
+  let watchContentHours = '<span class="muted">No watch data</span>';
+  if (tautulliMatched) {
+    const watchContentValue = formatWatchContentHours(
+      row.TotalWatchTimeHours ?? 0,
+      row.ContentHours
+    );
+    watchContentHours = watchContentValue || '<span class="muted">No runtime</span>';
+  }
   const usersWatched = tautulliMatched
     ? escapeHtml(row.UsersWatched ?? 0)
     : '<span class="muted">Not reported</span>';
+  const contentHours = formatWatchTimeHours(row.ContentHours ?? "");
+  const tmdbId = escapeHtml(row.TmdbId ?? row.tmdbId ?? "");
+  const titleSlug = escapeHtml(
+    row.TitleSlug ?? row.titleSlug ?? sonarrSlugFromTitle(row.Title)
+  );
+  const audioCodecMixed = formatBoolValue(row.AudioCodecMixed);
+  const audioProfileMixed = formatBoolValue(row.AudioProfileMixed);
+  const audioLanguagesMixed = formatBoolValue(row.AudioLanguagesMixed);
+  const subtitleLanguagesMixed = formatBoolValue(row.SubtitleLanguagesMixed);
   const instanceName = row.InstanceName ?? row.InstanceId ?? "";
 
   if (app === "sonarr") {
@@ -1173,6 +1255,7 @@ function buildRow(row, app) {
       <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
       <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
       <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
+      <td class="right" data-col="ContentHours" data-app="sonarr">${contentHours}</td>
       <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
       <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
       <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
@@ -1186,7 +1269,14 @@ function buildRow(row, app) {
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
       <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+      <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
       <td class="right" data-col="UsersWatched">${usersWatched}</td>
+      <td data-col="TitleSlug" data-app="sonarr">${titleSlug}</td>
+      <td data-col="TmdbId">${tmdbId}</td>
+      <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
+      <td data-col="AudioProfileMixed">${audioProfileMixed}</td>
+      <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
+      <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
       <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
     `;
   } else {
@@ -1209,7 +1299,13 @@ function buildRow(row, app) {
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
       <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+      <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
       <td class="right" data-col="UsersWatched">${usersWatched}</td>
+      <td data-col="TmdbId">${tmdbId}</td>
+      <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
+      <td data-col="AudioProfileMixed">${audioProfileMixed}</td>
+      <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
+      <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
       <td data-col="Path">${escapeHtml(row.Path ?? "")}</td>
     `;
   }
@@ -1285,7 +1381,13 @@ async function load(refresh) {
   const myToken = ++loadTokens[app];
 
   try {
-    const label = app === "sonarr" ? "Loading Sonarr..." : "Loading Radarr...";
+    const label = refresh
+      ? app === "sonarr"
+        ? "Fetching new Sonarr data..."
+        : "Fetching new Radarr data..."
+      : app === "sonarr"
+        ? "Loading Sonarr data..."
+        : "Loading Radarr data...";
     if (app === activeApp) {
       setLoading(true, label);
     }
@@ -1299,11 +1401,15 @@ async function load(refresh) {
       throw new Error(`${res.status} ${res.statusText}: ${txt}`);
     }
 
+    const warn = res.headers.get("X-Sortarr-Warn") || "";
+    const notice = res.headers.get("X-Sortarr-Notice") || "";
+    const combinedNotice = [warn, notice].filter(Boolean).join(" | ");
     const json = await res.json();
 
     // If a newer request for this app is in flight, ignore this response
     if (myToken !== loadTokens[app]) return;
 
+    setStatusNotice(combinedNotice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);
@@ -1362,14 +1468,19 @@ exportCsvBtn.addEventListener("click", () => {
 
 /* buttons */
 if (loadBtn) {
-  loadBtn.addEventListener("click", e => load(Boolean(e.shiftKey)));
+  loadBtn.addEventListener("click", () => {
+    const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
+    load(true);
+    if ((otherApp === "sonarr" && configState.sonarrConfigured) ||
+        (otherApp === "radarr" && configState.radarrConfigured)) {
+      prefetch(otherApp, true);
+    }
+  });
 }
 if (resetUiBtn) {
   resetUiBtn.addEventListener("click", () => {
     resetUiState();
-    const url = new URL(window.location.href);
-    url.searchParams.set("refresh", Date.now().toString());
-    window.location.href = url.toString();
+    window.location.reload();
   });
 }
 
@@ -1414,8 +1525,12 @@ async function prefetch(app, refresh) {
       const txt = await res.text();
       throw new Error(`${res.status} ${res.statusText}: ${txt}`);
     }
+    const warn = res.headers.get("X-Sortarr-Warn") || "";
+    const notice = res.headers.get("X-Sortarr-Notice") || "";
+    const combinedNotice = [warn, notice].filter(Boolean).join(" | ");
     const json = await res.json();
     if (token !== prefetchTokens[app]) return;
+    setStatusNotice(combinedNotice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);

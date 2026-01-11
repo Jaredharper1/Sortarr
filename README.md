@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.5.11-blue)
+![Version](https://img.shields.io/badge/version-0.5.12-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -24,7 +24,7 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - CSV export for Sonarr and Radarr
 - Multiple Sonarr/Radarr instances with optional friendly names
 - Optional basic auth and configurable cache
-- Optional Tautulli playback stats (play count, last watched, watch time, users)
+- Optional Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
 - Audio/subtitle language columns with filters and quick chips
 
 ## Screenshots
@@ -47,7 +47,8 @@ Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, 
 Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
 Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
-Load uses cached data by default; Shift+Click Load forces a refresh from the Arr APIs. The Reset UI button clears local UI settings if the page looks stale.
+Fetch New Data pulls fresh Sonarr/Radarr/Tautulli data and updates the persistent cache. Reset UI clears local UI settings and reloads using the cached data.
+The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
 
 ## Deployment (Unraid)
 
@@ -83,6 +84,15 @@ Sortarr writes and reads:
 - `RADARR_NAME_3`
 - `TAUTULLI_URL` (optional)
 - `TAUTULLI_API_KEY` (optional)
+- `TAUTULLI_METADATA_CACHE` (optional, defaults to `./data/Sortarr.tautulli_cache.json`)
+- `TAUTULLI_METADATA_LOOKUP_LIMIT` (optional, defaults to `200`; set to `0` to disable lookups)
+- `TAUTULLI_METADATA_LOOKUP_SECONDS` (optional, defaults to `5`; set to `0` for no time limit)
+- `TAUTULLI_TIMEOUT_SECONDS` (optional, defaults to `30`; per-request timeout for Tautulli calls)
+- `TAUTULLI_FETCH_SECONDS` (optional; total budget per load, defaults to 2x `TAUTULLI_TIMEOUT_SECONDS` with a 120s minimum; clamped to at least the per-request timeout, set to `0` for no limit)
+- `SONARR_CACHE_PATH` (optional, defaults to `./data/Sortarr.sonarr_cache.json`)
+- `RADARR_CACHE_PATH` (optional, defaults to `./data/Sortarr.radarr_cache.json`)
+- `PUID` (optional, container user ID; used when set alongside `PGID`)
+- `PGID` (optional, container group ID; used when set alongside `PUID`)
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
 - `CACHE_SECONDS`
@@ -91,17 +101,20 @@ Requirements and notes:
 
 - Sonarr/Radarr API keys are required (read-only keys recommended)
 - Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
+- Tautulli metadata lookups are cached to disk for faster matching; raise the lookup limits to warm the cache faster
+- Cache seconds only evicts in-memory data; persistent caches remain until Fetch New Data is clicked
+- When `PUID`/`PGID` are set, the container runs as that user and will chown the config/cache paths on startup.
 - Basic auth is optional but recommended if exposed beyond your LAN
-- Designed for on-demand queries with caching (no background polling)
+- Designed for on-demand queries with persistent caching (no background polling)
 - No database or media filesystem access required
 
 ## Advanced filtering
 
 Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as `>=` (use `=` for exact). `gbperhour` and `totalsize` with integer values use whole-number buckets (e.g., `gbperhour:1` matches 1.0-1.99).
 
-Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `dayssincewatched>=365` `watchtime>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
+Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `dayssincewatched>=365` `watchtime>=10 contenthours>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-Fields: `title`, `path`, `instance`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiochannels`, `audiolang`, `sublang`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+Fields: `title`, `titleslug`, `tmdbid`, `path`, `instance`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiocodecmixed`, `audioprofilemixed`, `audiochannels`, `audiolang`, `audiolanguagesmixed`, `sublang`, `subtitlelanguagesmixed`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `contenthours`, `watchratio`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
 
 Note: Resolution filters match by height with tolerance (e.g., 1920x1036p matches 1080p), treat 1920x* as 1080p and 1280x* as 720p when dimensions are present, and accept aliases like 4k/uhd/fhd/hd/sd. The UI chips now use `videoquality:` for more reliable matches.
 

@@ -37,6 +37,22 @@
             Sonarr API key
             <input name="sonarr_api_key" placeholder="your-api-key" value="{{ values.sonarr_api_key }}" />
           </label>
+          <div class="setup-inline">
+            <button
+              class="setup-test"
+              type="button"
+              data-kind="sonarr"
+              data-url-id="sonarr_url"
+              data-key-id="sonarr_api_key"
+              data-inline-key="sonarr_1"
+            >
+              Test connection
+            </button>
+            <span
+              class="setup-inline-message{% if field_errors.get('sonarr_1') %} is-error{% else %} hidden{% endif %}"
+              data-inline="sonarr_1"
+            >{{ field_errors.get('sonarr_1', '') }}</span>
+          </div>
 
           <details class="setup-advanced">
             <summary>Advanced Sonarr instances</summary>
@@ -54,6 +70,22 @@
                 Sonarr API key
                 <input name="sonarr_api_key_2" placeholder="your-api-key" value="{{ values.sonarr_api_key_2 }}" />
               </label>
+              <div class="setup-inline">
+                <button
+                  class="setup-test"
+                  type="button"
+                  data-kind="sonarr"
+                  data-url-id="sonarr_url_2"
+                  data-key-id="sonarr_api_key_2"
+                  data-inline-key="sonarr_2"
+                >
+                  Test connection
+                </button>
+                <span
+                  class="setup-inline-message{% if field_errors.get('sonarr_2') %} is-error{% else %} hidden{% endif %}"
+                  data-inline="sonarr_2"
+                >{{ field_errors.get('sonarr_2', '') }}</span>
+              </div>
 
               <div class="setup-section-title">Sonarr Instance 3 (optional)</div>
               <label>
@@ -68,6 +100,22 @@
                 Sonarr API key
                 <input name="sonarr_api_key_3" placeholder="your-api-key" value="{{ values.sonarr_api_key_3 }}" />
               </label>
+              <div class="setup-inline">
+                <button
+                  class="setup-test"
+                  type="button"
+                  data-kind="sonarr"
+                  data-url-id="sonarr_url_3"
+                  data-key-id="sonarr_api_key_3"
+                  data-inline-key="sonarr_3"
+                >
+                  Test connection
+                </button>
+                <span
+                  class="setup-inline-message{% if field_errors.get('sonarr_3') %} is-error{% else %} hidden{% endif %}"
+                  data-inline="sonarr_3"
+                >{{ field_errors.get('sonarr_3', '') }}</span>
+              </div>
               <div class="setup-hint">If you add another Sonarr instance, name all configured Sonarr instances so chips and columns stay clear.</div>
             </div>
           </details>
@@ -85,6 +133,22 @@
             Radarr API key
             <input name="radarr_api_key" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
           </label>
+          <div class="setup-inline">
+            <button
+              class="setup-test"
+              type="button"
+              data-kind="radarr"
+              data-url-id="radarr_url"
+              data-key-id="radarr_api_key"
+              data-inline-key="radarr_1"
+            >
+              Test connection
+            </button>
+            <span
+              class="setup-inline-message{% if field_errors.get('radarr_1') %} is-error{% else %} hidden{% endif %}"
+              data-inline="radarr_1"
+            >{{ field_errors.get('radarr_1', '') }}</span>
+          </div>
 
           <details class="setup-advanced">
             <summary>Advanced Radarr instances</summary>
@@ -102,6 +166,22 @@
                 Radarr API key
                 <input name="radarr_api_key_2" placeholder="your-api-key" value="{{ values.radarr_api_key_2 }}" />
               </label>
+              <div class="setup-inline">
+                <button
+                  class="setup-test"
+                  type="button"
+                  data-kind="radarr"
+                  data-url-id="radarr_url_2"
+                  data-key-id="radarr_api_key_2"
+                  data-inline-key="radarr_2"
+                >
+                  Test connection
+                </button>
+                <span
+                  class="setup-inline-message{% if field_errors.get('radarr_2') %} is-error{% else %} hidden{% endif %}"
+                  data-inline="radarr_2"
+                >{{ field_errors.get('radarr_2', '') }}</span>
+              </div>
 
               <div class="setup-section-title">Radarr Instance 3 (optional)</div>
               <label>
@@ -116,6 +196,22 @@
                 Radarr API key
                 <input name="radarr_api_key_3" placeholder="your-api-key" value="{{ values.radarr_api_key_3 }}" />
               </label>
+              <div class="setup-inline">
+                <button
+                  class="setup-test"
+                  type="button"
+                  data-kind="radarr"
+                  data-url-id="radarr_url_3"
+                  data-key-id="radarr_api_key_3"
+                  data-inline-key="radarr_3"
+                >
+                  Test connection
+                </button>
+                <span
+                  class="setup-inline-message{% if field_errors.get('radarr_3') %} is-error{% else %} hidden{% endif %}"
+                  data-inline="radarr_3"
+                >{{ field_errors.get('radarr_3', '') }}</span>
+              </div>
               <div class="setup-hint">If you add another Radarr instance, name all configured Radarr instances so chips and columns stay clear.</div>
             </div>
           </details>
@@ -129,6 +225,22 @@
             Tautulli API key
             <input name="tautulli_api_key" placeholder="optional" value="{{ values.tautulli_api_key }}" />
           </label>
+          <div class="setup-inline">
+            <button
+              class="setup-test"
+              type="button"
+              data-kind="tautulli"
+              data-url-id="tautulli_url"
+              data-key-id="tautulli_api_key"
+              data-inline-key="tautulli"
+            >
+              Test connection
+            </button>
+            <span
+              class="setup-inline-message{% if field_errors.get('tautulli') %} is-error{% else %} hidden{% endif %}"
+              data-inline="tautulli"
+            >{{ field_errors.get('tautulli', '') }}</span>
+          </div>
 
           <div class="setup-section-title">Security</div>
           <label>
@@ -156,6 +268,7 @@
         </form>
       </div>
     </div>
+    <script src="/static/setup.js?v={{ app_version }}"></script>
   </body>
 </html>
 
