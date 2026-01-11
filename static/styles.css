@@ -301,6 +301,18 @@ html[data-theme="dark"] .advanced-warnings {
   font-size: 0.78em;
 }
 
+.column-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.78em;
+  color: var(--muted);
+}
+
+.column-toggle input {
+  margin: 0;
+}
+
 .column-group {
   display: grid;
   gap: 2px;

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.14
+
+- Add a per-table CSV columns toggle in the Columns menu, separate from Advanced filters
+- Security: redact sensitive paths and avoid leaking connection error details in logs
+
 ## 0.5.13
 
 - Expose Tautulli metadata lookup and timeout controls in setup and the Unraid template

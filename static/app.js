@@ -26,6 +26,7 @@ const columnSearch = document.getElementById("columnSearch");
 const columnsShowAll = document.getElementById("columnsShowAll");
 const columnsHideAll = document.getElementById("columnsHideAll");
 const columnsReset = document.getElementById("columnsReset");
+const csvColumnsToggle = document.getElementById("csvColumnsToggle");
 
 const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
@@ -64,6 +65,26 @@ const TAUTULLI_FILTER_FIELDS = new Set([
   "users",
   "neverwatched",
 ]);
+
+const CSV_COLUMNS_BY_APP = {
+  sonarr: new Set([
+    "TitleSlug",
+    "TmdbId",
+    "AudioCodecMixed",
+    "AudioProfileMixed",
+    "AudioLanguagesMixed",
+    "SubtitleLanguagesMixed",
+  ]),
+  radarr: new Set([
+    "TmdbId",
+    "AudioCodecMixed",
+    "AudioProfileMixed",
+    "AudioLanguagesMixed",
+    "SubtitleLanguagesMixed",
+  ]),
+};
+const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
+const csvColumnsState = { sonarr: false, radarr: false };
 
 const ADVANCED_PLACEHOLDER_BASE =
   "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
@@ -123,6 +144,7 @@ function setLoading(loading, label) {
 
 function resetUiState() {
   localStorage.removeItem(COLUMN_STORAGE_KEY);
+  localStorage.removeItem(CSV_COLUMNS_KEY);
   localStorage.removeItem("Sortarr-theme");
 }
 
@@ -934,6 +956,41 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "UsersWatched",
 ]);
 
+function loadCsvColumnsState() {
+  let prefs = null;
+  try {
+    prefs = JSON.parse(localStorage.getItem(CSV_COLUMNS_KEY) || "");
+  } catch {
+    prefs = null;
+  }
+  ["sonarr", "radarr"].forEach(app => {
+    if (prefs && Object.prototype.hasOwnProperty.call(prefs, app)) {
+      csvColumnsState[app] = Boolean(prefs[app]);
+    }
+  });
+}
+
+function saveCsvColumnsState() {
+  localStorage.setItem(CSV_COLUMNS_KEY, JSON.stringify(csvColumnsState));
+}
+
+function csvColumnsEnabled() {
+  return csvColumnsState[activeApp] === true;
+}
+
+function syncCsvToggle() {
+  if (!csvColumnsToggle) return;
+  csvColumnsToggle.checked = csvColumnsEnabled();
+}
+
+function setCsvColumnsEnabled(enabled) {
+  csvColumnsState[activeApp] = Boolean(enabled);
+  saveCsvColumnsState();
+  syncCsvToggle();
+  updateColumnFilter();
+  updateColumnVisibility();
+}
+
 function loadColumnPrefs() {
   if (!columnsPanel) return;
   let prefs = null;
@@ -976,6 +1033,7 @@ function getHiddenColumns() {
 function updateColumnFilter() {
   if (!columnsPanel) return;
   const query = String(columnSearch?.value ?? "").trim().toLowerCase();
+  const csvEnabled = csvColumnsEnabled();
   columnsPanel.querySelectorAll(".column-row").forEach(row => {
     const label = row.textContent.toLowerCase();
     const app = row.getAttribute("data-app");
@@ -984,8 +1042,10 @@ function updateColumnFilter() {
     const col = input?.getAttribute("data-col");
     const isTautulli = col && TAUTULLI_COLUMNS.has(col);
     const tautulliMatch = !isTautulli || tautulliEnabled;
+    const isCsv = col && CSV_COLUMNS_BY_APP[activeApp]?.has(col);
+    const csvMatch = !isCsv || csvEnabled;
     const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
-    const show = appMatch && tautulliMatch && !hideByInstance && (!query || label.includes(query));
+    const show = appMatch && tautulliMatch && csvMatch && !hideByInstance && (!query || label.includes(query));
     row.style.display = show ? "" : "none";
   });
 
@@ -1053,8 +1113,12 @@ function updateColumnVisibility(rootEl = document) {
       const hideByApp = app && app !== activeApp;
       const hideByCol = hidden.has(col);
       const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
+      const hideByCsv = col && CSV_COLUMNS_BY_APP[activeApp]?.has(col) && !csvColumnsEnabled();
       const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
-      el.classList.toggle("col-hidden", hideByApp || hideByCol || hideByTautulli || hideByInstance);
+      el.classList.toggle(
+        "col-hidden",
+        hideByApp || hideByCol || hideByTautulli || hideByCsv || hideByInstance
+      );
     });
   });
 }
@@ -1137,6 +1201,7 @@ function setActiveTab(app) {
     sortDir = "desc";
   }
 
+  syncCsvToggle();
   updateColumnVisibility();
   updateColumnFilter();
   updateSortIndicators();
@@ -1647,6 +1712,11 @@ if (columnsBtn && columnsPanel) {
       updateColumnVisibility();
     });
   });
+  if (csvColumnsToggle) {
+    csvColumnsToggle.addEventListener("change", () => {
+      setCsvColumnsEnabled(csvColumnsToggle.checked);
+    });
+  }
 
   if (columnSearch) {
     columnSearch.addEventListener("input", () => updateColumnFilter());
@@ -1732,6 +1802,8 @@ async function loadConfig() {
 /* init */
 (async function init() {
   loadColumnPrefs();
+  loadCsvColumnsState();
+  syncCsvToggle();
   setTautulliEnabled(false);
   updateColumnFilter();
   updateColumnVisibility();

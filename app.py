@@ -14,7 +14,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.5.13"
+APP_VERSION = "0.5.14"
 
 app = Flask(__name__)
 
@@ -84,6 +84,12 @@ def _read_int_env(key: str, default: int) -> int:
         return int(os.environ.get(key, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _safe_log_path(path: str) -> str:
+    if not path:
+        return ""
+    return os.path.basename(path)
 
 
 def _normalize_url(value: str) -> str:
@@ -378,7 +384,8 @@ def _arr_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str 
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
     except Exception as exc:
-        return f"Connection failed: {exc}"
+        logger.warning("Arr connection test failed (%s).", type(exc).__name__)
+        return "Connection failed. Check URL and API key."
     return None
 
 
@@ -389,7 +396,8 @@ def _tautulli_test_connection(base_url: str, api_key: str, timeout: int = 10) ->
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
     except Exception as exc:
-        return f"Connection failed: {exc}"
+        logger.warning("Tautulli connection test failed (%s).", type(exc).__name__)
+        return "Connection failed. Check URL and API key."
     return None
 
 
@@ -567,7 +575,10 @@ def _save_tautulli_metadata_cache(path: str, cache: dict[str, dict]) -> None:
             json.dump(payload, handle, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except OSError:
-        logger.warning("Failed to write Tautulli metadata cache: %s", path)
+        logger.warning(
+            "Failed to write Tautulli metadata cache: %s",
+            _safe_log_path(path) or "path redacted",
+        )
 
 
 def _load_arr_cache(path: str) -> dict[str, dict]:
@@ -615,7 +626,10 @@ def _save_arr_cache(path: str, cache: dict[str, dict]) -> None:
             json.dump(payload, handle, indent=2, sort_keys=True)
         os.replace(tmp_path, path)
     except OSError:
-        logger.warning("Failed to write Arr cache: %s", path)
+        logger.warning(
+            "Failed to write Arr cache: %s",
+            _safe_log_path(path) or "path redacted",
+        )
 
 
 def _check_deadline(deadline: float | None, label: str):
