@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.14
+## 0.5.15
 
 - Add a per-table CSV columns toggle in the Columns menu, separate from Advanced filters
 - Security: redact sensitive paths and avoid leaking connection error details in logs
