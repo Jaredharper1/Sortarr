@@ -14,7 +14,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.5.12"
+APP_VERSION = "0.5.13"
 
 app = Flask(__name__)
 
@@ -147,6 +147,10 @@ def _write_env_file(path: str, values: dict):
         "RADARR_NAME_3",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
+        "TAUTULLI_METADATA_LOOKUP_LIMIT",
+        "TAUTULLI_METADATA_LOOKUP_SECONDS",
+        "TAUTULLI_TIMEOUT_SECONDS",
+        "TAUTULLI_FETCH_SECONDS",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
         "CACHE_SECONDS",
@@ -1901,6 +1905,38 @@ def setup():
             cache_seconds = int(cache_raw) if cache_raw else 300
         except ValueError:
             cache_seconds = None
+        tautulli_lookup_limit_raw = request.form.get("tautulli_metadata_lookup_limit", "").strip()
+        tautulli_lookup_seconds_raw = request.form.get("tautulli_metadata_lookup_seconds", "").strip()
+        tautulli_timeout_raw = request.form.get("tautulli_timeout_seconds", "").strip()
+        tautulli_fetch_raw = request.form.get("tautulli_fetch_seconds", "").strip()
+
+        def parse_optional_int(raw: str, label: str) -> tuple[str, str | None]:
+            if not raw:
+                return "", None
+            try:
+                value = int(raw)
+            except ValueError:
+                return "", f"{label} must be a whole number."
+            if value < 0:
+                return "", f"{label} must be 0 or greater."
+            return str(value), None
+
+        tautulli_lookup_limit, lookup_limit_error = parse_optional_int(
+            tautulli_lookup_limit_raw,
+            "Tautulli metadata lookup limit",
+        )
+        tautulli_lookup_seconds, lookup_seconds_error = parse_optional_int(
+            tautulli_lookup_seconds_raw,
+            "Tautulli metadata lookup seconds",
+        )
+        tautulli_timeout_seconds, timeout_error = parse_optional_int(
+            tautulli_timeout_raw,
+            "Tautulli timeout seconds",
+        )
+        tautulli_fetch_seconds, fetch_error = parse_optional_int(
+            tautulli_fetch_raw,
+            "Tautulli fetch seconds",
+        )
 
         basic_auth_user = request.form.get("basic_auth_user", "").strip()
         basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
@@ -1935,6 +1971,10 @@ def setup():
             "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
+            "TAUTULLI_METADATA_LOOKUP_LIMIT": tautulli_lookup_limit,
+            "TAUTULLI_METADATA_LOOKUP_SECONDS": tautulli_lookup_seconds,
+            "TAUTULLI_TIMEOUT_SECONDS": tautulli_timeout_seconds,
+            "TAUTULLI_FETCH_SECONDS": tautulli_fetch_seconds,
             "BASIC_AUTH_USER": basic_auth_user,
             "BASIC_AUTH_PASS": basic_auth_pass,
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
@@ -1944,6 +1984,8 @@ def setup():
             error = "Cache seconds must be a whole number."
         elif cache_seconds < 30:
             error = "Cache seconds must be at least 30."
+        elif lookup_limit_error or lookup_seconds_error or timeout_error or fetch_error:
+            error = lookup_limit_error or lookup_seconds_error or timeout_error or fetch_error or ""
         else:
             has_sonarr = any(
                 data.get(f"SONARR_URL{suffix}") and data.get(f"SONARR_API_KEY{suffix}")

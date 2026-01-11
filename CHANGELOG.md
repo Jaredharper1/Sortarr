@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.13
+
+- Expose Tautulli metadata lookup and timeout controls in setup and the Unraid template
+- Add a Settings button in the toolbar to reopen setup
+
 ## 0.5.12
 
 - Display watch time columns as hh:mm instead of decimal hours

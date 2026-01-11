@@ -4,6 +4,7 @@ const loadingIndicator = document.getElementById("loadingIndicator");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const loadBtn = document.getElementById("loadBtn");
 const resetUiBtn = document.getElementById("resetUiBtn");
+const settingsBtn = document.getElementById("settingsBtn");
 const titleFilter = document.getElementById("titleFilter");
 const pathFilter = document.getElementById("pathFilter");
 const filterInputs = document.getElementById("filterInputs");
@@ -1481,6 +1482,11 @@ if (resetUiBtn) {
   resetUiBtn.addEventListener("click", () => {
     resetUiState();
     window.location.reload();
+  });
+}
+if (settingsBtn) {
+  settingsBtn.addEventListener("click", () => {
+    window.location.href = "/setup?force=1";
   });
 }
 
