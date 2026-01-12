@@ -32,6 +32,14 @@ html, body {
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+html {
+  scrollbar-gutter: stable;
+}
+
+body {
+  overflow-y: scroll;
+}
+
 .app { padding: 14px 16px; }
 
 .toolbar {
@@ -278,8 +286,14 @@ html[data-theme="dark"] .advanced-warnings {
   min-width: 300px;
   max-height: 70vh;
   overflow: auto;
+  scrollbar-width: none;
   z-index: 5;
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+}
+
+.column-panel::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .column-panel.hidden {
@@ -535,7 +549,7 @@ table {
 
 table.is-batching,
 table.stable-columns {
-  table-layout: fixed;
+  table-layout: auto;
 }
 
 th, td {

@@ -9,13 +9,14 @@ import io
 import json
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
 import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.2"
+APP_VERSION = "0.6.3"
 
 app = Flask(__name__)
 
@@ -428,6 +429,9 @@ def _get_config():
         ),
         "tautulli_metadata_lookup_limit": _read_int_env("TAUTULLI_METADATA_LOOKUP_LIMIT", -1),
         "tautulli_metadata_lookup_seconds": _read_int_env("TAUTULLI_METADATA_LOOKUP_SECONDS", 0),
+        "tautulli_metadata_workers": _read_int_env("TAUTULLI_METADATA_WORKERS", 4),
+        "tautulli_metadata_save_every": _read_int_env("TAUTULLI_METADATA_SAVE_EVERY", 250),
+        "tautulli_refresh_stale_seconds": _read_int_env("TAUTULLI_REFRESH_STALE_SECONDS", 3600),
         "tautulli_timeout_seconds": tautulli_timeout_seconds,
         "tautulli_fetch_seconds": tautulli_fetch_seconds,
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
@@ -763,6 +767,7 @@ def _tautulli_get(
     cmd: str,
     params: dict | None = None,
     timeout: int | float | None = None,
+    session: requests.Session | None = None,
 ):
     if not base_url:
         raise RuntimeError("Tautulli base URL is not set")
@@ -775,7 +780,8 @@ def _tautulli_get(
         query.update(params)
 
     request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
-    r = _http.get(url, params=query, timeout=request_timeout)
+    http = session or _http
+    r = http.get(url, params=query, timeout=request_timeout)
     r.raise_for_status()
     payload = r.json()
     response = payload.get("response", {})
@@ -785,18 +791,16 @@ def _tautulli_get(
     return response.get("data")
 
 
-def _tautulli_metadata_ids(
+def _tautulli_metadata_ids_uncached(
     base_url: str,
     api_key: str,
     rating_key,
-    cache: dict[str, dict],
     timeout: int | float | None = None,
+    session: requests.Session | None = None,
 ) -> dict:
     key = str(rating_key or "").strip()
     if not key:
         return {}
-    if key in cache:
-        return cache[key]
     try:
         data = _tautulli_get(
             base_url,
@@ -804,18 +808,40 @@ def _tautulli_metadata_ids(
             "get_metadata",
             params={"rating_key": key},
             timeout=timeout,
+            session=session,
         )
-    except RuntimeError as exc:
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
         logger.warning("Tautulli get_metadata failed for rating_key=%s: %s", key, exc)
-        cache[key] = {}
-        return cache[key]
+        return {}
 
     if isinstance(data, dict) and "metadata" in data:
         metadata = data.get("metadata") or {}
     else:
         metadata = data or {}
 
-    ids = _tautulli_extract_ids(metadata)
+    return _tautulli_extract_ids(metadata)
+
+
+def _tautulli_metadata_ids(
+    base_url: str,
+    api_key: str,
+    rating_key,
+    cache: dict[str, dict],
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> dict:
+    key = str(rating_key or "").strip()
+    if not key:
+        return {}
+    if key in cache:
+        return cache[key]
+    ids = _tautulli_metadata_ids_uncached(
+        base_url,
+        api_key,
+        key,
+        timeout=timeout,
+        session=session,
+    )
     cache[key] = ids
     return ids
 
@@ -1356,11 +1382,13 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             )
             fetch_seconds = request_timeout
         fetch_deadline = time.time() + fetch_seconds if fetch_seconds > 0 else None
+        fetch_deadline_lock = threading.Lock()
 
         def note_fetch_progress():
             nonlocal fetch_deadline
             if fetch_deadline is not None:
-                fetch_deadline = time.time() + fetch_seconds
+                with fetch_deadline_lock:
+                    fetch_deadline = time.time() + fetch_seconds
 
         metadata_cache_path = cfg.get("tautulli_metadata_cache") or ""
         metadata_cache = _load_tautulli_metadata_cache(metadata_cache_path)
@@ -1373,15 +1401,50 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
         lookup_deadline = time.time() + lookup_seconds if lookup_seconds > 0 else None
         lookup_limit_hit = False
         lookup_deadline_hit = False
+        metadata_workers = _safe_int(cfg.get("tautulli_metadata_workers"))
+        if metadata_workers <= 0:
+            metadata_workers = 1
+        metadata_save_every = _safe_int(cfg.get("tautulli_metadata_save_every"))
+        if metadata_save_every < 0:
+            metadata_save_every = 0
+        metadata_lock = threading.Lock()
+        metadata_save_lock = threading.Lock()
+        metadata_last_save = 0
+
+        def _maybe_save_metadata_cache(force: bool = False) -> None:
+            nonlocal metadata_dirty, metadata_last_save
+            if not metadata_cache_path:
+                return
+            with metadata_lock:
+                if not metadata_dirty:
+                    return
+                if not force and metadata_save_every > 0 and (metadata_lookups - metadata_last_save) < metadata_save_every:
+                    return
+                snapshot = dict(metadata_cache)
+                metadata_last_save = metadata_lookups
+                metadata_dirty = False
+            with metadata_save_lock:
+                _save_tautulli_metadata_cache(metadata_cache_path, snapshot)
+
+        def _store_metadata_ids(key: str, ids: dict) -> dict:
+            nonlocal metadata_dirty, metadata_resolved
+            resolved = any(k in ids for k in ("tvdb", "tmdb", "imdb"))
+            with metadata_lock:
+                metadata_cache[key] = ids
+                metadata_dirty = True
+                if resolved:
+                    metadata_resolved += 1
+            _maybe_save_metadata_cache()
+            return ids
 
         def metadata_lookup(rating_key):
-            nonlocal metadata_dirty, metadata_lookups, metadata_resolved
-            nonlocal lookup_limit_hit, lookup_deadline_hit
+            nonlocal metadata_lookups, lookup_limit_hit, lookup_deadline_hit
             key = str(rating_key or "").strip()
             if not key:
                 return {}
-            if key in metadata_cache:
-                return metadata_cache[key]
+            with metadata_lock:
+                if key in metadata_cache:
+                    return metadata_cache[key]
             if not lookup_enabled:
                 return {}
             if lookup_limit > 0 and metadata_lookups >= lookup_limit:
@@ -1392,18 +1455,14 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 return {}
             _check_deadline(fetch_deadline, "Tautulli fetch")
             metadata_lookups += 1
-            ids = _tautulli_metadata_ids(
+            ids = _tautulli_metadata_ids_uncached(
                 cfg["tautulli_url"],
                 cfg["tautulli_api_key"],
                 key,
-                metadata_cache,
                 timeout=request_timeout,
             )
             note_fetch_progress()
-            metadata_dirty = True
-            if any(k in ids for k in ("tvdb", "tmdb", "imdb")):
-                metadata_resolved += 1
-            return ids
+            return _store_metadata_ids(key, ids)
         _check_deadline(fetch_deadline, "Tautulli fetch")
         libraries = _tautulli_get(
             cfg["tautulli_url"],
@@ -1444,6 +1503,96 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             deadline=fetch_deadline,
             progress=note_fetch_progress,
         )
+
+        def _collect_metadata_keys(items: list[dict], media_type: str, history: bool = False) -> set[str]:
+            keys = set()
+            for item in items or []:
+                item_type = str(item.get("media_type") or "").lower()
+                if history:
+                    if media_type == "show" and item_type != "episode":
+                        continue
+                    if media_type == "movie" and item_type != "movie":
+                        continue
+                else:
+                    if media_type == "show":
+                        if item_type and item_type not in ("show", "episode"):
+                            continue
+                    else:
+                        if item_type and item_type != "movie":
+                            continue
+                ids = _tautulli_extract_ids(item)
+                if ids:
+                    continue
+                key = str(_tautulli_metadata_key(item, item_type, media_type) or "").strip()
+                if key:
+                    keys.add(key)
+            return keys
+
+        def _prefetch_metadata(keys: set[str]) -> None:
+            nonlocal metadata_lookups, lookup_limit_hit, lookup_deadline_hit
+            if not lookup_enabled:
+                return
+            pending = [key for key in keys if key not in metadata_cache]
+            if not pending:
+                return
+            if lookup_limit > 0:
+                remaining = lookup_limit - metadata_lookups
+                if remaining <= 0:
+                    lookup_limit_hit = True
+                    return
+                if len(pending) > remaining:
+                    pending = pending[:remaining]
+                    lookup_limit_hit = True
+            if lookup_deadline is not None and time.time() >= lookup_deadline:
+                lookup_deadline_hit = True
+                return
+
+            metadata_lookups += len(pending)
+
+            thread_local = threading.local()
+
+            def fetch_key(key: str):
+                nonlocal lookup_deadline_hit
+                if lookup_deadline is not None and time.time() >= lookup_deadline:
+                    lookup_deadline_hit = True
+                    return key, {}
+                try:
+                    _check_deadline(fetch_deadline, "Tautulli fetch")
+                except TimeoutError:
+                    return key, {}
+                session = getattr(thread_local, "session", None)
+                if session is None:
+                    session = requests.Session()
+                    thread_local.session = session
+                ids = _tautulli_metadata_ids_uncached(
+                    cfg["tautulli_url"],
+                    cfg["tautulli_api_key"],
+                    key,
+                    timeout=request_timeout,
+                    session=session,
+                )
+                note_fetch_progress()
+                return key, ids
+
+            if metadata_workers <= 1 or len(pending) <= 1:
+                for key in pending:
+                    key, ids = fetch_key(key)
+                    _store_metadata_ids(key, ids)
+                return
+            with ThreadPoolExecutor(max_workers=metadata_workers) as executor:
+                for key, ids in executor.map(fetch_key, pending):
+                    _store_metadata_ids(key, ids)
+
+            if lookup_deadline is not None and time.time() >= lookup_deadline:
+                lookup_deadline_hit = True
+
+        if lookup_enabled:
+            metadata_keys = set()
+            metadata_keys.update(_collect_metadata_keys(shows_items, "show"))
+            metadata_keys.update(_collect_metadata_keys(movies_items, "movie"))
+            metadata_keys.update(_collect_metadata_keys(history_items, "show", history=True))
+            metadata_keys.update(_collect_metadata_keys(history_items, "movie", history=True))
+            _prefetch_metadata(metadata_keys)
         shows_index = _tautulli_build_index(shows_items, "show", metadata_lookup=metadata_lookup)
         movies_index = _tautulli_build_index(movies_items, "movie", metadata_lookup=metadata_lookup)
         history_shows = _tautulli_build_history_index(history_items, "show", metadata_lookup=metadata_lookup)
@@ -1476,8 +1625,7 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             "movies": movies_index,
         }
         entry["ts"] = now
-        if metadata_dirty:
-            _save_tautulli_metadata_cache(metadata_cache_path, metadata_cache)
+        _maybe_save_metadata_cache(force=True)
         if metadata_lookups:
             logger.info(
                 "Tautulli metadata lookups: %s (ids resolved: %s)",
@@ -1532,12 +1680,40 @@ def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
         _cache["radarr"].clear()
 
 
-def _tautulli_refresh_in_progress() -> bool:
+def _tautulli_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def _clear_stale_tautulli_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if stale_seconds <= 0:
+        return False
+    age = _tautulli_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Tautulli refresh lock detected (age %.0fs); clearing.", age)
+    _release_tautulli_refresh_lock(lock_path, None)
+    return True
+
+
+def _tautulli_refresh_in_progress(cfg: dict | None = None) -> bool:
     lock_path = _tautulli_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    if cfg is None:
+        stale_seconds = _read_int_env("TAUTULLI_REFRESH_STALE_SECONDS", 3600)
+    else:
+        stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
+    if _clear_stale_tautulli_refresh_lock(lock_path, stale_seconds):
+        return False
     return os.path.exists(lock_path)
 
 
-def _acquire_tautulli_refresh_lock(lock_path: str):
+def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_tautulli_refresh_lock(lock_path, stale_seconds)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -1587,7 +1763,8 @@ def _start_tautulli_background_refresh(cfg: dict) -> bool:
     if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
         return False
     lock_path = _tautulli_refresh_lock_path()
-    fd = _acquire_tautulli_refresh_lock(lock_path)
+    stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
+    fd = _acquire_tautulli_refresh_lock(lock_path, stale_seconds)
     if fd is None:
         return False
 
@@ -1666,20 +1843,21 @@ def _find_tautulli_stats_with_bucket(
     year = str(row.get("Year") or "").strip()
     if title_key and year and (title_key, year) in data["title_year"]:
         return data["title_year"][(title_key, year)], "Title + year"
-    if title_key and title_key in data["title"]:
-        return data["title"][title_key], "Title"
     if relaxed_key and year and (relaxed_key, year) in data["title_year_relaxed"]:
         return data["title_year_relaxed"][(relaxed_key, year)], "Title + year (relaxed)"
-    if relaxed_key and relaxed_key in data["title_relaxed"]:
-        return data["title_relaxed"][relaxed_key], "Title (relaxed)"
     if variant_keys and year:
         for key in variant_keys:
             if (key, year) in data["title_year_variant"]:
                 return data["title_year_variant"][(key, year)], "Title variant + year"
-    if variant_keys:
-        for key in variant_keys:
-            if key in data["title_variant"]:
-                return data["title_variant"][key], "Title variant"
+    if not year:
+        if title_key and title_key in data["title"]:
+            return data["title"][title_key], "Title"
+        if relaxed_key and relaxed_key in data["title_relaxed"]:
+            return data["title_relaxed"][relaxed_key], "Title (relaxed)"
+        if variant_keys:
+            for key in variant_keys:
+                if key in data["title_variant"]:
+                    return data["title_variant"][key], "Title variant"
 
     return None, ""
 
@@ -2221,7 +2399,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
         started = False
         if refresh_needed:
             started = _start_tautulli_background_refresh(cfg)
-        if started or _tautulli_refresh_in_progress():
+        if started or _tautulli_refresh_in_progress(cfg):
             tautulli_notice = "Tautulli matching in progress."
 
     return results, tautulli_warning, tautulli_notice

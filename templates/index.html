@@ -46,8 +46,8 @@
           <div class="column-group" data-app="sonarr">
             <div class="column-group-title">Sonarr</div>
             <label class="column-row"><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
-            <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="ContentHours" /> Content (hh:mm)</label>
           </div>
           <div class="column-group" data-app="radarr">
@@ -214,15 +214,15 @@
         <button id="exportCsvBtn">Export CSV</button>
       </div>
 
-      <table>
+      <table class="stable-columns">
         <thead>
           <tr>
             <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
             <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Content (hh:mm) <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>

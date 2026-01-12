@@ -32,6 +32,19 @@ const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
 const root = document.documentElement; // <html>
 const tableEl = document.querySelector("table");
+// Build API URLs without embedded credentials (basic-auth URLs break fetch).
+const API_ORIGIN = window.location && window.location.host
+  ? `${window.location.protocol}//${window.location.host}`
+  : "";
+
+function apiUrl(path) {
+  if (/^https?:\/\//i.test(path)) return path;
+  let normalized = path;
+  if (!normalized.startsWith("/")) {
+    normalized = `/${normalized}`;
+  }
+  return API_ORIGIN ? `${API_ORIGIN}${normalized}` : normalized;
+}
 
 let activeApp = "sonarr"; // "sonarr" | "radarr"
 let sortKey = "AvgEpisodeSizeGB";
@@ -175,7 +188,7 @@ function setBackgroundLoading(loading) {
   backgroundLoading = Boolean(loading);
   updateLoadingIndicator();
   if (tableEl) {
-    tableEl.classList.toggle("stable-columns", backgroundLoading);
+    tableEl.classList.add("stable-columns");
   }
 }
 
@@ -1143,7 +1156,6 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "AudioProfileMixed",
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
-  "TotalSizeGB",
   "VideoHDR",
   "PlayCount",
   "LastWatched",
@@ -1480,29 +1492,32 @@ function buildRow(row, app) {
     : '<span class="muted">Not reported</span>';
   const tautulliMatched = row.TautulliMatched === true;
   const matchBadge = buildMatchBadge(row);
+  const notReported = '<span class="muted" title="Not reported">n/a</span>';
+  const noWatchData = '<span class="muted" title="No watch data">n/a</span>';
+  const noRuntime = '<span class="muted" title="No runtime">n/a</span>';
   const playCount = tautulliMatched
     ? escapeHtml(row.PlayCount ?? 0)
-    : '<span class="muted">Not reported</span>';
+    : notReported;
   const lastWatched = tautulliMatched
     ? formatLastWatched(row.LastWatched)
-    : '<span class="muted">Not reported</span>';
+    : notReported;
   const daysSinceWatched = tautulliMatched
     ? formatDaysSince(row.DaysSinceWatched, row.LastWatched)
-    : '<span class="muted">Not reported</span>';
+    : notReported;
   const watchTimeHours = tautulliMatched
     ? formatWatchTimeHours(row.TotalWatchTimeHours ?? 0)
-    : '<span class="muted">Not reported</span>';
-  let watchContentHours = '<span class="muted">No watch data</span>';
+    : notReported;
+  let watchContentHours = noWatchData;
   if (tautulliMatched) {
     const watchContentValue = formatWatchContentHours(
       row.TotalWatchTimeHours ?? 0,
       row.ContentHours
     );
-    watchContentHours = watchContentValue || '<span class="muted">No runtime</span>';
+    watchContentHours = watchContentValue || noRuntime;
   }
   const usersWatched = tautulliMatched
     ? escapeHtml(row.UsersWatched ?? 0)
-    : '<span class="muted">Not reported</span>';
+    : notReported;
   const contentHours = formatWatchTimeHours(row.ContentHours ?? "");
   const tmdbId = escapeHtml(row.TmdbId ?? row.tmdbId ?? "");
   const titleSlug = escapeHtml(
@@ -1523,8 +1538,8 @@ function buildRow(row, app) {
       <td data-col="Title">${buildTitleLink(row, app)}</td>
       <td data-col="Instance">${escapeHtml(instanceName)}</td>
       <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
-      <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
       <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
+      <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
       <td class="right" data-col="ContentHours" data-app="sonarr">${contentHours}</td>
       <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
       <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
@@ -1672,7 +1687,7 @@ async function load(refresh, options = {}) {
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const url = refresh ? `${base}?refresh=1` : base;
 
-    const res = await fetch(url);
+    const res = await fetch(apiUrl(url));
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`${res.status} ${res.statusText}: ${txt}`);
@@ -1680,11 +1695,20 @@ async function load(refresh, options = {}) {
 
     const warn = res.headers.get("X-Sortarr-Warn") || "";
     const noticeState = parseNoticeState(res.headers);
-    const json = await res.json();
 
     // If a newer request for this app is in flight, ignore this response
     if (myToken !== loadTokens[app]) return;
 
+    const existing = dataByApp[app] || [];
+    if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
+      applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+      if (res.body && typeof res.body.cancel === "function") {
+        res.body.cancel();
+      }
+      return;
+    }
+
+    const json = await res.json();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
@@ -1802,15 +1826,23 @@ async function prefetch(app, refresh, options = {}) {
   try {
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const url = refresh ? `${base}?refresh=1` : base;
-    const res = await fetch(url);
+    const res = await fetch(apiUrl(url));
     if (!res.ok) {
       const txt = await res.text();
       throw new Error(`${res.status} ${res.statusText}: ${txt}`);
     }
     const warn = res.headers.get("X-Sortarr-Warn") || "";
     const noticeState = parseNoticeState(res.headers);
-    const json = await res.json();
     if (token !== prefetchTokens[app]) return;
+    const existing = dataByApp[app] || [];
+    if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
+      applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+      if (res.body && typeof res.body.cancel === "function") {
+        res.body.cancel();
+      }
+      return;
+    }
+    const json = await res.json();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
@@ -1981,7 +2013,7 @@ themeBtn.addEventListener("click", () => {
 /* config load for link bases */
 async function loadConfig() {
   try {
-    const res = await fetch("/api/config");
+    const res = await fetch(apiUrl("/api/config"));
     if (!res.ok) return;
     const cfg = await res.json();
     const sonarrInstances = Array.isArray(cfg.sonarr_instances) ? cfg.sonarr_instances : [];

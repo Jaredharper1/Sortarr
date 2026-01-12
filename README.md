@@ -89,6 +89,9 @@ Sortarr writes and reads:
 - `TAUTULLI_METADATA_CACHE` (optional, defaults to `./data/Sortarr.tautulli_cache.json`)
 - `TAUTULLI_METADATA_LOOKUP_LIMIT` (optional, defaults to `-1` for no limit; set to `0` to disable metadata matching)
 - `TAUTULLI_METADATA_LOOKUP_SECONDS` (optional, defaults to `0` for no lookup time limit)
+- `TAUTULLI_METADATA_WORKERS` (optional, defaults to `4`; parallel metadata lookup workers)
+- `TAUTULLI_METADATA_SAVE_EVERY` (optional, defaults to `250`; persist metadata cache every N lookups)
+- `TAUTULLI_REFRESH_STALE_SECONDS` (optional, defaults to `3600`; clear stuck Tautulli refresh locks)
 - `TAUTULLI_TIMEOUT_SECONDS` (optional, defaults to `60`; per-request timeout for each Tautulli API call, `0` falls back to 45 seconds)
 - `TAUTULLI_FETCH_SECONDS` (optional; total fetch budget per load, defaults to `0` for no limit)
 - `SONARR_CACHE_PATH` (optional, defaults to `./data/Sortarr.sonarr_cache.json`)
@@ -103,8 +106,9 @@ Requirements and notes:
 
 - Sonarr/Radarr API keys are required (read-only keys recommended)
 - Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
-- Tautulli metadata lookups are cached to disk for faster matching; lower the lookup limits if you need to cap lookup time
+- Tautulli metadata lookups are cached to disk for faster matching; adjust lookup limits/workers and save cadence as needed
 - Setting `TAUTULLI_METADATA_LOOKUP_LIMIT=0` disables metadata matching
+- Stale Tautulli refresh locks clear after `TAUTULLI_REFRESH_STALE_SECONDS` to avoid stuck matching
 - On first run after an upgrade, Sortarr clears caches and drops legacy Tautulli default env values so new defaults apply
 - When Tautulli matching runs in the background, the UI auto-refreshes to apply playback stats
 - Cache seconds only evicts in-memory data; persistent caches remain until Fetch New Data is clicked

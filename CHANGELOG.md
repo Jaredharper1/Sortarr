@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.3
+
+- Parallelize Tautulli metadata lookups and periodically flush the metadata cache to disk
+- Clear stale Tautulli refresh locks to prevent matching from getting stuck after a crash
+- Avoid title-only Tautulli matches when release year is present to reduce cross-title collisions
+- Show Total (GiB) by default and reorder Sonarr columns to Episodes, Avg / Ep, Total
+- Shorten Tautulli placeholders so columns stay tighter during background matching
+- Switch table layout to auto sizing and reserve scrollbar gutter for consistent column widths during loads
+- Left-align all table columns for consistency
+
 ## 0.6.2
 
 - Fetch New Data now forces a Tautulli background refresh to pick up new matches

@@ -4,6 +4,19 @@
     return el ? String(el.value || "").trim() : "";
   }
 
+  const apiOrigin = window.location && window.location.host
+    ? `${window.location.protocol}//${window.location.host}`
+    : "";
+
+  function apiUrl(path) {
+    if (/^https?:\/\//i.test(path)) return path;
+    let normalized = path;
+    if (!normalized.startsWith("/")) {
+      normalized = `/${normalized}`;
+    }
+    return apiOrigin ? `${apiOrigin}${normalized}` : normalized;
+  }
+
   function updateInlineMessage(key, message, state) {
     const el = document.querySelector(`[data-inline="${CSS.escape(key)}"]`);
     if (!el) return;
@@ -36,7 +49,7 @@
     button.disabled = true;
     updateInlineMessage(inlineKey, "Testing connection...", "is-pending");
     try {
-      const res = await fetch("/api/setup/test", {
+      const res = await fetch(apiUrl("/api/setup/test"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",

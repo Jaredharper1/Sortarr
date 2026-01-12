@@ -9,3 +9,5 @@ sortarr_err.log
 sortarr_run.log
 docs/radarr.png
 docs/sonarr.png
+
+tests/
