@@ -3,6 +3,7 @@ smoke_test.py
 selenium_stress_test.py
 tautulli_id_match_test.py
 data/
+references/
 __pycache__/
 sortarr_err.log
 sortarr_run.log
