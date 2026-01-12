@@ -15,7 +15,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.1"
+APP_VERSION = "0.6.2"
 
 app = Flask(__name__)
 
@@ -1129,6 +1129,54 @@ def _tautulli_merge_into(store: dict, key, raw: dict):
         _tautulli_merge_raw(store[key], raw)
 
 
+def _tautulli_title_candidates(*values: str) -> list[str]:
+    results = []
+    seen = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = _normalize_title_key(text)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        results.append(text)
+    return results
+
+
+def _merge_title_key(store: dict, bucket: str, key, raw: dict, seen: set | None = None) -> None:
+    if not key:
+        return
+    if seen is not None:
+        token = (bucket, key)
+        if token in seen:
+            return
+        seen.add(token)
+    _tautulli_merge_into(store[bucket], key, raw)
+
+
+def _merge_title_keys(store: dict, raw: dict, title: str, year: str, seen: set | None = None) -> None:
+    if not title:
+        return
+    title_key = _normalize_title_key(title)
+    if not title_key:
+        return
+    relaxed_key = _relaxed_title_key(title)
+    variant_keys = _title_variant_keys(title)
+    if year:
+        _merge_title_key(store, "title_year", (title_key, year), raw, seen)
+    _merge_title_key(store, "title", title_key, raw, seen)
+    if year:
+        _merge_title_key(store, "title_year_relaxed", (relaxed_key, year), raw, seen)
+    _merge_title_key(store, "title_relaxed", relaxed_key, raw, seen)
+    if variant_keys and year:
+        for key in variant_keys:
+            _merge_title_key(store, "title_year_variant", (key, year), raw, seen)
+    if variant_keys:
+        for key in variant_keys:
+            _merge_title_key(store, "title_variant", key, raw, seen)
+
+
 def _tautulli_build_index(
     items: list[dict],
     media_type: str,
@@ -1164,10 +1212,13 @@ def _tautulli_build_index(
             ids = _tautulli_extract_ids(item)
             if not ids and metadata_lookup:
                 ids = metadata_lookup(_tautulli_metadata_key(item, item_type, media_type))
-            title = item.get("grandparent_title") or item.get("title") or ""
-            title_key = _normalize_title_key(title)
-            relaxed_key = _relaxed_title_key(title)
-            variant_keys = _title_variant_keys(title)
+            title_candidates = _tautulli_title_candidates(
+                item.get("grandparent_title") or item.get("title"),
+                item.get("grandparent_original_title"),
+                item.get("grandparent_originalTitle"),
+                item.get("original_title"),
+                item.get("originalTitle"),
+            )
             year = str(item.get("grandparent_year") or item.get("year") or "").strip()
             if "tvdb" in ids:
                 _tautulli_merge_into(episode_agg["tvdb"], str(ids["tvdb"]), raw)
@@ -1175,20 +1226,9 @@ def _tautulli_build_index(
                 _tautulli_merge_into(episode_agg["tmdb"], str(ids["tmdb"]), raw)
             if "imdb" in ids:
                 _tautulli_merge_into(episode_agg["imdb"], str(ids["imdb"]), raw)
-            if title_key and year:
-                _tautulli_merge_into(episode_agg["title_year"], (title_key, year), raw)
-            if title_key:
-                _tautulli_merge_into(episode_agg["title"], title_key, raw)
-            if relaxed_key and year:
-                _tautulli_merge_into(episode_agg["title_year_relaxed"], (relaxed_key, year), raw)
-            if relaxed_key:
-                _tautulli_merge_into(episode_agg["title_relaxed"], relaxed_key, raw)
-            if variant_keys and year:
-                for key in variant_keys:
-                    _tautulli_merge_into(episode_agg["title_year_variant"], (key, year), raw)
-            if variant_keys:
-                for key in variant_keys:
-                    _tautulli_merge_into(episode_agg["title_variant"], key, raw)
+            seen = set()
+            for title in title_candidates:
+                _merge_title_keys(episode_agg, raw, title, year, seen)
             continue
 
         if item_type and item_type != media_type:
@@ -1205,25 +1245,15 @@ def _tautulli_build_index(
         if "imdb" in ids:
             _tautulli_merge_into(index["imdb"], str(ids["imdb"]), raw)
 
-        title = item.get("title") or item.get("grandparent_title") or ""
-        title_key = _normalize_title_key(title)
-        relaxed_key = _relaxed_title_key(title)
-        variant_keys = _title_variant_keys(title)
+        title_candidates = _tautulli_title_candidates(
+            item.get("title") or item.get("grandparent_title"),
+            item.get("original_title"),
+            item.get("originalTitle"),
+        )
         year = str(item.get("year") or "").strip()
-        if title_key and year:
-            _tautulli_merge_into(index["title_year"], (title_key, year), raw)
-        if title_key:
-            _tautulli_merge_into(index["title"], title_key, raw)
-        if relaxed_key and year:
-            _tautulli_merge_into(index["title_year_relaxed"], (relaxed_key, year), raw)
-        if relaxed_key:
-            _tautulli_merge_into(index["title_relaxed"], relaxed_key, raw)
-        if variant_keys and year:
-            for key in variant_keys:
-                _tautulli_merge_into(index["title_year_variant"], (key, year), raw)
-        if variant_keys:
-            for key in variant_keys:
-                _tautulli_merge_into(index["title_variant"], key, raw)
+        seen = set()
+        for title in title_candidates:
+            _merge_title_keys(index, raw, title, year, seen)
 
     for bucket in [
         "tvdb",
@@ -1275,15 +1305,21 @@ def _tautulli_build_history_index(
             ids = metadata_lookup(_tautulli_metadata_key(item, item_type, media_type))
 
         if media_type == "show":
-            title = item.get("grandparent_title") or item.get("title") or ""
+            title_candidates = _tautulli_title_candidates(
+                item.get("grandparent_title") or item.get("title"),
+                item.get("grandparent_original_title"),
+                item.get("grandparent_originalTitle"),
+                item.get("original_title"),
+                item.get("originalTitle"),
+            )
             year = str(item.get("grandparent_year") or item.get("year") or "").strip()
         else:
-            title = item.get("title") or ""
+            title_candidates = _tautulli_title_candidates(
+                item.get("title"),
+                item.get("original_title"),
+                item.get("originalTitle"),
+            )
             year = str(item.get("year") or "").strip()
-
-        title_key = _normalize_title_key(title)
-        relaxed_key = _relaxed_title_key(title)
-        variant_keys = _title_variant_keys(title)
 
         if "tvdb" in ids:
             _tautulli_merge_into(index["tvdb"], str(ids["tvdb"]), raw)
@@ -1291,20 +1327,9 @@ def _tautulli_build_history_index(
             _tautulli_merge_into(index["tmdb"], str(ids["tmdb"]), raw)
         if "imdb" in ids:
             _tautulli_merge_into(index["imdb"], str(ids["imdb"]), raw)
-        if title_key and year:
-            _tautulli_merge_into(index["title_year"], (title_key, year), raw)
-        if title_key:
-            _tautulli_merge_into(index["title"], title_key, raw)
-        if relaxed_key and year:
-            _tautulli_merge_into(index["title_year_relaxed"], (relaxed_key, year), raw)
-        if relaxed_key:
-            _tautulli_merge_into(index["title_relaxed"], relaxed_key, raw)
-        if variant_keys and year:
-            for key in variant_keys:
-                _tautulli_merge_into(index["title_year_variant"], (key, year), raw)
-        if variant_keys:
-            for key in variant_keys:
-                _tautulli_merge_into(index["title_variant"], key, raw)
+        seen = set()
+        for title in title_candidates:
+            _merge_title_keys(index, raw, title, year, seen)
 
     return index
 
@@ -2191,8 +2216,11 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     if disk_dirty:
         _save_arr_cache(cache_path, disk_cache)
 
-    if cfg.get("tautulli_url") and cfg.get("tautulli_api_key") and not cached_tautulli:
-        started = _start_tautulli_background_refresh(cfg)
+    if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+        refresh_needed = force or not cached_tautulli
+        started = False
+        if refresh_needed:
+            started = _start_tautulli_background_refresh(cfg)
         if started or _tautulli_refresh_in_progress():
             tautulli_notice = "Tautulli matching in progress."
 

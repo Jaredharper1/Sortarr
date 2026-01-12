@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.2
+
+- Fetch New Data now forces a Tautulli background refresh to pick up new matches
+- Include Tautulli original titles when matching by title
+
 ## 0.6.1
 
 - Document that Sortarr.env should be treated as a secret
