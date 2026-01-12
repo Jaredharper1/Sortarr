@@ -15,7 +15,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.6.1"
 
 app = Flask(__name__)
 

@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.6.0-blue)
+![Version](https://img.shields.io/badge/version-0.6.1-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -109,6 +109,7 @@ Requirements and notes:
 - When Tautulli matching runs in the background, the UI auto-refreshes to apply playback stats
 - Cache seconds only evicts in-memory data; persistent caches remain until Fetch New Data is clicked
 - When `PUID`/`PGID` are set, the container runs as that user and will chown the config/cache paths on startup.
+- Treat `Sortarr.env` as a secret; it stores API keys and optional basic auth credentials
 - Basic auth is optional but recommended if exposed beyond your LAN
 - Designed for on-demand queries with persistent caching; the UI only polls while Tautulli matching finishes
 - No database or media filesystem access required

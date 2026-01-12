@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+- Document that Sortarr.env should be treated as a secret
+
 ## 0.6.0
 
 - Refresh base image to python:3.14-slim and upgrade pip to address CVE findings

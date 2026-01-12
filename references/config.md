@@ -34,6 +34,7 @@
 ## Security
 - BASIC_AUTH_USER
 - BASIC_AUTH_PASS
+- Sortarr.env contains secrets (API keys and basic auth); keep it private.
 
 ## Docker User
 - PUID / PGID: used by docker-entrypoint.sh to chown data paths.
