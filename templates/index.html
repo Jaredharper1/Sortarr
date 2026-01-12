@@ -73,6 +73,7 @@
   </div>
   <div class="column-group">
     <div class="column-group-title">Playback (Tautulli)</div>
+    <label class="column-row"><input type="checkbox" data-col="TautulliMatchStatus" /> Match Status</label>
     <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
     <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
     <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
@@ -166,6 +167,7 @@
             <div class="chip-group" data-tautulli="true">
               <div class="chip-group-title">Playback (Tautulli)</div>
               <div class="chip-row">
+                <button class="chip" type="button" data-tautulli="true" data-query="mismatch:true">Potential Mismatch</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never Watched</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">Watched</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">Rewatched</button>
@@ -236,6 +238,7 @@
             <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
             <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
             <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
+            <th data-sort="TautulliMatchStatus" data-col="TautulliMatchStatus">Match Status <span class="sort-indicator"></span></th>
             <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
             <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
             <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>

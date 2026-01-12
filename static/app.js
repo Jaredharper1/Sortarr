@@ -42,8 +42,27 @@ let statusNotice = "";
 let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
+let backgroundLoading = false;
+
+const COLD_CACHE_NOTICE =
+  "First load can take a while for large libraries; later loads are cached and faster.";
+const TAUTULLI_MATCHING_NOTICE = "Tautulli matching in progress.";
+const NOTICE_FLAGS_HEADER = "X-Sortarr-Notice-Flags";
+const TAUTULLI_POLL_INTERVAL_MS = 4000;
+const MATCH_STATUS_SORT_ORDER = {
+  matched: 0,
+  unmatched: 1,
+  skipped: 2,
+  unavailable: 3,
+};
+const SKIPPED_REASON_SORT_ORDER = {
+  future: 0,
+  disk: 1,
+  other: 2,
+};
 
 const TAUTULLI_COLUMNS = new Set([
+  "TautulliMatchStatus",
   "PlayCount",
   "LastWatched",
   "DaysSinceWatched",
@@ -52,6 +71,9 @@ const TAUTULLI_COLUMNS = new Set([
   "UsersWatched",
 ]);
 const TAUTULLI_FILTER_FIELDS = new Set([
+  "mismatch",
+  "match",
+  "matchstatus",
   "playcount",
   "lastwatched",
   "dayssincewatched",
@@ -86,16 +108,20 @@ const CSV_COLUMNS_BY_APP = {
 const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
 const csvColumnsState = { sonarr: false, radarr: false };
 
+const noticeByApp = { sonarr: "", radarr: "" };
+const tautulliPendingByApp = { sonarr: false, radarr: false };
+const tautulliPollTimers = { sonarr: null, radarr: null };
+
 const ADVANCED_PLACEHOLDER_BASE =
   "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_HELP_BASE =
   "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr instance:sonarr-2 " +
   "Fields: title, titleslug, tmdbid, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
 const ADVANCED_HELP_TAUTULLI =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true dayssincewatched>=365 watchtime>=10 contenthours>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
-  "Fields: title, titleslug, tmdbid, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
+  "Fields: title, titleslug, tmdbid, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
@@ -133,13 +159,108 @@ function setStatusNotice(msg) {
   updateStatusText();
 }
 
+function updateLoadingIndicator() {
+  if (!loadingIndicator) return;
+  loadingIndicator.classList.toggle("hidden", !(isLoading || backgroundLoading));
+}
+
 function setLoading(loading, label) {
   isLoading = loading;
-  if (loadingIndicator) {
-    loadingIndicator.classList.toggle("hidden", !loading);
-  }
+  updateLoadingIndicator();
   if (loadBtn) loadBtn.disabled = loading;
   if (label) setStatus(label);
+}
+
+function setBackgroundLoading(loading) {
+  backgroundLoading = Boolean(loading);
+  updateLoadingIndicator();
+  if (tableEl) {
+    tableEl.classList.toggle("stable-columns", backgroundLoading);
+  }
+}
+
+function updateBackgroundLoading() {
+  setBackgroundLoading(Boolean(tautulliPendingByApp[activeApp]));
+}
+
+function parseNoticeState(headers) {
+  const flags = new Set();
+  const rawFlags = headers.get(NOTICE_FLAGS_HEADER) || "";
+  if (rawFlags) {
+    rawFlags.split(",").forEach(flag => {
+      const value = flag.trim();
+      if (value) flags.add(value);
+    });
+  }
+  const notice = headers.get("X-Sortarr-Notice") || "";
+  if (!rawFlags && notice) {
+    if (notice.includes(COLD_CACHE_NOTICE)) flags.add("cold_cache");
+    if (/tautulli matching in progress/i.test(notice)) flags.add("tautulli_refresh");
+  }
+  return { flags, notice };
+}
+
+function cancelTautulliPoll(app) {
+  if (!tautulliPollTimers[app]) return;
+  clearTimeout(tautulliPollTimers[app]);
+  tautulliPollTimers[app] = null;
+}
+
+function scheduleTautulliPoll(app) {
+  if (tautulliPollTimers[app]) return;
+  tautulliPollTimers[app] = setTimeout(() => {
+    tautulliPollTimers[app] = null;
+    if (!tautulliPendingByApp[app]) return;
+    if (app === activeApp) {
+      load(false, { background: true });
+    } else {
+      prefetch(app, false, { background: true });
+    }
+  }, TAUTULLI_POLL_INTERVAL_MS);
+}
+
+function setTautulliPending(app, pending) {
+  tautulliPendingByApp[app] = pending;
+  if (pending) {
+    scheduleTautulliPoll(app);
+  } else {
+    cancelTautulliPoll(app);
+  }
+}
+
+function applyNoticeState(app, flags, warnText, fallbackNotice) {
+  const tautulliPending = flags.has("tautulli_refresh");
+  const coldCache = flags.has("cold_cache");
+
+  setTautulliPending(app, tautulliPending);
+  if (tautulliPending) {
+    const other = app === "sonarr" ? "radarr" : "sonarr";
+    const otherConfigured =
+      other === "sonarr" ? configState.sonarrConfigured : configState.radarrConfigured;
+    if (otherConfigured) {
+      setTautulliPending(other, true);
+      if (!noticeByApp[other]) {
+        noticeByApp[other] = TAUTULLI_MATCHING_NOTICE;
+      }
+    }
+  }
+
+  let notice = "";
+  if (tautulliPending) {
+    notice = TAUTULLI_MATCHING_NOTICE;
+  } else if (coldCache) {
+    notice = COLD_CACHE_NOTICE;
+  } else if (fallbackNotice) {
+    notice = fallbackNotice;
+  }
+
+  const combined = [warnText, notice].filter(Boolean).join(" | ");
+  noticeByApp[app] = combined;
+
+  if (app === activeApp) {
+    setStatusNotice(combined);
+    updateBackgroundLoading();
+  }
 }
 
 function resetUiState() {
@@ -594,6 +715,36 @@ function formatBoolValue(value) {
   return value ? "true" : "false";
 }
 
+function buildMatchBadge(row) {
+  const status = row?.TautulliMatchStatus;
+  const reason = row?.TautulliMatchReason;
+  let label = "Unavailable";
+  let className = "match-pill match-pill--muted";
+
+  if (status === "matched") {
+    label = "Matched";
+    className = "match-pill match-pill--ok";
+  } else if (status === "unmatched") {
+    label = "Potential mismatch";
+    className = "match-pill match-pill--warn";
+  } else if (status === "skipped") {
+    if (typeof reason === "string" && /future/i.test(reason)) {
+      label = "Future release";
+    } else if (typeof reason === "string" && /no (episodes|file) on disk/i.test(reason)) {
+      label = "Not on disk";
+    } else {
+      label = "Not checked";
+    }
+    className = "match-pill match-pill--muted";
+  } else if (status === "unavailable") {
+    label = "Unavailable";
+    className = "match-pill match-pill--muted";
+  }
+
+  const title = reason ? ` title="${escapeHtml(reason)}"` : "";
+  return `<span class="${className}"${title}>${label}</span>`;
+}
+
 const FIELD_MAP = {
   title: "Title",
   titleslug: "TitleSlug",
@@ -627,6 +778,8 @@ const FIELD_MAP = {
   watchvs: "WatchContentRatio",
   userswatched: "UsersWatched",
   users: "UsersWatched",
+  matchstatus: "TautulliMatchStatus",
+  match: "TautulliMatchStatus",
   episodes: "EpisodesCounted",
   totalsize: "TotalSizeGB",
   avgepisode: "AvgEpisodeSizeGB",
@@ -778,6 +931,19 @@ function parseAdvancedQuery(query) {
         });
         continue;
       }
+      if (field === "mismatch") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(`Invalid value for '${field}' (use true/false).`);
+          preds.push(() => false);
+          continue;
+        }
+        preds.push(row => {
+          const mismatched = row.TautulliMatchStatus === "unmatched";
+          return boolVal ? mismatched : !mismatched;
+        });
+        continue;
+      }
       if (field === "instance") {
         preds.push(row => (
           matchPattern(row?.InstanceName ?? "", value) ||
@@ -914,7 +1080,38 @@ function applyFilters(data) {
 
 function sortData(arr) {
   const dir = sortDir === "asc" ? 1 : -1;
+  const isMatchStatusSort = sortKey === "TautulliMatchStatus";
   return [...arr].sort((a, b) => {
+    if (isMatchStatusSort) {
+      const aStatus = String(a?.TautulliMatchStatus || "").toLowerCase();
+      const bStatus = String(b?.TautulliMatchStatus || "").toLowerCase();
+      const aRank = MATCH_STATUS_SORT_ORDER[aStatus] ?? 99;
+      const bRank = MATCH_STATUS_SORT_ORDER[bStatus] ?? 99;
+      if (aRank !== bRank) return (aRank - bRank) * dir;
+      if (aStatus === "skipped" && bStatus === "skipped") {
+        const aReason = String(a?.TautulliMatchReason || "").toLowerCase();
+        const bReason = String(b?.TautulliMatchReason || "").toLowerCase();
+        const aReasonKey = aReason.includes("future")
+          ? "future"
+          : (aReason.includes("no episodes on disk") || aReason.includes("no file on disk"))
+            ? "disk"
+            : "other";
+        const bReasonKey = bReason.includes("future")
+          ? "future"
+          : (bReason.includes("no episodes on disk") || bReason.includes("no file on disk"))
+            ? "disk"
+            : "other";
+        const aReasonRank = SKIPPED_REASON_SORT_ORDER[aReasonKey] ?? 99;
+        const bReasonRank = SKIPPED_REASON_SORT_ORDER[bReasonKey] ?? 99;
+        if (aReasonRank !== bReasonRank) return (aReasonRank - bReasonRank) * dir;
+      }
+      const aTitle = String(a?.Title ?? "").toLowerCase();
+      const bTitle = String(b?.Title ?? "").toLowerCase();
+      if (aTitle < bTitle) return -1 * dir;
+      if (aTitle > bTitle) return 1 * dir;
+      return 0;
+    }
+
     const av = a?.[sortKey];
     const bv = b?.[sortKey];
 
@@ -1191,6 +1388,8 @@ function setActiveTab(app) {
   tabRadarr.classList.toggle("active", activeApp === "radarr");
   setLoading(false);
   setStatus("");
+  setStatusNotice(noticeByApp[activeApp] || "");
+  updateBackgroundLoading();
 
   // default sorts per tab
   if (activeApp === "sonarr") {
@@ -1280,6 +1479,7 @@ function buildRow(row, app) {
     ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, { allowToggle: true })
     : '<span class="muted">Not reported</span>';
   const tautulliMatched = row.TautulliMatched === true;
+  const matchBadge = buildMatchBadge(row);
   const playCount = tautulliMatched
     ? escapeHtml(row.PlayCount ?? 0)
     : '<span class="muted">Not reported</span>';
@@ -1314,6 +1514,10 @@ function buildRow(row, app) {
   const subtitleLanguagesMixed = formatBoolValue(row.SubtitleLanguagesMixed);
   const instanceName = row.InstanceName ?? row.InstanceId ?? "";
 
+  if (row.TautulliMatchStatus === "unmatched") {
+    tr.classList.add("row-mismatch");
+  }
+
   if (app === "sonarr") {
     tr.innerHTML = `
       <td data-col="Title">${buildTitleLink(row, app)}</td>
@@ -1331,6 +1535,7 @@ function buildRow(row, app) {
       <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+      <td data-col="TautulliMatchStatus">${matchBadge}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
@@ -1361,6 +1566,7 @@ function buildRow(row, app) {
       <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+      <td data-col="TautulliMatchStatus">${matchBadge}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
@@ -1442,9 +1648,10 @@ function render(data, options = {}) {
   renderBatch(sorted, token, 0, sorted.length, data.length, app);
 }
 
-async function load(refresh) {
+async function load(refresh, options = {}) {
   const app = activeApp;
   const myToken = ++loadTokens[app];
+  const background = options.background === true;
 
   try {
     const label = refresh
@@ -1454,8 +1661,12 @@ async function load(refresh) {
       : app === "sonarr"
         ? "Loading Sonarr data..."
         : "Loading Radarr data...";
-    if (app === activeApp) {
+    if (app === activeApp && !background) {
       setLoading(true, label);
+      if (!refresh && !(dataByApp[app] || []).length) {
+        noticeByApp[app] = COLD_CACHE_NOTICE;
+        setStatusNotice(COLD_CACHE_NOTICE);
+      }
     }
 
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
@@ -1468,14 +1679,13 @@ async function load(refresh) {
     }
 
     const warn = res.headers.get("X-Sortarr-Warn") || "";
-    const notice = res.headers.get("X-Sortarr-Notice") || "";
-    const combinedNotice = [warn, notice].filter(Boolean).join(" | ");
+    const noticeState = parseNoticeState(res.headers);
     const json = await res.json();
 
     // If a newer request for this app is in flight, ignore this response
     if (myToken !== loadTokens[app]) return;
 
-    setStatusNotice(combinedNotice);
+    applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);
@@ -1487,12 +1697,12 @@ async function load(refresh) {
   } catch (e) {
     // Only show error if this is still the latest request for this app
     if (myToken !== loadTokens[app]) return;
-    if (app === activeApp) {
+    if (app === activeApp && !background) {
       setStatus(`Error: ${e.message}`);
     }
     console.error(e);
   } finally {
-    if (myToken === loadTokens[app] && app === activeApp) {
+    if (myToken === loadTokens[app] && app === activeApp && !background) {
       setLoading(false);
     }
   }
@@ -1583,11 +1793,12 @@ function updateAdvancedHelpText() {
   }
 }
 
-async function prefetch(app, refresh) {
+async function prefetch(app, refresh, options = {}) {
   const existing = dataByApp[app] || [];
   if (existing.length && !refresh) return;
 
   const token = ++prefetchTokens[app];
+  const background = options.background === true;
   try {
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const url = refresh ? `${base}?refresh=1` : base;
@@ -1597,11 +1808,10 @@ async function prefetch(app, refresh) {
       throw new Error(`${res.status} ${res.statusText}: ${txt}`);
     }
     const warn = res.headers.get("X-Sortarr-Warn") || "";
-    const notice = res.headers.get("X-Sortarr-Notice") || "";
-    const combinedNotice = [warn, notice].filter(Boolean).join(" | ");
+    const noticeState = parseNoticeState(res.headers);
     const json = await res.json();
     if (token !== prefetchTokens[app]) return;
-    setStatusNotice(combinedNotice);
+    applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);
@@ -1611,7 +1821,9 @@ async function prefetch(app, refresh) {
       updateLastUpdatedDisplay();
     }
   } catch (e) {
-    console.warn(`Prefetch ${app} failed`, e);
+    if (!background) {
+      console.warn(`Prefetch ${app} failed`, e);
+    }
   }
 }
 

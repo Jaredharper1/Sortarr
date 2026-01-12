@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.5.15-blue)
+![Version](https://img.shields.io/badge/version-0.6.0-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -25,6 +25,8 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Multiple Sonarr/Radarr instances with optional friendly names
 - Optional basic auth and configurable cache
 - Optional Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
+- Tautulli match status indicator to flag potential mismatches
+- Background Tautulli matching on cold starts with an in-app progress notice
 - Audio/subtitle language columns with filters and quick chips
 
 ## Screenshots
@@ -85,10 +87,10 @@ Sortarr writes and reads:
 - `TAUTULLI_URL` (optional)
 - `TAUTULLI_API_KEY` (optional)
 - `TAUTULLI_METADATA_CACHE` (optional, defaults to `./data/Sortarr.tautulli_cache.json`)
-- `TAUTULLI_METADATA_LOOKUP_LIMIT` (optional, defaults to `200`; set to `0` to disable lookups)
-- `TAUTULLI_METADATA_LOOKUP_SECONDS` (optional, defaults to `5`; set to `0` for no time limit)
-- `TAUTULLI_TIMEOUT_SECONDS` (optional, defaults to `30`; per-request timeout for Tautulli calls)
-- `TAUTULLI_FETCH_SECONDS` (optional; total budget per load, defaults to 2x `TAUTULLI_TIMEOUT_SECONDS` with a 120s minimum; clamped to at least the per-request timeout, set to `0` for no limit)
+- `TAUTULLI_METADATA_LOOKUP_LIMIT` (optional, defaults to `-1` for no limit; set to `0` to disable metadata matching)
+- `TAUTULLI_METADATA_LOOKUP_SECONDS` (optional, defaults to `0` for no lookup time limit)
+- `TAUTULLI_TIMEOUT_SECONDS` (optional, defaults to `60`; per-request timeout for each Tautulli API call, `0` falls back to 45 seconds)
+- `TAUTULLI_FETCH_SECONDS` (optional; total fetch budget per load, defaults to `0` for no limit)
 - `SONARR_CACHE_PATH` (optional, defaults to `./data/Sortarr.sonarr_cache.json`)
 - `RADARR_CACHE_PATH` (optional, defaults to `./data/Sortarr.radarr_cache.json`)
 - `PUID` (optional, container user ID; used when set alongside `PGID`)
@@ -101,20 +103,41 @@ Requirements and notes:
 
 - Sonarr/Radarr API keys are required (read-only keys recommended)
 - Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
-- Tautulli metadata lookups are cached to disk for faster matching; raise the lookup limits to warm the cache faster
+- Tautulli metadata lookups are cached to disk for faster matching; lower the lookup limits if you need to cap lookup time
+- Setting `TAUTULLI_METADATA_LOOKUP_LIMIT=0` disables metadata matching
+- On first run after an upgrade, Sortarr clears caches and drops legacy Tautulli default env values so new defaults apply
+- When Tautulli matching runs in the background, the UI auto-refreshes to apply playback stats
 - Cache seconds only evicts in-memory data; persistent caches remain until Fetch New Data is clicked
 - When `PUID`/`PGID` are set, the container runs as that user and will chown the config/cache paths on startup.
 - Basic auth is optional but recommended if exposed beyond your LAN
-- Designed for on-demand queries with persistent caching (no background polling)
+- Designed for on-demand queries with persistent caching; the UI only polls while Tautulli matching finishes
 - No database or media filesystem access required
+
+
+## Troubleshooting Tautulli matches
+
+If a title shows missing or incorrect Tautulli stats, the fastest fix is to refresh the item inside Tautulli after you confirm it is matched correctly in Arr and Plex.
+
+Steps:
+
+1) In Sonarr/Radarr, confirm the title/year and IDs are correct for the item.
+2) In Plex, confirm the item metadata (title/year/IDs) matches Sonarr/Radarr.
+3) In Plex, play the item for 30-60 seconds (this creates fresh Tautulli history).
+4) In Tautulli, open the Now Playing entry and confirm it is the correct title.
+5) In Tautulli, go to the matching library and search for the item by name.
+6) If it is missing or stale, open the item and choose Media Info -> Refresh Media Info.
+7) After the refresh completes, search again to confirm the item appears.
+8) Back in Sortarr, click Fetch New Data and wait for the load to complete.
+
+If the title still does not match, the issue is likely missing IDs in Plex/Tautulli or a mismatch between libraries. Share the title and the Tautulli history count for that item so we can investigate further.
 
 ## Advanced filtering
 
 Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as `>=` (use `=` for exact). `gbperhour` and `totalsize` with integer values use whole-number buckets (e.g., `gbperhour:1` matches 1.0-1.99).
 
-Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `dayssincewatched>=365` `watchtime>=10 contenthours>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
+Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `playcount>=5` `neverwatched:true` `mismatch:true` `dayssincewatched>=365` `watchtime>=10 contenthours>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-Fields: `title`, `titleslug`, `tmdbid`, `path`, `instance`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiocodecmixed`, `audioprofilemixed`, `audiochannels`, `audiolang`, `audiolanguagesmixed`, `sublang`, `subtitlelanguagesmixed`, `nosubs`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `contenthours`, `watchratio`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
+Fields: `title`, `titleslug`, `tmdbid`, `path`, `instance`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audioprofile`, `audiocodecmixed`, `audioprofilemixed`, `audiochannels`, `audiolang`, `audiolanguagesmixed`, `sublang`, `subtitlelanguagesmixed`, `nosubs`, `matchstatus`, `mismatch`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `contenthours`, `watchratio`, `users`, `episodes`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`.
 
 Note: Resolution filters match by height with tolerance (e.g., 1920x1036p matches 1080p), treat 1920x* as 1080p and 1280x* as 720p when dimensions are present, and accept aliases like 4k/uhd/fhd/hd/sd. The UI chips now use `videoquality:` for more reliable matches.
 

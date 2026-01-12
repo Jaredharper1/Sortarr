@@ -260,7 +260,7 @@
           <div class="setup-section-title">Performance</div>
           <label>
             Tautulli metadata lookup limit
-            <input name="tautulli_metadata_lookup_limit" type="number" min="0" step="1" value="{{ values.tautulli_metadata_lookup_limit }}" />
+            <input name="tautulli_metadata_lookup_limit" type="number" min="-1" step="1" value="{{ values.tautulli_metadata_lookup_limit }}" />
           </label>
           <label>
             Tautulli metadata lookup seconds
@@ -278,7 +278,7 @@
             Cache seconds
             <input name="cache_seconds" type="number" min="30" step="1" value="{{ values.cache_seconds }}" />
           </label>
-          <div class="setup-hint">Leave Tautulli fields blank to use defaults. 0 disables limits (lookup or fetch).</div>
+          <div class="setup-hint">Leave Tautulli fields blank for defaults (no limits). Lookup limit: -1 means no limit, 0 disables lookups. Seconds fields: 0 means no time limit.</div>
 
           <div class="setup-hint">Env file path: {{ env_path }}</div>
           <button class="setup-submit" type="submit">Save and continue</button>

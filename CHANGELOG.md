@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+- Refresh base image to python:3.14-slim and upgrade pip to address CVE findings
+- Surface Tautulli match status with a mismatch badge, filter, and CSV fields
+- Default Tautulli lookup and fetch limits to unlimited for full cold-start coverage
+- On first run after upgrade, clear caches and drop legacy Tautulli default env values
+- Run Tautulli matching in the background and show a progress notice in the UI
+- Auto-refresh while Tautulli matching completes and keep the loading indicator active
+- Raise default Tautulli timeout and fetch budget to allow longer first loads
+
 ## 0.5.15
 
 - Add a per-table CSV columns toggle in the Columns menu, separate from Advanced filters

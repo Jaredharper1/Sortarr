@@ -5,6 +5,9 @@
   --muted: #6b7280;
   --border: #e5e7eb;
   --accent: #f59e0b;
+  --match-ok: #16a34a;
+  --match-warn: #b45309;
+  --mismatch-bg: #fff7ed;
   --row-hover: #f1f5f9;
 }
 
@@ -15,6 +18,9 @@ html[data-theme="dark"] {
   --muted: #9ca3af;
   --border: #2f2f2f;
   --accent: #fbbf24;
+  --match-ok: #4ade80;
+  --match-warn: #fbbf24;
+  --mismatch-bg: #2f2317;
   --row-hover: #2a2a2a;
 }
 
@@ -269,7 +275,7 @@ html[data-theme="dark"] .advanced-warnings {
   padding: 10px 12px;
   display: grid;
   gap: 8px;
-  min-width: 260px;
+  min-width: 300px;
   max-height: 70vh;
   overflow: auto;
   z-index: 5;
@@ -307,10 +313,16 @@ html[data-theme="dark"] .advanced-warnings {
   gap: 8px;
   font-size: 0.78em;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .column-toggle input {
   margin: 0;
+  flex: 0 0 auto;
+}
+
+.column-toggle span {
+  white-space: nowrap;
 }
 
 .column-group {
@@ -371,6 +383,31 @@ html[data-theme="dark"] .advanced-warnings {
 
 .mixed-badge-inline {
   margin-left: 6px;
+}
+
+.match-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75em;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+}
+
+.match-pill--ok {
+  border-color: var(--match-ok);
+  color: var(--match-ok);
+}
+
+.match-pill--warn {
+  border-color: var(--match-warn);
+  color: var(--match-warn);
+}
+
+.match-pill--muted {
+  border-color: var(--border);
+  color: var(--muted);
 }
 
 .lang-cell {
@@ -496,7 +533,8 @@ table {
   border: 1px solid var(--border);
 }
 
-table.is-batching {
+table.is-batching,
+table.stable-columns {
   table-layout: fixed;
 }
 
@@ -517,6 +555,8 @@ th {
   white-space: nowrap;
 }
 
+tbody tr.row-mismatch { background: var(--mismatch-bg); }
+
 tbody tr:hover { background: var(--row-hover); }
 
 .right { text-align: left; }
@@ -536,7 +576,9 @@ td[data-col="Title"] {
 }
 
 table.is-batching td[data-col="Title"],
-table.is-batching td[data-col="Path"] {
+table.is-batching td[data-col="Path"],
+table.stable-columns td[data-col="Title"],
+table.stable-columns td[data-col="Path"] {
   overflow: hidden;
   text-overflow: ellipsis;
 }
