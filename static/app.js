@@ -244,6 +244,7 @@ function setTautulliPending(app, pending) {
 function applyNoticeState(app, flags, warnText, fallbackNotice) {
   const tautulliPending = flags.has("tautulli_refresh");
   const coldCache = flags.has("cold_cache");
+  const hadColdCache = (noticeByApp[app] || "").includes(COLD_CACHE_NOTICE);
 
   setTautulliPending(app, tautulliPending);
   if (tautulliPending) {
@@ -258,16 +259,18 @@ function applyNoticeState(app, flags, warnText, fallbackNotice) {
     }
   }
 
-  let notice = "";
+  const notices = [];
   if (tautulliPending) {
-    notice = TAUTULLI_MATCHING_NOTICE;
-  } else if (coldCache) {
-    notice = COLD_CACHE_NOTICE;
-  } else if (fallbackNotice) {
-    notice = fallbackNotice;
+    notices.push(TAUTULLI_MATCHING_NOTICE);
+  }
+  if (coldCache || (tautulliPending && hadColdCache)) {
+    notices.push(COLD_CACHE_NOTICE);
+  }
+  if (!notices.length && fallbackNotice) {
+    notices.push(fallbackNotice);
   }
 
-  const combined = [warnText, notice].filter(Boolean).join(" | ");
+  const combined = [warnText, ...notices].filter(Boolean).join(" | ");
   noticeByApp[app] = combined;
 
   if (app === activeApp) {
@@ -2063,3 +2066,4 @@ async function loadConfig() {
   }
   await load(false);
 })();
+

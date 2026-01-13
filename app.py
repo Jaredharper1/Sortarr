@@ -16,7 +16,7 @@ import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.3"
+APP_VERSION = "0.6.4"
 
 app = Flask(__name__)
 
@@ -35,6 +35,17 @@ _cache = {
     "sonarr": {},
     "radarr": {},
     "tautulli": {"ts": 0, "data": {}},
+}
+
+TAUTULLI_CSV_FIELDS = {
+    "PlayCount",
+    "LastWatched",
+    "DaysSinceWatched",
+    "TotalWatchTimeHours",
+    "WatchContentRatio",
+    "UsersWatched",
+    "TautulliMatchStatus",
+    "TautulliMatchReason",
 }
 
 ENV_FILE_PATH = os.environ.get(
@@ -285,6 +296,8 @@ def _wipe_cache_files() -> None:
         os.environ.get("SONARR_CACHE_PATH", _default_arr_cache_path("sonarr")),
         os.environ.get("RADARR_CACHE_PATH", _default_arr_cache_path("radarr")),
         os.environ.get("TAUTULLI_METADATA_CACHE", _default_tautulli_metadata_cache_path()),
+        _tautulli_refresh_lock_path(),
+        _tautulli_refresh_marker_path(),
     ]
     for path in cache_paths:
         if not path:
@@ -1011,11 +1024,14 @@ def _tautulli_merge_raw(target: dict, raw: dict):
 
 
 def _tautulli_apply_history(target: dict, raw: dict):
-    if _safe_int(raw.get("total_seconds")):
-        target["total_seconds"] = _safe_int(raw.get("total_seconds"))
+    raw_total = _safe_int(raw.get("total_seconds"))
+    if raw_total:
+        target["total_seconds"] = max(_safe_int(target.get("total_seconds")), raw_total)
     raw_ids = set(raw.get("user_ids") or [])
     if raw_ids:
-        target["user_ids"] = raw_ids
+        target_ids = set(target.get("user_ids") or [])
+        target_ids.update(raw_ids)
+        target["user_ids"] = target_ids
     if _safe_int(raw.get("last_epoch")):
         target["last_epoch"] = max(_safe_int(target.get("last_epoch")), _safe_int(raw.get("last_epoch")))
     if _safe_int(raw.get("play_count")):
@@ -2725,6 +2741,7 @@ def api_movies():
 def shows_csv():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
+    tautulli_enabled = bool(cfg.get("tautulli_url") and cfg.get("tautulli_api_key"))
     if not instances:
         return jsonify({"error": "Sonarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
@@ -2772,6 +2789,9 @@ def shows_csv():
         ]
     )
 
+    if not tautulli_enabled:
+        fieldnames = [field for field in fieldnames if field not in TAUTULLI_CSV_FIELDS]
+
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=fieldnames)
     w.writeheader()
@@ -2793,6 +2813,7 @@ def shows_csv():
 def movies_csv():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
+    tautulli_enabled = bool(cfg.get("tautulli_url") and cfg.get("tautulli_api_key"))
     if not instances:
         return jsonify({"error": "Radarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
@@ -2838,6 +2859,9 @@ def movies_csv():
             "Path",
         ]
     )
+
+    if not tautulli_enabled:
+        fieldnames = [field for field in fieldnames if field not in TAUTULLI_CSV_FIELDS]
 
     out = io.StringIO()
     w = csv.DictWriter(out, fieldnames=fieldnames)

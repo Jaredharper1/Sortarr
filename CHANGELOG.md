@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.4
+
+- Hide Tautulli playback columns in CSV exports unless Tautulli is configured
+- Show cold-start and Tautulli matching notices together during background refresh
+- Keep Tautulli history merges from lowering play counts, users, or watch time totals
+- Clear Tautulli refresh lock and marker files on version upgrade
+- Refresh Sonarr and Radarr screenshots
+
 ## 0.6.3
 
 - Parallelize Tautulli metadata lookups and periodically flush the metadata cache to disk
