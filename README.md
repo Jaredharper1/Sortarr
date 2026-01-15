@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.6.4-blue)
+![Version](https://img.shields.io/badge/version-0.6.5-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -26,7 +26,7 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Optional basic auth and configurable cache
 - Optional Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
 - Tautulli match status indicator to flag potential mismatches
-- Background Tautulli matching on cold starts with an in-app progress notice
+- Background Tautulli matching on cold starts with an in-app progress notice (live processed counts + last update time)
 - Audio/subtitle language columns with filters and quick chips
 
 ## Screenshots
@@ -100,7 +100,12 @@ Sortarr writes and reads:
 - `PGID` (optional, container group ID; used when set alongside `PUID`)
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
-- `CACHE_SECONDS`
+
+Runtime overrides (optional):
+
+- `ENV_FILE_PATH` (optional, defaults to `.env` next to `app.py`; docker-compose sets `/data/Sortarr.env`)
+- `PORT` (optional, defaults to `8787`; Docker maps `9595` to `8787` by default)
+- `SORTARR_LOG_LEVEL` (optional, defaults to `INFO`)
 
 Requirements and notes:
 
@@ -111,7 +116,7 @@ Requirements and notes:
 - Stale Tautulli refresh locks clear after `TAUTULLI_REFRESH_STALE_SECONDS` to avoid stuck matching
 - On first run after an upgrade, Sortarr clears caches and drops legacy Tautulli default env values so new defaults apply
 - When Tautulli matching runs in the background, the UI auto-refreshes to apply playback stats
-- Cache seconds only evicts in-memory data; persistent caches remain until Fetch New Data is clicked
+- Arr caches persist until Fetch New Data is clicked
 - When `PUID`/`PGID` are set, the container runs as that user and will chown the config/cache paths on startup.
 - Treat `Sortarr.env` as a secret; it stores API keys and optional basic auth credentials
 - Basic auth is optional but recommended if exposed beyond your LAN
@@ -135,6 +140,22 @@ Steps:
 8) Back in Sortarr, click Fetch New Data and wait for the load to complete.
 
 If the title still does not match, the issue is likely missing IDs in Plex/Tautulli or a mismatch between libraries. Share the title and the Tautulli history count for that item so we can investigate further.
+
+### Tautulli UI totals vs Sortarr totals
+
+Sortarr reads totals from the Tautulli History API (full play history). The Tautulli UI can show different totals because:
+
+- The show page "Global Stats" totals are built from the Tautulli metadata cache, which can be incomplete for large/old libraries or after lookup limits.
+- The History page footer shows the total for the current page of results, not the full filtered set.
+
+If the show page totals look low, rebuild Tautulli's metadata cache:
+
+1) Stop Tautulli.
+2) In Tautulli, open Settings and note the "Cache Directory: X" path, then back up that directory before clearing it.
+3) Start Tautulli.
+4) Refresh the library in Tautulli and wait for metadata to rebuild.
+
+After the rebuild, the show page totals should align with History totals (and with Sortarr).
 
 ## Advanced filtering
 

@@ -3,6 +3,15 @@ const statusEl = document.getElementById("status");
 const loadingIndicator = document.getElementById("loadingIndicator");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const loadBtn = document.getElementById("loadBtn");
+const progressStatusEl = document.getElementById("progressStatus");
+const tautulliStatusEl = document.getElementById("tautulliStatus");
+const cacheStatusEl = document.getElementById("cacheStatus");
+const statusRowEl = document.getElementById("statusRow");
+const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
+const statusPillEl = document.getElementById("statusPill");
+const partialBannerEl = document.getElementById("partialBanner");
+const refreshTautulliBtn = document.getElementById("refreshTautulliBtn");
+const clearCachesBtn = document.getElementById("clearCachesBtn");
 const resetUiBtn = document.getElementById("resetUiBtn");
 const settingsBtn = document.getElementById("settingsBtn");
 const titleFilter = document.getElementById("titleFilter");
@@ -16,6 +25,7 @@ const advancedHelp = document.getElementById("advancedHelp");
 const advancedWarnings = document.getElementById("advancedWarnings");
 const instanceChipsSonarr = document.getElementById("instanceChipsSonarr");
 const instanceChipsRadarr = document.getElementById("instanceChipsRadarr");
+const chipWrapEl = document.querySelector(".chip-wrap");
 
 const tabSonarr = document.getElementById("tabSonarr");
 const tabRadarr = document.getElementById("tabRadarr");
@@ -56,6 +66,21 @@ let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
 let backgroundLoading = false;
+let statusPollTimer = null;
+let statusCountdownTimer = null;
+let statusCountdownRemaining = 0;
+const STATUS_COUNTDOWN_SECONDS = 5;
+let statusFlashTimer = null;
+let statusCompletionFlashed = false;
+let statusTickTimer = null;
+let statusFetchTimer = null;
+let lastStatusFetchAt = null;
+let statusCollapsed = false;
+let statusPillTimer = null;
+let tautulliRefreshReloadTimer = null;
+let copyToastEl = null;
+let copyToastTimer = null;
+const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null };
 
 const COLD_CACHE_NOTICE =
   "First load can take a while for large libraries; later loads are cached and faster.";
@@ -76,6 +101,7 @@ const SKIPPED_REASON_SORT_ORDER = {
 
 const TAUTULLI_COLUMNS = new Set([
   "TautulliMatchStatus",
+  "Diagnostics",
   "PlayCount",
   "LastWatched",
   "DaysSinceWatched",
@@ -124,6 +150,7 @@ const csvColumnsState = { sonarr: false, radarr: false };
 const noticeByApp = { sonarr: "", radarr: "" };
 const tautulliPendingByApp = { sonarr: false, radarr: false };
 const tautulliPollTimers = { sonarr: null, radarr: null };
+const followUpRefreshTimers = { sonarr: null, radarr: null };
 
 const ADVANCED_PLACEHOLDER_BASE =
   "Advanced filtering examples: path:C:\\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
@@ -148,10 +175,14 @@ const loadTokens = { sonarr: 0, radarr: 0 };
 const prefetchTokens = { sonarr: 0, radarr: 0 };
 const RENDER_BATCH_SIZE = 300;
 const RENDER_BATCH_MIN = 1200;
+const RENDER_BATCH_SIZE_LARGE = 600;
+const RENDER_BATCH_LARGE_MIN = 7000;
+const LAZY_CELL_BATCH_SIZE = 180;
 
 let sonarrBase = "";
 let radarrBase = "";
 let renderToken = 0;
+let sonarrHeaderNormalized = false;
 const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 
 function updateStatusText() {
@@ -160,6 +191,11 @@ function updateStatusText() {
   if (statusMessage) parts.push(statusMessage);
   if (statusNotice) parts.push(statusNotice);
   statusEl.textContent = parts.join(" | ");
+}
+
+function setChipsVisible(visible) {
+  if (!chipWrapEl) return;
+  chipWrapEl.classList.toggle("chip-wrap--hidden", !visible);
 }
 
 function setStatus(msg) {
@@ -196,6 +232,383 @@ function updateBackgroundLoading() {
   setBackgroundLoading(Boolean(tautulliPendingByApp[activeApp]));
 }
 
+function formatAgeShort(ageSeconds) {
+  if (ageSeconds == null) return "--";
+  if (ageSeconds < 60) return `${ageSeconds}s`;
+  if (ageSeconds < 3600) return `${Math.round(ageSeconds / 60)}m`;
+  if (ageSeconds < 86400) return `${Math.round(ageSeconds / 3600)}h`;
+  return `${Math.round(ageSeconds / 86400)}d`;
+}
+
+function withElapsedAge(ageSeconds) {
+  if (ageSeconds == null || lastStatusFetchAt == null) return ageSeconds;
+  const elapsed = Math.floor((Date.now() - lastStatusFetchAt) / 1000);
+  return ageSeconds + Math.max(0, elapsed);
+}
+
+function formatCacheStatus(label, ageSeconds) {
+  if (ageSeconds == null) return `${label}: Awaiting data`;
+  return `${label}: ${formatAgeShort(ageSeconds)} ago`;
+}
+
+function setPartialBanner(show) {
+  if (!partialBannerEl) return;
+  partialBannerEl.classList.toggle("hidden", !show);
+}
+
+function formatProgress(counts, configured, progressMeta, tautulliState) {
+  if (!configured) return "Not configured";
+  const progressActive = Boolean(tautulliState?.refresh_in_progress && progressMeta?.total);
+  const total = progressActive
+    ? progressMeta?.total || 0
+    : counts?.total || 0;
+  if (!total) return "No cached data";
+  const matched = progressActive
+    ? progressMeta?.processed || 0
+    : counts?.matched || 0;
+  const label = progressActive ? "processed" : "matched";
+  const base = `${matched}/${total} ${label}`;
+  const progressAge = withElapsedAge(progressMeta?.updated_age_seconds);
+  const progressAgeLabel = progressAge == null
+    ? "--"
+    : `${formatAgeShort(progressAge)} ago`;
+  const progressSuffix = progressActive
+    ? ` | updated ${progressAgeLabel}`
+    : "";
+  const pending = progressActive
+    ? Math.max(total - matched, 0)
+    : (counts?.pending || 0);
+  if (pending > 0) return `${base} - ${pending} pending${progressSuffix}`;
+  const notMatched = total - matched;
+  if (notMatched > 0) return `${base} - ${notMatched} not matched${progressSuffix}`;
+  return `${base}${progressSuffix}`;
+}
+
+function formatTautulliStatus(state) {
+  if (!state || !state.configured) return "Not configured";
+  if (state.refresh_in_progress) return "Matching in progress";
+  if (state.status === "stale") return "Awaiting data";
+  const age = formatAgeShort(withElapsedAge(state.index_age_seconds));
+  return age === "--" ? "Matched" : `Matched (${age} ago)`;
+}
+
+function formatStatusPillText(appState, tautulli) {
+  if (!appState?.configured) return "Data status";
+  if (tautulli?.configured && tautulli.refresh_in_progress) {
+    const total = appState?.progress?.total || 0;
+    if (total > 0) {
+      const processed = appState?.progress?.processed || 0;
+      return `Matching ${processed}/${total}`;
+    }
+    return "Matching...";
+  }
+  return "Data status";
+}
+
+function updateStatusPill(appState, tautulli) {
+  if (!statusPillEl) return;
+  statusPillEl.textContent = formatStatusPillText(appState, tautulli);
+  const progress = appState?.progress;
+  let title = "Hover to expand data status";
+  if (tautulli?.configured && tautulli.refresh_in_progress) {
+    if (progress?.total) {
+      const processed = progress.processed || 0;
+      title = `Tautulli matching in progress (${processed}/${progress.total} processed). Hover to expand status.`;
+    } else {
+      title = "Tautulli matching in progress. Hover to expand status.";
+    }
+  }
+  statusPillEl.title = title;
+  statusPillEl.classList.toggle(
+    "status-pill--pending",
+    Boolean(tautulli?.refresh_in_progress)
+  );
+}
+
+function pauseStatusCountdown() {
+  clearStatusCountdown();
+  statusCountdownRemaining = STATUS_COUNTDOWN_SECONDS;
+  muteStatusCompleteNote(true);
+}
+
+function shouldAutoHideStatus(appState, tautulli) {
+  if (!appState?.configured) return false;
+  const counts = appState?.counts;
+  const counted = (counts?.matched || 0) +
+    (counts?.unmatched || 0) +
+    (counts?.skipped || 0) +
+    (counts?.unavailable || 0);
+  const pending = counts && typeof counts.pending === "number"
+    ? counts.pending
+    : Math.max((counts?.total || 0) - counted, 0);
+  const progressComplete = Boolean(
+    counts?.total > 0 &&
+    pending === 0
+  );
+  const cacheAge = appState?.cache?.memory_age_seconds ?? appState?.cache?.disk_age_seconds;
+  const cacheReady = Boolean(appState?.configured && cacheAge != null);
+  const tautulliReady = !tautulli?.configured ||
+    (tautulli.index_age_seconds != null &&
+      tautulli.status !== "stale" &&
+      !tautulli.refresh_in_progress);
+  return progressComplete && cacheReady && tautulliReady;
+}
+
+function clearStatusCountdown() {
+  if (statusCountdownTimer) {
+    clearInterval(statusCountdownTimer);
+    statusCountdownTimer = null;
+  }
+  statusCountdownRemaining = 0;
+}
+
+function clearStatusPillTimer() {
+  if (statusPillTimer) {
+    clearTimeout(statusPillTimer);
+    statusPillTimer = null;
+  }
+}
+
+function showStatusRow() {
+  if (!statusRowEl) return;
+  clearStatusPillTimer();
+  statusRowEl.classList.remove("status-row--hidden");
+  if (statusPillEl) statusPillEl.classList.add("status-pill--hidden");
+  statusCollapsed = false;
+}
+
+function hideStatusRow() {
+  if (!statusRowEl) return;
+  clearStatusPillTimer();
+  statusRowEl.classList.add("status-row--hidden");
+  statusCollapsed = true;
+  if (!statusPillEl) return;
+  statusPillEl.classList.add("status-pill--hidden");
+  statusPillTimer = setTimeout(() => {
+    if (statusCollapsed) statusPillEl.classList.remove("status-pill--hidden");
+  }, 360);
+}
+
+function updateStatusCompleteNote(text, show) {
+  if (!statusCompleteNoteEl) return;
+  statusCompleteNoteEl.textContent = text || "";
+  statusCompleteNoteEl.classList.toggle("hidden", !show);
+  statusCompleteNoteEl.classList.remove("status-complete--muted");
+}
+
+function muteStatusCompleteNote(muted) {
+  if (!statusCompleteNoteEl || statusCompleteNoteEl.classList.contains("hidden")) return;
+  statusCompleteNoteEl.classList.toggle("status-complete--muted", muted);
+}
+
+function startStatusCountdown() {
+  if (!statusRowEl || !statusCompleteNoteEl) return;
+  if (statusRowEl.classList.contains("status-row--hidden") || statusCountdownTimer) return;
+  statusCountdownRemaining = STATUS_COUNTDOWN_SECONDS;
+  updateStatusCompleteNote(`Data loaded. Hiding in ${statusCountdownRemaining}s...`, true);
+  if (statusFlashTimer) {
+    clearTimeout(statusFlashTimer);
+    statusFlashTimer = null;
+  }
+  statusRowEl.classList.remove("status-row--complete-flash");
+  if (!statusCompletionFlashed) {
+    void statusRowEl.offsetWidth;
+    statusRowEl.classList.add("status-row--complete-flash");
+    statusCompletionFlashed = true;
+    statusFlashTimer = setTimeout(() => {
+      statusRowEl.classList.remove("status-row--complete-flash");
+      statusFlashTimer = null;
+    }, 2600);
+  }
+  statusCountdownTimer = setInterval(() => {
+    if (statusRowEl.matches(":hover") || (statusPillEl && statusPillEl.matches(":hover"))) {
+      return;
+    }
+    statusCountdownRemaining -= 1;
+    if (statusCountdownRemaining <= 0) {
+      clearStatusCountdown();
+      updateStatusCompleteNote("", false);
+      hideStatusRow();
+      return;
+    }
+    updateStatusCompleteNote(`Data loaded. Hiding in ${statusCountdownRemaining}s...`, true);
+  }, 1000);
+}
+
+function updateStatusRowVisibility(appState, tautulli) {
+  if (!statusRowEl) return;
+  const shouldAutoHide = shouldAutoHideStatus(appState, tautulli);
+  const hovering = statusRowEl.matches(":hover") || (statusPillEl && statusPillEl.matches(":hover"));
+  if (shouldAutoHide) {
+    if (hovering) {
+      pauseStatusCountdown();
+    } else {
+      startStatusCountdown();
+    }
+  } else {
+    clearStatusCountdown();
+    statusCompletionFlashed = false;
+    updateStatusCompleteNote("", false);
+    showStatusRow();
+  }
+}
+
+function updateStatusPanel() {
+  if (!progressStatusEl && !tautulliStatusEl && !cacheStatusEl) return;
+  const appState = statusState.apps?.[activeApp];
+  const tautulli = statusState.tautulli;
+  const progressBlock = progressStatusEl?.closest(".status-block");
+  if (progressBlock) {
+    progressBlock.classList.toggle("hidden", !(tautulli && tautulli.configured));
+  }
+  const ageSeed = appState?.cache?.memory_age_seconds ??
+    appState?.cache?.disk_age_seconds ??
+    tautulli?.index_age_seconds;
+  if (ageSeed != null && lastStatusFetchAt == null) {
+    lastStatusFetchAt = Date.now();
+  }
+
+  if (progressStatusEl) {
+    progressStatusEl.textContent = (tautulli && tautulli.configured)
+      ? formatProgress(appState?.counts, appState?.configured, appState?.progress, tautulli)
+      : "--";
+  }
+  if (tautulliStatusEl) {
+    tautulliStatusEl.textContent = formatTautulliStatus(tautulli);
+  }
+  if (cacheStatusEl) {
+    const parts = [];
+    const appCache = statusState.apps?.[activeApp]?.cache;
+    if (statusState.apps?.[activeApp]?.configured) {
+      const label = activeApp === "sonarr" ? "Sonarr" : "Radarr";
+      const appAgeSeconds = appCache?.memory_age_seconds ?? appCache?.disk_age_seconds;
+      parts.push(formatCacheStatus(label, withElapsedAge(appAgeSeconds)));
+    }
+    if (tautulli && tautulli.configured) {
+      parts.push(formatCacheStatus("Tautulli", withElapsedAge(tautulli.index_age_seconds)));
+    }
+    cacheStatusEl.textContent = parts.length ? parts.join(" | ") : "--";
+  }
+  setPartialBanner(Boolean(tautulli?.partial));
+  if (refreshTautulliBtn) {
+    refreshTautulliBtn.classList.toggle("hidden", !(tautulli && tautulli.configured));
+    refreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
+  }
+  updateStatusRowVisibility(appState, tautulli);
+  updateStatusPill(appState, tautulli);
+}
+
+function syncTautulliPendingFromStatus(prevTautulli, nextTautulli) {
+  if (!nextTautulli?.configured) return;
+  if (nextTautulli.refresh_in_progress) {
+    if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+    if (configState.radarrConfigured) setTautulliPending("radarr", true);
+    updateBackgroundLoading();
+    return;
+  }
+  if (prevTautulli?.refresh_in_progress) {
+    if (configState.sonarrConfigured) setTautulliPending("sonarr", false);
+    if (configState.radarrConfigured) setTautulliPending("radarr", false);
+    updateBackgroundLoading();
+  }
+}
+
+function scheduleTautulliRefreshReload() {
+  if (tautulliRefreshReloadTimer) return;
+  tautulliRefreshReloadTimer = setTimeout(() => {
+    tautulliRefreshReloadTimer = null;
+    if (configState.sonarrConfigured) {
+      if (activeApp === "sonarr") {
+        load(false, { background: true });
+      } else {
+        prefetch("sonarr", false, { background: true, force: true });
+      }
+    }
+    if (configState.radarrConfigured) {
+      if (activeApp === "radarr") {
+        load(false, { background: true });
+      } else {
+        prefetch("radarr", false, { background: true, force: true });
+      }
+    }
+  }, 200);
+}
+
+function handleTautulliRefreshState(prevTautulli, nextTautulli) {
+  if (!nextTautulli?.configured) return;
+  const wasRefreshing = Boolean(prevTautulli?.refresh_in_progress);
+  const isRefreshing = Boolean(nextTautulli?.refresh_in_progress);
+  if (wasRefreshing && !isRefreshing) {
+    scheduleTautulliRefreshReload();
+  }
+}
+
+function scheduleStatusPoll() {
+  if (statusPollTimer) return;
+  if (!statusState.tautulli?.refresh_in_progress) return;
+  statusPollTimer = setTimeout(async () => {
+    statusPollTimer = null;
+    await fetchStatus({ silent: true, lite: true });
+  }, TAUTULLI_POLL_INTERVAL_MS);
+}
+
+function mergeStatusApps(prevApps, nextApps) {
+  if (!nextApps) return prevApps;
+  const merged = { ...(prevApps || {}) };
+  ["sonarr", "radarr"].forEach(app => {
+    const next = nextApps[app];
+    if (!next) return;
+    const prev = (prevApps && prevApps[app]) || {};
+    const nextHasCounts = Object.prototype.hasOwnProperty.call(next, "counts");
+    merged[app] = {
+      ...prev,
+      ...next,
+      counts: nextHasCounts ? next.counts : prev.counts,
+    };
+  });
+  return merged;
+}
+
+async function fetchStatus({ silent = false, lite = false } = {}) {
+  try {
+    const url = lite ? "/api/status?lite=1" : "/api/status";
+    const res = await fetch(apiUrl(url));
+    if (!res.ok) {
+      if (!silent) console.warn("Status fetch failed", res.status);
+      return;
+    }
+    const data = await res.json();
+    const prevTautulli = statusState.tautulli;
+    statusState.apps = mergeStatusApps(statusState.apps, data.apps) || statusState.apps;
+    statusState.tautulli = data.tautulli || statusState.tautulli;
+    lastStatusFetchAt = Date.now();
+    syncTautulliPendingFromStatus(prevTautulli, statusState.tautulli);
+    handleTautulliRefreshState(prevTautulli, statusState.tautulli);
+    updateStatusPanel();
+    updateLastUpdatedDisplay();
+    scheduleStatusPoll();
+  } catch (e) {
+    if (!silent) console.warn("Status fetch failed", e);
+  }
+}
+
+function startStatusTick() {
+  if (statusTickTimer) return;
+  statusTickTimer = setInterval(() => {
+    if (document.hidden) return;
+    updateStatusPanel();
+    updateLastUpdatedDisplay();
+  }, 1000);
+}
+
+function startStatusFetchPoll() {
+  if (statusFetchTimer) return;
+  statusFetchTimer = setInterval(() => {
+    if (document.hidden) return;
+    fetchStatus({ silent: true, lite: true });
+  }, 15000);
+}
+
 function parseNoticeState(headers) {
   const flags = new Set();
   const rawFlags = headers.get(NOTICE_FLAGS_HEADER) || "";
@@ -219,6 +632,23 @@ function cancelTautulliPoll(app) {
   tautulliPollTimers[app] = null;
 }
 
+function cancelFollowUpRefresh(app) {
+  if (!followUpRefreshTimers[app]) return;
+  clearTimeout(followUpRefreshTimers[app]);
+  followUpRefreshTimers[app] = null;
+}
+
+function scheduleFollowUpRefresh(app) {
+  if (followUpRefreshTimers[app]) return;
+  followUpRefreshTimers[app] = setTimeout(() => {
+    followUpRefreshTimers[app] = null;
+    if (tautulliPendingByApp[app]) return;
+    if (app === activeApp) {
+      load(false, { background: true });
+    }
+  }, TAUTULLI_POLL_INTERVAL_MS);
+}
+
 function scheduleTautulliPoll(app) {
   if (tautulliPollTimers[app]) return;
   tautulliPollTimers[app] = setTimeout(() => {
@@ -235,17 +665,20 @@ function scheduleTautulliPoll(app) {
 function setTautulliPending(app, pending) {
   tautulliPendingByApp[app] = pending;
   if (pending) {
+    cancelFollowUpRefresh(app);
     scheduleTautulliPoll(app);
   } else {
     cancelTautulliPoll(app);
   }
 }
 
-function applyNoticeState(app, flags, warnText, fallbackNotice) {
+function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
   const tautulliPending = flags.has("tautulli_refresh");
-  const coldCache = flags.has("cold_cache");
-  const hadColdCache = (noticeByApp[app] || "").includes(COLD_CACHE_NOTICE);
-
+  const isBackground = options.background === true;
+  let coldCache = flags.has("cold_cache");
+  if (isBackground && !coldCache && noticeByApp[app]?.includes(COLD_CACHE_NOTICE)) {
+    coldCache = true;
+  }
   setTautulliPending(app, tautulliPending);
   if (tautulliPending) {
     const other = app === "sonarr" ? "radarr" : "sonarr";
@@ -263,7 +696,7 @@ function applyNoticeState(app, flags, warnText, fallbackNotice) {
   if (tautulliPending) {
     notices.push(TAUTULLI_MATCHING_NOTICE);
   }
-  if (coldCache || (tautulliPending && hadColdCache)) {
+  if (coldCache) {
     notices.push(COLD_CACHE_NOTICE);
   }
   if (!notices.length && fallbackNotice) {
@@ -340,14 +773,69 @@ function buildInstanceChips() {
   bindChipButtons();
 }
 
+function formatLastUpdatedTimestamp(ts) {
+  return new Date(ts).toLocaleString(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatLastUpdatedAge(ts) {
+  const ageSeconds = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+  return formatLastUpdatedAgeSeconds(ageSeconds);
+}
+
+function formatLastUpdatedAgeSeconds(ageSeconds) {
+  const clamped = Math.max(0, Math.floor(ageSeconds));
+  if (clamped < 60) {
+    return `${clamped} second${clamped === 1 ? "" : "s"} ago`;
+  }
+  if (clamped < 3600) {
+    const minutes = Math.floor(clamped / 60);
+    return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  }
+  const hours = Math.floor(clamped / 3600);
+  const minutes = Math.floor((clamped % 3600) / 60);
+  if (minutes < 1) {
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  return `${hours} hour${hours === 1 ? "" : "s"}, ${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+}
+
+function getLastUpdatedAgeSeconds() {
+  const ages = [];
+  const apps = statusState.apps || {};
+  ["sonarr", "radarr"].forEach(app => {
+    const appState = apps[app];
+    if (!appState?.configured) return;
+    const age = appState.cache?.memory_age_seconds;
+    if (age != null) ages.push(withElapsedAge(age));
+  });
+  if (ages.length) return Math.min(...ages);
+  return null;
+}
+
 function updateLastUpdatedDisplay() {
   if (!lastUpdatedEl) return;
-  const ts = lastUpdatedByApp[activeApp];
-  if (!ts) {
+  const ageSeconds = getLastUpdatedAgeSeconds();
+  const fallbackTs = lastUpdatedByApp[activeApp];
+  if (ageSeconds == null && !fallbackTs) {
     lastUpdatedEl.textContent = "";
+    lastUpdatedEl.title = "";
     return;
   }
-  lastUpdatedEl.textContent = `Last updated: ${new Date(ts).toLocaleString()}`;
+  const ts = ageSeconds == null
+    ? fallbackTs
+    : Date.now() - Math.max(0, Math.floor(ageSeconds * 1000));
+  const timestamp = formatLastUpdatedTimestamp(ts);
+  const age = ageSeconds == null
+    ? formatLastUpdatedAge(ts)
+    : formatLastUpdatedAgeSeconds(ageSeconds);
+  lastUpdatedEl.textContent = `Last updated: ${age}`;
+  lastUpdatedEl.title = `Last updated: ${timestamp}`;
 }
 
 function escapeHtml(s) {
@@ -488,6 +976,144 @@ function assignRowKeys(rows, app) {
       key = `${key}#${count}`;
     }
     row.__sortarrKey = key;
+  }
+}
+
+function findRowByKey(app, key) {
+  const rows = dataByApp[app] || [];
+  if (!key) return null;
+  return rows.find(row => row.__sortarrKey === key) || null;
+}
+
+function sanitizeFileName(value) {
+  return String(value || "diagnostics")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+async function requestMatchDiagnostics(row, app) {
+  const payload = {
+    app,
+    instance_id: row.InstanceId ?? row.instanceId ?? "",
+    title: row.Title ?? "",
+    year: row.Year ?? "",
+    title_slug: row.TitleSlug ?? row.titleSlug ?? "",
+    path: row.Path ?? row.path ?? "",
+    tvdb_id: row.TvdbId ?? row.tvdbId ?? "",
+    tmdb_id: row.TmdbId ?? row.tmdbId ?? "",
+    imdb_id: row.ImdbId ?? row.imdbId ?? "",
+  };
+
+  const res = await fetch(apiUrl("/api/diagnostics/tautulli-match"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try {
+      const err = await res.json();
+      detail = err?.error || "";
+    } catch {
+      detail = await res.text();
+    }
+    throw new Error(detail || res.statusText);
+  }
+  return res.json();
+}
+
+async function copyDiagnosticsToClipboard(text) {
+  if (!navigator.clipboard || !window.isSecureContext) return false;
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function downloadDiagnostics(filename, text) {
+  const blob = new Blob([text], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function showCopyToast(message, event, sourceEl) {
+  if (copyToastTimer) {
+    clearTimeout(copyToastTimer);
+    copyToastTimer = null;
+  }
+  if (copyToastEl) {
+    copyToastEl.remove();
+    copyToastEl = null;
+  }
+
+  const toast = document.createElement("div");
+  toast.className = "copy-toast";
+  toast.textContent = message;
+  document.body.appendChild(toast);
+
+  let x = event?.clientX;
+  let y = event?.clientY;
+  if ((x == null || y == null) && sourceEl) {
+    const rect = sourceEl.getBoundingClientRect();
+    x = rect.left + rect.width / 2;
+    y = rect.top;
+  }
+  if (x == null || y == null) {
+    x = window.innerWidth / 2;
+    y = window.innerHeight / 2;
+  }
+  const margin = 12;
+  const maxX = window.innerWidth - margin;
+  const maxY = window.innerHeight - margin;
+  const clampedX = Math.min(Math.max(margin, x), maxX);
+  const clampedY = Math.min(Math.max(margin, y), maxY);
+  toast.style.left = `${clampedX}px`;
+  toast.style.top = `${clampedY}px`;
+  requestAnimationFrame(() => toast.classList.add("copy-toast--show"));
+  copyToastEl = toast;
+  copyToastTimer = setTimeout(() => {
+    toast.classList.remove("copy-toast--show");
+    setTimeout(() => {
+      toast.remove();
+    }, 200);
+    copyToastEl = null;
+    copyToastTimer = null;
+  }, 1600);
+}
+
+async function handleMatchDiagnosticsClick(btn, event) {
+  const rowEl = btn.closest("tr");
+  const app = rowEl?.dataset.app || activeApp;
+  const rowKey = rowEl?.dataset.rowKey || "";
+  const row = findRowByKey(app, rowKey);
+  if (!row) {
+    setStatus("Diagnostics failed: row not found.");
+    return;
+  }
+  try {
+    const data = await requestMatchDiagnostics(row, app);
+    const text = JSON.stringify(data, null, 2);
+    const baseName = sanitizeFileName(row.Title || app);
+    const filename = `sortarr-${baseName}-match.json`;
+    const copied = await copyDiagnosticsToClipboard(text);
+    if (copied) {
+      showCopyToast("Diagnostics copied to clipboard.", event, btn);
+    } else {
+      downloadDiagnostics(filename, text);
+      setStatus("Diagnostics downloaded.");
+    }
+  } catch (err) {
+    setStatus(`Diagnostics failed: ${err.message}`);
   }
 }
 
@@ -1094,55 +1720,73 @@ function applyFilters(data) {
   return filtered;
 }
 
+function getSortCache(row) {
+  if (!row) return {};
+  if (!row.__sortarrSortCache) {
+    row.__sortarrSortCache = {};
+  }
+  return row.__sortarrSortCache;
+}
+
+function getMatchStatusSortKey(row) {
+  const cache = getSortCache(row);
+  if (cache.TautulliMatchStatus) return cache.TautulliMatchStatus;
+
+  const status = String(row?.TautulliMatchStatus || "").toLowerCase();
+  const rank = MATCH_STATUS_SORT_ORDER[status] ?? 99;
+  let reasonRank = 99;
+  if (status === "skipped") {
+    const reason = String(row?.TautulliMatchReason || "").toLowerCase();
+    const reasonKey = reason.includes("future")
+      ? "future"
+      : (reason.includes("no episodes on disk") || reason.includes("no file on disk"))
+        ? "disk"
+        : "other";
+    reasonRank = SKIPPED_REASON_SORT_ORDER[reasonKey] ?? 99;
+  }
+  const title = String(row?.Title ?? "").toLowerCase();
+  const value = { rank, reasonRank, title };
+  cache.TautulliMatchStatus = value;
+  return value;
+}
+
+function getFieldSortKey(row, field) {
+  const cache = getSortCache(row);
+  if (cache[field]) return cache[field];
+
+  const raw = row?.[field];
+  const num = Number(raw);
+  const hasNum = Number.isFinite(num) && raw !== "" && raw !== null && raw !== undefined;
+  const str = String(raw ?? "").toLowerCase();
+  const value = { num, hasNum, str };
+  cache[field] = value;
+  return value;
+}
+
 function sortData(arr) {
   const dir = sortDir === "asc" ? 1 : -1;
   const isMatchStatusSort = sortKey === "TautulliMatchStatus";
   return [...arr].sort((a, b) => {
     if (isMatchStatusSort) {
-      const aStatus = String(a?.TautulliMatchStatus || "").toLowerCase();
-      const bStatus = String(b?.TautulliMatchStatus || "").toLowerCase();
-      const aRank = MATCH_STATUS_SORT_ORDER[aStatus] ?? 99;
-      const bRank = MATCH_STATUS_SORT_ORDER[bStatus] ?? 99;
-      if (aRank !== bRank) return (aRank - bRank) * dir;
-      if (aStatus === "skipped" && bStatus === "skipped") {
-        const aReason = String(a?.TautulliMatchReason || "").toLowerCase();
-        const bReason = String(b?.TautulliMatchReason || "").toLowerCase();
-        const aReasonKey = aReason.includes("future")
-          ? "future"
-          : (aReason.includes("no episodes on disk") || aReason.includes("no file on disk"))
-            ? "disk"
-            : "other";
-        const bReasonKey = bReason.includes("future")
-          ? "future"
-          : (bReason.includes("no episodes on disk") || bReason.includes("no file on disk"))
-            ? "disk"
-            : "other";
-        const aReasonRank = SKIPPED_REASON_SORT_ORDER[aReasonKey] ?? 99;
-        const bReasonRank = SKIPPED_REASON_SORT_ORDER[bReasonKey] ?? 99;
-        if (aReasonRank !== bReasonRank) return (aReasonRank - bReasonRank) * dir;
+      const aKey = getMatchStatusSortKey(a);
+      const bKey = getMatchStatusSortKey(b);
+      if (aKey.rank !== bKey.rank) return (aKey.rank - bKey.rank) * dir;
+      if (aKey.rank === MATCH_STATUS_SORT_ORDER.skipped &&
+          bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
+        if (aKey.reasonRank !== bKey.reasonRank) {
+          return (aKey.reasonRank - bKey.reasonRank) * dir;
+        }
       }
-      const aTitle = String(a?.Title ?? "").toLowerCase();
-      const bTitle = String(b?.Title ?? "").toLowerCase();
-      if (aTitle < bTitle) return -1 * dir;
-      if (aTitle > bTitle) return 1 * dir;
+      if (aKey.title < bKey.title) return -1 * dir;
+      if (aKey.title > bKey.title) return 1 * dir;
       return 0;
     }
 
-    const av = a?.[sortKey];
-    const bv = b?.[sortKey];
-
-    const an = Number(av);
-    const bn = Number(bv);
-    const bothNum = Number.isFinite(an) && Number.isFinite(bn) &&
-      av !== "" && av !== null && av !== undefined &&
-      bv !== "" && bv !== null && bv !== undefined;
-
-    if (bothNum) return (an - bn) * dir;
-
-    const as = String(av ?? "").toLowerCase();
-    const bs = String(bv ?? "").toLowerCase();
-    if (as < bs) return -1 * dir;
-    if (as > bs) return 1 * dir;
+    const aKey = getFieldSortKey(a, sortKey);
+    const bKey = getFieldSortKey(b, sortKey);
+    if (aKey.hasNum && bKey.hasNum) return (aKey.num - bKey.num) * dir;
+    if (aKey.str < bKey.str) return -1 * dir;
+    if (aKey.str > bKey.str) return 1 * dir;
     return 0;
   });
 }
@@ -1160,6 +1804,7 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
   "VideoHDR",
+  "Diagnostics",
   "PlayCount",
   "LastWatched",
   "DaysSinceWatched",
@@ -1167,6 +1812,8 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "WatchContentRatio",
   "UsersWatched",
 ]);
+const LAZY_COLUMNS = new Set(DEFAULT_HIDDEN_COLUMNS);
+const LAZY_COLUMNS_ARRAY = Array.from(LAZY_COLUMNS);
 
 function loadCsvColumnsState() {
   let prefs = null;
@@ -1242,6 +1889,56 @@ function getHiddenColumns() {
   });
   return hidden;
 }
+
+function isColumnHidden(col, app, hiddenColumns) {
+  const hideByCol = hiddenColumns && hiddenColumns.has(col);
+  const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
+  const hideByCsv = col && CSV_COLUMNS_BY_APP[app]?.has(col) && !csvColumnsEnabled();
+  const hideByInstance = col === "Instance" && getInstanceCount(app) <= 1;
+  return hideByCol || hideByTautulli || hideByCsv || hideByInstance;
+}
+
+function getDeferredColumns(app, hiddenColumns) {
+  const deferred = new Set();
+  LAZY_COLUMNS.forEach(col => {
+    if (isColumnHidden(col, app, hiddenColumns)) {
+      deferred.add(col);
+    }
+  });
+  return deferred;
+}
+  function updateColumnScrollHint() {
+    if (!columnsPanel) return;
+    if (columnsPanel.classList.contains("hidden")) {
+      columnsPanel.classList.remove("column-panel--scrollable-down");
+      columnsPanel.style.height = "";
+      columnsPanel.style.maxHeight = "";
+      columnsPanel.style.overflow = "";
+      return;
+    }
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const rect = columnsPanel.getBoundingClientRect();
+    const availableHeight = Math.floor(viewportHeight - rect.top - 16);
+    const maxHeight = Math.max(120, availableHeight);
+
+    columnsPanel.style.maxHeight = `${maxHeight}px`;
+    columnsPanel.style.height = "auto";
+    columnsPanel.style.overflow = "hidden";
+
+    const scrollHeight = columnsPanel.scrollHeight;
+    const targetHeight = Math.min(scrollHeight, maxHeight);
+    columnsPanel.style.height = `${targetHeight}px`;
+
+    const clientHeight = columnsPanel.clientHeight;
+    const canScroll = scrollHeight - clientHeight > 2;
+    if (!canScroll && columnsPanel.scrollTop !== 0) {
+      columnsPanel.scrollTop = 0;
+    }
+    columnsPanel.style.overflow = canScroll ? "auto" : "hidden";
+    const atBottom = columnsPanel.scrollTop + clientHeight >= scrollHeight - 1;
+    columnsPanel.classList.toggle("column-panel--scrollable-down", canScroll && !atBottom);
+  }
+
 function updateColumnFilter() {
   if (!columnsPanel) return;
   const query = String(columnSearch?.value ?? "").trim().toLowerCase();
@@ -1271,6 +1968,7 @@ function updateColumnFilter() {
     const anyVisible = Array.from(rows).some(row => row.style.display !== "none");
     group.style.display = anyVisible ? "" : "none";
   });
+  updateColumnScrollHint();
 }
 
 function setAllColumns(checked) {
@@ -1405,6 +2103,7 @@ function setActiveTab(app) {
   setStatus("");
   setStatusNotice(noticeByApp[activeApp] || "");
   updateBackgroundLoading();
+  updateStatusPanel();
 
   // default sorts per tab
   if (activeApp === "sonarr") {
@@ -1477,83 +2176,182 @@ function buildTitleLink(row, app) {
   }
 }
 
-function buildRow(row, app) {
-  const tr = document.createElement("tr");
-  const audioCodec = formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed);
-  const rawAudioProfile = row.AudioProfile ?? "";
-  const audioProfileValue = formatMixedValue(rawAudioProfile, row.AudioProfileMixed);
-  const audioProfile = (rawAudioProfile || row.AudioProfileMixed)
-    ? audioProfileValue
-    : '<span class="muted">Not reported</span>';
-  const rawAudioLanguages = row.AudioLanguages ?? "";
-  const audioLanguages = (rawAudioLanguages || row.AudioLanguagesMixed)
-    ? formatLanguageValue(rawAudioLanguages, row.AudioLanguagesMixed, { allowToggle: true })
-    : '<span class="muted">Not reported</span>';
-  const rawSubtitleLanguages = row.SubtitleLanguages ?? "";
-  const subtitleLanguages = (rawSubtitleLanguages || row.SubtitleLanguagesMixed)
-    ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, { allowToggle: true })
-    : '<span class="muted">Not reported</span>';
-  const tautulliMatched = row.TautulliMatched === true;
-  const matchBadge = buildMatchBadge(row);
-  const notReported = '<span class="muted" title="Not reported">n/a</span>';
-  const noWatchData = '<span class="muted" title="No watch data">n/a</span>';
-  const noRuntime = '<span class="muted" title="No runtime">n/a</span>';
-  const playCount = tautulliMatched
-    ? escapeHtml(row.PlayCount ?? 0)
-    : notReported;
-  const lastWatched = tautulliMatched
-    ? formatLastWatched(row.LastWatched)
-    : notReported;
-  const daysSinceWatched = tautulliMatched
-    ? formatDaysSince(row.DaysSinceWatched, row.LastWatched)
-    : notReported;
-  const watchTimeHours = tautulliMatched
-    ? formatWatchTimeHours(row.TotalWatchTimeHours ?? 0)
-    : notReported;
-  let watchContentHours = noWatchData;
-  if (tautulliMatched) {
-    const watchContentValue = formatWatchContentHours(
-      row.TotalWatchTimeHours ?? 0,
-      row.ContentHours
-    );
-    watchContentHours = watchContentValue || noRuntime;
+const DIAG_BUTTON_HTML = `<button class="match-diag-btn" type="button" title="Copy match diagnostics" aria-label="Copy match diagnostics">i</button>`;
+
+function computeHeavyCellValues(row, app, columns) {
+  if (!columns || !columns.length) return {};
+  const colSet = columns instanceof Set ? columns : new Set(columns);
+  const values = {};
+
+  if (colSet.has("Instance")) {
+    values.Instance = escapeHtml(row.InstanceName ?? row.InstanceId ?? "");
   }
-  const usersWatched = tautulliMatched
-    ? escapeHtml(row.UsersWatched ?? 0)
-    : notReported;
+
+  if (colSet.has("AudioProfile")) {
+    const rawAudioProfile = row.AudioProfile ?? "";
+    const audioProfileValue = formatMixedValue(rawAudioProfile, row.AudioProfileMixed);
+    values.AudioProfile = (rawAudioProfile || row.AudioProfileMixed)
+      ? audioProfileValue
+      : '<span class="muted">Not reported</span>';
+  }
+
+  if (colSet.has("AudioLanguages")) {
+    const rawAudioLanguages = row.AudioLanguages ?? "";
+    values.AudioLanguages = (rawAudioLanguages || row.AudioLanguagesMixed)
+      ? formatLanguageValue(rawAudioLanguages, row.AudioLanguagesMixed, { allowToggle: true })
+      : '<span class="muted">Not reported</span>';
+  }
+
+  if (colSet.has("SubtitleLanguages")) {
+    const rawSubtitleLanguages = row.SubtitleLanguages ?? "";
+    values.SubtitleLanguages = (rawSubtitleLanguages || row.SubtitleLanguagesMixed)
+      ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, { allowToggle: true })
+      : '<span class="muted">Not reported</span>';
+  }
+
+  if (colSet.has("TitleSlug")) {
+    values.TitleSlug = escapeHtml(
+      row.TitleSlug ?? row.titleSlug ?? sonarrSlugFromTitle(row.Title)
+    );
+  }
+
+  if (colSet.has("TmdbId")) {
+    values.TmdbId = escapeHtml(row.TmdbId ?? row.tmdbId ?? "");
+  }
+
+  if (colSet.has("AudioCodecMixed")) {
+    values.AudioCodecMixed = formatBoolValue(row.AudioCodecMixed);
+  }
+  if (colSet.has("AudioProfileMixed")) {
+    values.AudioProfileMixed = formatBoolValue(row.AudioProfileMixed);
+  }
+  if (colSet.has("AudioLanguagesMixed")) {
+    values.AudioLanguagesMixed = formatBoolValue(row.AudioLanguagesMixed);
+  }
+  if (colSet.has("SubtitleLanguagesMixed")) {
+    values.SubtitleLanguagesMixed = formatBoolValue(row.SubtitleLanguagesMixed);
+  }
+
+  if (colSet.has("VideoHDR")) {
+    values.VideoHDR = escapeHtml(row.VideoHDR ?? "");
+  }
+
+  if (colSet.has("Diagnostics")) {
+    values.Diagnostics = DIAG_BUTTON_HTML;
+  }
+
+  const needsTautulliStats = colSet.has("PlayCount") ||
+    colSet.has("LastWatched") ||
+    colSet.has("DaysSinceWatched") ||
+    colSet.has("TotalWatchTimeHours") ||
+    colSet.has("WatchContentRatio") ||
+    colSet.has("UsersWatched");
+  if (needsTautulliStats) {
+    const tautulliMatched = row.TautulliMatched === true;
+    const notReported = '<span class="muted" title="Not reported">n/a</span>';
+    const noWatchData = '<span class="muted" title="No watch data">n/a</span>';
+    const noRuntime = '<span class="muted" title="No runtime">n/a</span>';
+
+    if (colSet.has("PlayCount")) {
+      values.PlayCount = tautulliMatched
+        ? escapeHtml(row.PlayCount ?? 0)
+        : notReported;
+    }
+    if (colSet.has("LastWatched")) {
+      values.LastWatched = tautulliMatched
+        ? formatLastWatched(row.LastWatched)
+        : notReported;
+    }
+    if (colSet.has("DaysSinceWatched")) {
+      values.DaysSinceWatched = tautulliMatched
+        ? formatDaysSince(row.DaysSinceWatched, row.LastWatched)
+        : notReported;
+    }
+    if (colSet.has("TotalWatchTimeHours")) {
+      values.TotalWatchTimeHours = tautulliMatched
+        ? formatWatchTimeHours(row.TotalWatchTimeHours ?? 0)
+        : notReported;
+    }
+    if (colSet.has("WatchContentRatio")) {
+      if (tautulliMatched) {
+        const watchContentValue = formatWatchContentHours(
+          row.TotalWatchTimeHours ?? 0,
+          row.ContentHours
+        );
+        values.WatchContentRatio = watchContentValue || noRuntime;
+      } else {
+        values.WatchContentRatio = noWatchData;
+      }
+    }
+    if (colSet.has("UsersWatched")) {
+      values.UsersWatched = tautulliMatched
+        ? escapeHtml(row.UsersWatched ?? 0)
+        : notReported;
+    }
+  }
+
+  return values;
+}
+
+function buildRow(row, app, options = {}) {
+  const tr = document.createElement("tr");
+  tr.dataset.rowKey = row.__sortarrKey || buildRowKey(row, app);
+  tr.dataset.app = app;
+  tr.__sortarrRow = row;
+  const audioCodec = formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed);
+  const matchBadge = buildMatchBadge(row);
   const contentHours = formatWatchTimeHours(row.ContentHours ?? "");
-  const tmdbId = escapeHtml(row.TmdbId ?? row.tmdbId ?? "");
-  const titleSlug = escapeHtml(
-    row.TitleSlug ?? row.titleSlug ?? sonarrSlugFromTitle(row.Title)
-  );
-  const audioCodecMixed = formatBoolValue(row.AudioCodecMixed);
-  const audioProfileMixed = formatBoolValue(row.AudioProfileMixed);
-  const audioLanguagesMixed = formatBoolValue(row.AudioLanguagesMixed);
-  const subtitleLanguagesMixed = formatBoolValue(row.SubtitleLanguagesMixed);
-  const instanceName = row.InstanceName ?? row.InstanceId ?? "";
+  const deferredColumns = options.deferredColumns;
+  const visibleHeavyColumns = options.visibleHeavyColumns || LAZY_COLUMNS_ARRAY;
+  const heavyValues = visibleHeavyColumns.length
+    ? computeHeavyCellValues(row, app, visibleHeavyColumns)
+    : {};
+  const instanceName = heavyValues.Instance ?? "";
+  const audioProfile = heavyValues.AudioProfile ?? "";
+  const audioLanguages = heavyValues.AudioLanguages ?? "";
+  const subtitleLanguages = heavyValues.SubtitleLanguages ?? "";
+  const playCount = heavyValues.PlayCount ?? "";
+  const lastWatched = heavyValues.LastWatched ?? "";
+  const daysSinceWatched = heavyValues.DaysSinceWatched ?? "";
+  const watchTimeHours = heavyValues.TotalWatchTimeHours ?? "";
+  const watchContentHours = heavyValues.WatchContentRatio ?? "";
+  const usersWatched = heavyValues.UsersWatched ?? "";
+  const titleSlug = heavyValues.TitleSlug ?? "";
+  const tmdbId = heavyValues.TmdbId ?? "";
+  const audioCodecMixed = heavyValues.AudioCodecMixed ?? "";
+  const audioProfileMixed = heavyValues.AudioProfileMixed ?? "";
+  const audioLanguagesMixed = heavyValues.AudioLanguagesMixed ?? "";
+  const subtitleLanguagesMixed = heavyValues.SubtitleLanguagesMixed ?? "";
+  const diagButton = heavyValues.Diagnostics ?? "";
+  const videoHdr = heavyValues.VideoHDR ?? "";
 
   if (row.TautulliMatchStatus === "unmatched") {
     tr.classList.add("row-mismatch");
+  }
+  if (deferredColumns && deferredColumns.size) {
+    tr.dataset.lazy = "1";
+    tr.__sortarrDeferredCols = Array.from(deferredColumns);
   }
 
   if (app === "sonarr") {
     tr.innerHTML = `
       <td data-col="Title">${buildTitleLink(row, app)}</td>
-      <td data-col="Instance">${escapeHtml(instanceName)}</td>
+      <td data-col="Instance">${instanceName}</td>
+      <td class="right" data-col="ContentHours" data-app="sonarr">${contentHours}</td>
       <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
       <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
       <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
-      <td class="right" data-col="ContentHours" data-app="sonarr">${contentHours}</td>
       <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
       <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
       <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
-      <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
+      <td data-col="VideoHDR">${videoHdr}</td>
       <td data-col="AudioCodec">${audioCodec}</td>
       <td data-col="AudioProfile">${audioProfile}</td>
       <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
       <td data-col="TautulliMatchStatus">${matchBadge}</td>
+      <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
@@ -1571,20 +2369,21 @@ function buildRow(row, app) {
   } else {
     tr.innerHTML = `
       <td data-col="Title">${buildTitleLink(row, app)}</td>
-      <td data-col="Instance">${escapeHtml(instanceName)}</td>
+      <td data-col="Instance">${instanceName}</td>
       <td class="right" data-col="RuntimeMins" data-app="radarr">${row.RuntimeMins ?? ""}</td>
       <td class="right" data-col="FileSizeGB" data-app="radarr">${row.FileSizeGB ?? ""}</td>
       <td class="right" data-col="GBPerHour" data-app="radarr">${row.GBPerHour ?? ""}</td>
       <td data-col="VideoQuality">${escapeHtml(row.VideoQuality ?? "")}</td>
       <td data-col="Resolution">${escapeHtml(row.Resolution ?? "")}</td>
       <td data-col="VideoCodec">${escapeHtml(row.VideoCodec ?? "")}</td>
-      <td data-col="VideoHDR">${escapeHtml(row.VideoHDR ?? "")}</td>
+      <td data-col="VideoHDR">${videoHdr}</td>
       <td data-col="AudioCodec">${audioCodec}</td>
       <td data-col="AudioProfile">${audioProfile}</td>
       <td data-col="AudioChannels">${escapeHtml(row.AudioChannels ?? "")}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
       <td data-col="TautulliMatchStatus">${matchBadge}</td>
+      <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
       <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
@@ -1603,34 +2402,87 @@ function buildRow(row, app) {
   return tr;
 }
 
-function getRowElement(row, app) {
+function hydrateDeferredCells(tr) {
+  if (!tr || tr.dataset.lazy !== "1") return false;
+  const deferredCols = tr.__sortarrDeferredCols;
+  if (!deferredCols || !deferredCols.length) {
+    tr.dataset.lazy = "";
+    return false;
+  }
+  const row = tr.__sortarrRow;
+  if (!row) return false;
+  const app = tr.dataset.app;
+  const values = computeHeavyCellValues(row, app, deferredCols);
+  deferredCols.forEach(col => {
+    const cell = tr.querySelector(`td[data-col="${col}"]`);
+    if (!cell) return;
+    const value = values[col];
+    if (value !== undefined) {
+      cell.innerHTML = value;
+    }
+  });
+  tr.dataset.lazy = "";
+  tr.__sortarrDeferredCols = null;
+  return true;
+}
+
+function hydrateDeferredRows(rows, token, start = 0) {
+  if (token !== renderToken) return;
+  const end = Math.min(start + LAZY_CELL_BATCH_SIZE, rows.length);
+  for (let i = start; i < end; i += 1) {
+    const tr = rows[i];
+    if (tr && tr.dataset.lazy === "1") {
+      hydrateDeferredCells(tr);
+    }
+  }
+  if (end < rows.length) {
+    requestAnimationFrame(() => hydrateDeferredRows(rows, token, end));
+  }
+}
+
+function getRowElement(row, app, options = {}) {
   const key = row.__sortarrKey || buildRowKey(row, app);
   const cache = rowCacheByApp[app];
   const existing = cache.get(key);
-  if (existing) return existing;
-  const tr = buildRow(row, app);
+  if (existing) {
+    if (existing.dataset.lazy === "1" && options.lazyRows) {
+      options.lazyRows.push(existing);
+    } else if (!options.lazyRows && existing.dataset.lazy === "1") {
+      hydrateDeferredCells(existing);
+    }
+    return existing;
+  }
+  const tr = buildRow(row, app, options);
   cache.set(key, tr);
+  if (options.deferredColumns && options.lazyRows && tr.dataset.lazy === "1") {
+    options.lazyRows.push(tr);
+  }
   return tr;
 }
 
-function renderBatch(rows, token, start, totalRows, totalAll, app) {
+function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, options) {
   if (token !== renderToken) return;
-  const end = Math.min(start + RENDER_BATCH_SIZE, rows.length);
+  const end = Math.min(start + batchSize, rows.length);
   const frag = document.createDocumentFragment();
   for (let i = start; i < end; i += 1) {
-    frag.appendChild(getRowElement(rows[i], app));
+    frag.appendChild(getRowElement(rows[i], app, options));
   }
   tbody.appendChild(frag);
-  updateColumnVisibility(tbody);
 
   if (end < rows.length) {
-    requestAnimationFrame(() => renderBatch(rows, token, end, totalRows, totalAll, app));
+    requestAnimationFrame(() => renderBatch(rows, token, end, totalRows, totalAll, app, batchSize, options));
     return;
   }
 
   if (token !== renderToken) return;
   setBatching(false);
+  updateColumnVisibility(tbody);
+  normalizeSonarrRuntimeOrder(tbody);
   setStatus(`Loaded ${totalRows} / ${totalAll}`);
+  setChipsVisible(true);
+  if (options && options.lazyRows && options.lazyRows.length) {
+    requestAnimationFrame(() => hydrateDeferredRows(options.lazyRows, token));
+  }
 }
 
 function render(data, options = {}) {
@@ -1639,31 +2491,51 @@ function render(data, options = {}) {
   const sorted = sortData(filtered);
   const allowBatch = options.allowBatch !== false;
   const shouldBatch = allowBatch && sorted.length > RENDER_BATCH_MIN;
+  const batchSize = sorted.length >= RENDER_BATCH_LARGE_MIN
+    ? RENDER_BATCH_SIZE_LARGE
+    : RENDER_BATCH_SIZE;
+  const hiddenColumns = getHiddenColumns();
+  const deferredColumns = shouldBatch ? getDeferredColumns(app, hiddenColumns) : null;
+  const useDeferred = deferredColumns && deferredColumns.size;
+  const visibleHeavyColumns = useDeferred
+    ? LAZY_COLUMNS_ARRAY.filter(col => !deferredColumns.has(col))
+    : null;
+  const rowOptions = useDeferred
+    ? { deferredColumns, visibleHeavyColumns, lazyRows: [] }
+    : { lazyRows: [] };
   const token = ++renderToken;
 
   setBatching(shouldBatch);
-  clearTable();
 
   if (!sorted.length) {
+    clearTable();
     setBatching(false);
     setStatus(`Loaded 0 / ${data.length}`);
     updateColumnVisibility();
+    normalizeSonarrRuntimeOrder();
+    setChipsVisible(true);
     return;
   }
 
   if (!shouldBatch) {
     const frag = document.createDocumentFragment();
     for (const row of sorted) {
-      frag.appendChild(getRowElement(row, app));
+      frag.appendChild(getRowElement(row, app, rowOptions));
     }
-    tbody.appendChild(frag);
+    tbody.replaceChildren(frag);
     updateColumnVisibility(tbody);
+    normalizeSonarrRuntimeOrder(tbody);
     setBatching(false);
     setStatus(`Loaded ${sorted.length} / ${data.length}`);
+    setChipsVisible(true);
+    if (rowOptions.lazyRows && rowOptions.lazyRows.length) {
+      requestAnimationFrame(() => hydrateDeferredRows(rowOptions.lazyRows, token));
+    }
     return;
   }
 
-  renderBatch(sorted, token, 0, sorted.length, data.length, app);
+  clearTable();
+  renderBatch(sorted, token, 0, sorted.length, data.length, app, batchSize, rowOptions);
 }
 
 async function load(refresh, options = {}) {
@@ -1679,9 +2551,13 @@ async function load(refresh, options = {}) {
       : app === "sonarr"
         ? "Loading Sonarr data..."
         : "Loading Radarr data...";
+    const hasData = (dataByApp[app] || []).length > 0;
     if (app === activeApp && !background) {
       setLoading(true, label);
-      if (!refresh && !(dataByApp[app] || []).length) {
+      if (!hasData) {
+        setChipsVisible(false);
+      }
+      if (!refresh && !hasData) {
         noticeByApp[app] = COLD_CACHE_NOTICE;
         setStatusNotice(COLD_CACHE_NOTICE);
       }
@@ -1704,7 +2580,8 @@ async function load(refresh, options = {}) {
 
     const existing = dataByApp[app] || [];
     if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
-      applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+      applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
+      fetchStatus({ silent: true });
       if (res.body && typeof res.body.cancel === "function") {
         res.body.cancel();
       }
@@ -1712,15 +2589,28 @@ async function load(refresh, options = {}) {
     }
 
     const json = await res.json();
-    applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+    applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);
     lastUpdatedByApp[app] = Date.now();
-    if (app === activeApp) {
-      render(dataByApp[app], { allowBatch: true });
-      updateLastUpdatedDisplay();
+    if (refresh && !background && tautulliEnabled && !noticeState.flags.has("tautulli_refresh")) {
+      scheduleFollowUpRefresh(app);
     }
+    if (app === activeApp) {
+      const renderData = dataByApp[app];
+      const renderNow = () => {
+        if (myToken !== loadTokens[app] || app !== activeApp) return;
+        render(renderData, { allowBatch: true });
+        updateLastUpdatedDisplay();
+      };
+      if (renderData.length > RENDER_BATCH_MIN) {
+        requestAnimationFrame(renderNow);
+      } else {
+        renderNow();
+      }
+    }
+    fetchStatus({ silent: true });
   } catch (e) {
     // Only show error if this is still the latest request for this app
     if (myToken !== loadTokens[app]) return;
@@ -1780,6 +2670,67 @@ if (loadBtn) {
     }
   });
 }
+if (refreshTautulliBtn) {
+  refreshTautulliBtn.addEventListener("click", async () => {
+    setStatus("Refreshing Tautulli...");
+    try {
+      const res = await fetch(apiUrl("/api/tautulli/refresh"), { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} ${res.statusText}: ${txt}`);
+      }
+      const data = await res.json();
+      if (data.refresh_in_progress || data.started) {
+        setStatusNotice(TAUTULLI_MATCHING_NOTICE);
+        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+        if (configState.radarrConfigured) setTautulliPending("radarr", true);
+        updateBackgroundLoading();
+      }
+      fetchStatus({ silent: true });
+      setStatus("Tautulli refresh started.");
+    } catch (e) {
+      setStatus(`Error: ${e.message}`);
+    }
+  });
+}
+if (clearCachesBtn) {
+  clearCachesBtn.addEventListener("click", async () => {
+    if (!window.confirm("Clear caches and rescan? This will reload Sonarr/Radarr data.")) {
+      return;
+    }
+    setStatus("Clearing caches...");
+    try {
+      const res = await fetch(apiUrl("/api/caches/clear"), { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`${res.status} ${res.statusText}: ${txt}`);
+      }
+      dataByApp.sonarr = [];
+      dataByApp.radarr = [];
+      rowCacheByApp.sonarr.clear();
+      rowCacheByApp.radarr.clear();
+      lastUpdatedByApp.sonarr = null;
+      lastUpdatedByApp.radarr = null;
+      noticeByApp.sonarr = "";
+      noticeByApp.radarr = "";
+      clearTable();
+      updateLastUpdatedDisplay();
+      if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+      if (configState.radarrConfigured) setTautulliPending("radarr", true);
+      updateBackgroundLoading();
+      const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
+      load(true);
+      if ((otherApp === "sonarr" && configState.sonarrConfigured) ||
+          (otherApp === "radarr" && configState.radarrConfigured)) {
+        prefetch(otherApp, true);
+      }
+      fetchStatus({ silent: true });
+      setStatus("Caches cleared. Reloading...");
+    } catch (e) {
+      setStatus(`Error: ${e.message}`);
+    }
+  });
+}
 if (resetUiBtn) {
   resetUiBtn.addEventListener("click", () => {
     resetUiState();
@@ -1822,7 +2773,8 @@ function updateAdvancedHelpText() {
 
 async function prefetch(app, refresh, options = {}) {
   const existing = dataByApp[app] || [];
-  if (existing.length && !refresh) return;
+  const force = options.force === true;
+  if (existing.length && !refresh && !force) return;
 
   const token = ++prefetchTokens[app];
   const background = options.background === true;
@@ -1839,22 +2791,33 @@ async function prefetch(app, refresh, options = {}) {
     if (token !== prefetchTokens[app]) return;
     const existing = dataByApp[app] || [];
     if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
-      applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+      applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
+      fetchStatus({ silent: true });
       if (res.body && typeof res.body.cancel === "function") {
         res.body.cancel();
       }
       return;
     }
     const json = await res.json();
-    applyNoticeState(app, noticeState.flags, warn, noticeState.notice);
+    applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     assignRowKeys(dataByApp[app], app);
     lastUpdatedByApp[app] = Date.now();
     if (app === activeApp) {
-      render(dataByApp[app], { allowBatch: true });
-      updateLastUpdatedDisplay();
+      const renderData = dataByApp[app];
+      const renderNow = () => {
+        if (token !== prefetchTokens[app] || app !== activeApp) return;
+        render(renderData, { allowBatch: true });
+        updateLastUpdatedDisplay();
+      };
+      if (renderData.length > RENDER_BATCH_MIN) {
+        requestAnimationFrame(renderNow);
+      } else {
+        renderNow();
+      }
     }
+    fetchStatus({ silent: true });
   } catch (e) {
     if (!background) {
       console.warn(`Prefetch ${app} failed`, e);
@@ -1868,6 +2831,7 @@ function setTautulliEnabled(enabled) {
   const chipsChanged = updateChipVisibility();
   updateColumnFilter();
   updateColumnVisibility();
+  updateStatusPanel();
   if (chipsChanged && (dataByApp[activeApp] || []).length) {
     render(dataByApp[activeApp], { allowBatch: false });
   }
@@ -1903,6 +2867,11 @@ bindChipButtons();
 
 if (tbody) {
   tbody.addEventListener("click", e => {
+    const diagBtn = e.target.closest(".match-diag-btn");
+    if (diagBtn) {
+      handleMatchDiagnosticsClick(diagBtn, e);
+      return;
+    }
     const btn = e.target.closest(".lang-toggle");
     if (!btn) return;
     const cell = btn.closest(".lang-cell");
@@ -1930,12 +2899,22 @@ if (tbody) {
 }
 
 if (columnsBtn && columnsPanel) {
+  const setColumnsPanelHidden = hidden => {
+    columnsPanel.classList.toggle("hidden", hidden);
+    columnsPanel.setAttribute("aria-hidden", hidden ? "true" : "false");
+    columnsBtn.setAttribute("aria-expanded", hidden ? "false" : "true");
+  };
+
+  setColumnsPanelHidden(columnsPanel.classList.contains("hidden"));
+
   columnsBtn.addEventListener("click", e => {
     e.stopPropagation();
-    const nowHidden = columnsPanel.classList.toggle("hidden");
+    const nowHidden = !columnsPanel.classList.contains("hidden");
+    setColumnsPanelHidden(nowHidden);
     if (!nowHidden) {
       updateColumnFilter();
       columnSearch?.focus();
+      requestAnimationFrame(updateColumnScrollHint);
     }
   });
 
@@ -1943,14 +2922,22 @@ if (columnsBtn && columnsPanel) {
     e.stopPropagation();
   });
 
+  columnsPanel.addEventListener("scroll", () => {
+    updateColumnScrollHint();
+  });
+
   document.addEventListener("click", () => {
-    columnsPanel.classList.add("hidden");
+    setColumnsPanelHidden(true);
   });
 
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
-      columnsPanel.classList.add("hidden");
+      setColumnsPanelHidden(true);
     }
+  });
+
+  window.addEventListener("resize", () => {
+    updateColumnScrollHint();
   });
 
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
@@ -2005,6 +2992,64 @@ function setTheme(theme) {
   }
 }
 
+function updateRuntimeLabels() {
+  const labelMap = {
+    ContentHours: "Runtime (hh:mm)",
+    WatchContentRatio: "Watch / Runtime (hh:mm)",
+  };
+
+  const updateLabelText = (label, text) => {
+    if (!label) return;
+    const textNode = Array.from(label.childNodes).find(
+      node => node.nodeType === Node.TEXT_NODE
+    );
+    if (textNode) {
+      textNode.nodeValue = ` ${text}`;
+    } else {
+      label.appendChild(document.createTextNode(` ${text}`));
+    }
+  };
+
+  const updateHeaderText = (th, text) => {
+    if (!th) return;
+    const textNode = Array.from(th.childNodes).find(
+      node => node.nodeType === Node.TEXT_NODE
+    );
+    if (textNode) {
+      textNode.nodeValue = `${text} `;
+    } else {
+      th.insertBefore(document.createTextNode(`${text} `), th.firstChild);
+    }
+  };
+
+  Object.entries(labelMap).forEach(([key, text]) => {
+    document.querySelectorAll(`[data-col="${key}"]`).forEach(el => {
+      if (el.tagName === "INPUT") {
+        updateLabelText(el.closest("label"), text);
+      } else if (el.tagName === "TH") {
+        updateHeaderText(el, text);
+      }
+    });
+  });
+}
+
+function normalizeSonarrRuntimeOrder(scope = document) {
+  if (sonarrHeaderNormalized) return;
+  const headerRow = scope.querySelector?.("thead tr") || document.querySelector("thead tr");
+  if (headerRow) {
+    const runtimeHeader = headerRow.querySelector('th[data-col="ContentHours"][data-app="sonarr"]');
+    const totalHeader = headerRow.querySelector('th[data-col="TotalSizeGB"][data-app="sonarr"]');
+    const avgHeader = headerRow.querySelector('th[data-col="AvgEpisodeSizeGB"][data-app="sonarr"]');
+    const episodesHeader = headerRow.querySelector('th[data-col="EpisodesCounted"][data-app="sonarr"]');
+    const radarrHeader = headerRow.querySelector('th[data-app="radarr"]');
+    const order = [runtimeHeader, episodesHeader, avgHeader, totalHeader].filter(Boolean);
+    if (order.length && radarrHeader) {
+      order.forEach(el => headerRow.insertBefore(el, radarrHeader));
+      sonarrHeaderNormalized = true;
+    }
+  }
+}
+
 const savedTheme = localStorage.getItem("Sortarr-theme") || "dark";
 setTheme(savedTheme);
 
@@ -2052,6 +3097,7 @@ async function loadConfig() {
   loadCsvColumnsState();
   syncCsvToggle();
   setTautulliEnabled(false);
+  updateRuntimeLabels();
   updateColumnFilter();
   updateColumnVisibility();
   updateChipVisibility();
@@ -2059,6 +3105,44 @@ async function loadConfig() {
   updateSortIndicators();
   setAdvancedMode(false);
   await loadConfig();
+  await fetchStatus({ silent: true });
+  startStatusTick();
+  startStatusFetchPoll();
+  setChipsVisible(false);
+  if (statusPillEl && statusRowEl) {
+    statusPillEl.addEventListener("mouseenter", () => {
+      if (!statusCollapsed) return;
+      pauseStatusCountdown();
+      statusRowEl.classList.remove("status-row--hidden");
+      statusPillEl.classList.add("status-pill--active");
+    });
+    statusPillEl.addEventListener("mouseleave", () => {
+      if (!statusCollapsed) return;
+      statusPillEl.classList.remove("status-pill--active");
+      setTimeout(() => {
+        if (!statusRowEl.matches(":hover") && !statusPillEl.matches(":hover")) {
+          if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
+            startStatusCountdown();
+          } else {
+            showStatusRow();
+          }
+        }
+      }, 50);
+    });
+    statusRowEl.addEventListener("mouseenter", () => {
+      if (statusCollapsed) pauseStatusCountdown();
+    });
+    statusRowEl.addEventListener("mouseleave", () => {
+      if (!statusCollapsed) return;
+      if (!statusRowEl.matches(":hover") && !(statusPillEl && statusPillEl.matches(":hover"))) {
+        if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
+          startStatusCountdown();
+        } else {
+          showStatusRow();
+        }
+      }
+    });
+  }
   const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
   if ((otherApp === "sonarr" && configState.sonarrConfigured) ||
       (otherApp === "radarr" && configState.radarrConfigured)) {

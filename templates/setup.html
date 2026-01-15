@@ -35,7 +35,7 @@
           </label>
           <label>
             Sonarr API key
-            <input name="sonarr_api_key" placeholder="your-api-key" value="{{ values.sonarr_api_key }}" />
+            <input name="sonarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.sonarr_api_key }}" />
           </label>
           <div class="setup-inline">
             <button
@@ -68,7 +68,7 @@
               </label>
               <label>
                 Sonarr API key
-                <input name="sonarr_api_key_2" placeholder="your-api-key" value="{{ values.sonarr_api_key_2 }}" />
+                <input name="sonarr_api_key_2" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.sonarr_api_key_2 }}" />
               </label>
               <div class="setup-inline">
                 <button
@@ -98,7 +98,7 @@
               </label>
               <label>
                 Sonarr API key
-                <input name="sonarr_api_key_3" placeholder="your-api-key" value="{{ values.sonarr_api_key_3 }}" />
+                <input name="sonarr_api_key_3" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.sonarr_api_key_3 }}" />
               </label>
               <div class="setup-inline">
                 <button
@@ -131,7 +131,7 @@
           </label>
           <label>
             Radarr API key
-            <input name="radarr_api_key" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
+            <input name="radarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.radarr_api_key }}" />
           </label>
           <div class="setup-inline">
             <button
@@ -164,7 +164,7 @@
               </label>
               <label>
                 Radarr API key
-                <input name="radarr_api_key_2" placeholder="your-api-key" value="{{ values.radarr_api_key_2 }}" />
+                <input name="radarr_api_key_2" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.radarr_api_key_2 }}" />
               </label>
               <div class="setup-inline">
                 <button
@@ -194,7 +194,7 @@
               </label>
               <label>
                 Radarr API key
-                <input name="radarr_api_key_3" placeholder="your-api-key" value="{{ values.radarr_api_key_3 }}" />
+                <input name="radarr_api_key_3" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key" value="{{ values.radarr_api_key_3 }}" />
               </label>
               <div class="setup-inline">
                 <button
@@ -223,7 +223,7 @@
           </label>
           <label>
             Tautulli API key
-            <input name="tautulli_api_key" placeholder="optional" value="{{ values.tautulli_api_key }}" />
+            <input name="tautulli_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="optional" value="{{ values.tautulli_api_key }}" />
           </label>
           <div class="setup-inline">
             <button
@@ -258,28 +258,21 @@
           <div class="setup-hint">Leave blank to keep current password.</div>
           <div class="setup-hint">Credentials are stored in the env file; keep it private.</div>
 
-          <div class="setup-section-title">Performance</div>
-          <label>
-            Tautulli metadata lookup limit
-            <input name="tautulli_metadata_lookup_limit" type="number" min="-1" step="1" value="{{ values.tautulli_metadata_lookup_limit }}" />
-          </label>
-          <label>
-            Tautulli metadata lookup seconds
-            <input name="tautulli_metadata_lookup_seconds" type="number" min="0" step="1" value="{{ values.tautulli_metadata_lookup_seconds }}" />
-          </label>
-          <label>
-            Tautulli timeout seconds
-            <input name="tautulli_timeout_seconds" type="number" min="0" step="1" value="{{ values.tautulli_timeout_seconds }}" />
-          </label>
-          <label>
-            Tautulli fetch seconds
-            <input name="tautulli_fetch_seconds" type="number" min="0" step="1" value="{{ values.tautulli_fetch_seconds }}" />
-          </label>
-          <label>
-            Cache seconds
-            <input name="cache_seconds" type="number" min="30" step="1" value="{{ values.cache_seconds }}" />
-          </label>
-          <div class="setup-hint">Leave Tautulli fields blank for defaults (no limits). Lookup limit: -1 means no limit, 0 disables lookups. Seconds fields: 0 means no time limit.</div>
+          <details class="setup-advanced">
+            <summary>Advanced settings</summary>
+            <div class="setup-advanced-body">
+              <div class="setup-section-title">Performance</div>
+              <label>
+                Tautulli timeout seconds
+                <input name="tautulli_timeout_seconds" type="number" min="0" step="1" value="{{ values.tautulli_timeout_seconds }}" />
+              </label>
+              <label>
+                Tautulli fetch seconds
+                <input name="tautulli_fetch_seconds" type="number" min="0" step="1" value="{{ values.tautulli_fetch_seconds }}" />
+              </label>
+              <div class="setup-hint">Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for defaults; seconds fields accept 0 for no time limit.</div>
+            </div>
+          </details>
 
           <div class="setup-hint">Env file path: {{ env_path }}</div>
           <button class="setup-submit" type="submit">Save and continue</button>

@@ -105,10 +105,12 @@ label {
 }
 
 .setup-checkbox {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 0.9rem;
+  justify-self: start;
+  width: fit-content;
 }
 
 .setup-checkbox input {
@@ -149,6 +151,53 @@ html[data-theme="dark"] .setup-error {
   gap: 10px;
   flex-wrap: wrap;
   margin-top: -2px;
+  position: relative;
+}
+
+.setup-inline::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+  opacity: 0;
+  pointer-events: none;
+  width: var(--setup-flash-width, 100%);
+  max-width: 100%;
+  right: auto;
+}
+
+.setup-inline.setup-inline--flash-ok::after {
+  background: rgba(70, 210, 120, 0.18);
+  animation: setup-flash-pulse 2.4s ease-in-out;
+}
+
+.setup-inline.setup-inline--flash-error::after {
+  background: rgba(220, 68, 68, 0.22);
+  animation: setup-flash-pulse 2.4s ease-in-out;
+}
+
+@keyframes setup-flash-pulse {
+  0% {
+    opacity: 0;
+  }
+  12% {
+    opacity: 0.5;
+  }
+  30% {
+    opacity: 0;
+  }
+  45% {
+    opacity: 0.45;
+  }
+  64% {
+    opacity: 0;
+  }
+  78% {
+    opacity: 0.35;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 .setup-test {
@@ -157,6 +206,10 @@ html[data-theme="dark"] .setup-error {
   font-size: 0.85rem;
   border: 1px solid var(--border);
   background: var(--panel);
+}
+
+.setup-test.is-testing {
+  cursor: progress;
 }
 
 .setup-inline-message {

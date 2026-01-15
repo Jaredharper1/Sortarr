@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.6.5
+
+- Show live Tautulli refresh progress with processed/total counts and last update time in the status row
+- Refresh both tabs after Tautulli matching completes so data appears without manual tab swaps
+- Include disk-only caches in Tautulli match progress to avoid 0-to-full jumps
+- Replace the Status pill label with live progress and smooth pill transitions; remove redundant Last Updated from the toolbar
+- Keep the cold-cache notice visible while background refreshes run and restore Sonarr column ordering
+- Yield a frame before rendering large fetches and avoid per-batch column visibility passes for smoother table loads
+- Cache per-row sort keys and increase batch sizes for very large tables to reduce refresh overhead
+- Defer hidden-column cell rendering on large tables and hydrate them after the initial render
+- Skip reapplying Tautulli stats to cached rows when the index timestamp is unchanged and add a lite status poller
+- Reapply Tautulli match overlay when cached rows are missing match fields to avoid pending-only counts
+- Serve cached rows immediately on refresh requests and update Arr caches in a background thread when possible
+- Reduce Tautulli index build and match overhead with cached title keys and lazy key generation
+- Slow chip reveal animation for smoother transitions
+- Tune light-theme surfaces (background, toolbars, data, progress) to reduce glare
+- Add a subtle purple tint to the top toolbar in light mode
+- Keep chips visible during refreshes after the first load
+- After Fetch New Data, perform a one-shot background refresh to clear stale mismatch badges
+- Enforce unlimited Tautulli metadata lookups and clear caches on upgrade to prevent history bucket gaps
+- Backfill history items from strict title+year mappings to keep ID buckets current without false matches
+- Move performance tuning fields into the Advanced section of setup
+- Hide Cache seconds from setup (env-only)
+- Document `ENV_FILE_PATH`, `PORT`, and `SORTARR_LOG_LEVEL` env vars in README.
+
 ## 0.6.4
 
 - Hide Tautulli playback columns in CSV exports unless Tautulli is configured

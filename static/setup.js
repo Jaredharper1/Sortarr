@@ -17,6 +17,18 @@
     return apiOrigin ? `${apiOrigin}${normalized}` : normalized;
   }
 
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function ensureMinimumDelay(startedAt, minMs) {
+    const elapsed = Date.now() - startedAt;
+    const remaining = minMs - elapsed;
+    if (remaining > 0) {
+      await delay(remaining);
+    }
+  }
+
   function updateInlineMessage(key, message, state) {
     const el = document.querySelector(`[data-inline="${CSS.escape(key)}"]`);
     if (!el) return;
@@ -33,7 +45,31 @@
     }
   }
 
+  function flashInline(button, kind) {
+    const inline = button.closest(".setup-inline");
+    if (!inline) return;
+    const messageEl = inline.querySelector(".setup-inline-message");
+    if (messageEl) {
+      const inlineRect = inline.getBoundingClientRect();
+      const msgRect = messageEl.getBoundingClientRect();
+      const width = Math.min(inlineRect.width, Math.max(0, msgRect.right - inlineRect.left + 10));
+      inline.style.setProperty("--setup-flash-width", `${Math.round(width)}px`);
+    }
+    if (inline._flashTimer) {
+      clearTimeout(inline._flashTimer);
+      inline._flashTimer = null;
+    }
+    inline.classList.remove("setup-inline--flash-ok", "setup-inline--flash-error");
+    void inline.offsetWidth;
+    inline.classList.add(kind === "ok" ? "setup-inline--flash-ok" : "setup-inline--flash-error");
+    inline._flashTimer = setTimeout(() => {
+      inline.classList.remove("setup-inline--flash-ok", "setup-inline--flash-error");
+      inline._flashTimer = null;
+    }, 2600);
+  }
+
   async function runTest(button) {
+    if (button.dataset.testing === "1") return;
     const kind = button.dataset.kind || "";
     const urlField = button.dataset.urlId || "";
     const keyField = button.dataset.keyId || "";
@@ -46,7 +82,11 @@
       return;
     }
 
-    button.disabled = true;
+    const startedAt = Date.now();
+    button.dataset.testing = "1";
+    button.classList.add("is-testing");
+    button.setAttribute("aria-busy", "true");
+    button.setAttribute("aria-disabled", "true");
     updateInlineMessage(inlineKey, "Testing connection...", "is-pending");
     try {
       const res = await fetch(apiUrl("/api/setup/test"), {
@@ -61,16 +101,24 @@
       } catch {
         payload = {};
       }
+      await ensureMinimumDelay(startedAt, 250);
       if (res.ok && payload.ok) {
         updateInlineMessage(inlineKey, "Connection ok.", "is-ok");
+        flashInline(button, "ok");
       } else {
         const msg = payload.error || "Connection failed.";
         updateInlineMessage(inlineKey, msg, "is-error");
+        flashInline(button, "error");
       }
     } catch (err) {
+      await ensureMinimumDelay(startedAt, 250);
       updateInlineMessage(inlineKey, `Connection failed: ${err}`, "is-error");
+      flashInline(button, "error");
     } finally {
-      button.disabled = false;
+      button.dataset.testing = "0";
+      button.classList.remove("is-testing");
+      button.removeAttribute("aria-busy");
+      button.removeAttribute("aria-disabled");
     }
   }
 

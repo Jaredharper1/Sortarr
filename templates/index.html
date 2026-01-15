@@ -23,8 +23,8 @@
         <button id="resetUiBtn" title="Clear UI settings and reload cached data">Reset UI</button>
         <button id="settingsBtn" title="Open setup">Settings</button>
         <div class="column-menu">
-          <button id="columnsBtn" type="button" title="Adjust visible columns">Columns</button>
-          <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns">
+          <button id="columnsBtn" type="button" title="Adjust visible columns" aria-expanded="false" aria-controls="columnsPanel">Columns</button>
+          <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns" aria-modal="false" aria-hidden="true">
   <div class="column-panel-header">
     <input id="columnSearch" class="column-search" type="search" placeholder="Search columns" />
     <div class="column-actions">
@@ -45,10 +45,10 @@
   </div>
           <div class="column-group" data-app="sonarr">
             <div class="column-group-title">Sonarr</div>
+            <label class="column-row"><input type="checkbox" data-col="ContentHours" /> Runtime (hh:mm)</label>
             <label class="column-row"><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
-            <label class="column-row"><input type="checkbox" data-col="ContentHours" /> Content (hh:mm)</label>
           </div>
           <div class="column-group" data-app="radarr">
             <div class="column-group-title">Radarr</div>
@@ -74,11 +74,12 @@
   <div class="column-group">
     <div class="column-group-title">Playback (Tautulli)</div>
     <label class="column-row"><input type="checkbox" data-col="TautulliMatchStatus" /> Match Status</label>
+    <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> Diagnostics</label>
     <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
     <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
     <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
     <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time (hh:mm)</label>
-    <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> Watch / Content (hh:mm)</label>
+    <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> Watch / Runtime (hh:mm)</label>
     <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> Users Watched</label>
   </div>
   <div class="column-group">
@@ -90,12 +91,12 @@
     <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages Mixed</label>
     <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages Mixed</label>
   </div>
+  <div class="column-scroll-hint" aria-hidden="true"></div>
 </div>
         </div>
         <button id="themeBtn" title="Toggle theme">☀️</button>
-        <span class="status" id="status"></span>
+        <span class="status" id="status" role="status" aria-live="polite"></span>
         <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
-        <span class="last-updated" id="lastUpdated"></span>
         <span class="version-badge">v{{ app_version }}</span>
       </div>
 
@@ -214,16 +215,44 @@
         <button id="exportCsvBtn">Export CSV</button>
       </div>
 
+      <div class="status-row" id="statusRow">
+        <div class="status-block">
+          <div class="status-label">Progress</div>
+          <div class="status-value" id="progressStatus">--</div>
+        </div>
+        <div class="status-block">
+          <div class="status-label">Tautulli</div>
+          <div class="status-value" id="tautulliStatus">--</div>
+        </div>
+        <div class="status-block">
+          <div class="status-label">Cache</div>
+          <div class="status-value" id="cacheStatus">--</div>
+        </div>
+        <div class="status-actions">
+          <button id="refreshTautulliBtn" title="Refresh Tautulli matching in the background">Refresh Tautulli only</button>
+          <button id="clearCachesBtn" title="Clear caches and trigger a full rescan">Clear caches &amp; re-scan</button>
+        </div>
+        <div class="status-complete hidden" id="statusCompleteNote">All data is up to date. Hiding in 5s…</div>
+      </div>
+
+      <div class="status-pill status-pill--hidden" id="statusPill" title="Hover to expand data status">
+        Data status
+      </div>
+
+      <div class="status-banner hidden" id="partialBanner">
+        Partial Tautulli data loaded. Matching will continue in the background.
+      </div>
+
       <table class="stable-columns">
         <thead>
           <tr>
             <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
             <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
 
+            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Runtime (hh:mm) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
             <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Content (hh:mm) <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
@@ -239,11 +268,12 @@
             <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
             <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
             <th data-sort="TautulliMatchStatus" data-col="TautulliMatchStatus">Match Status <span class="sort-indicator"></span></th>
+            <th data-col="Diagnostics">Diagnostics</th>
             <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
             <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
             <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
             <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hh:mm) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">Watch / Content (hh:mm) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">Watch / Runtime (hh:mm) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="UsersWatched" data-col="UsersWatched">Users Watched <span class="sort-indicator"></span></th>
             <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">Title Slug <span class="sort-indicator"></span></th>
             <th data-sort="TmdbId" data-col="TmdbId">TMDB ID <span class="sort-indicator"></span></th>
