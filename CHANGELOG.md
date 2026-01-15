@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.7
+
+- Align app version metadata with the 0.6.7 release.
+
 ## 0.6.6
 
 - Avoid logging instance labels during cold-start fetch/match steps to keep logs free of sensitive data.
