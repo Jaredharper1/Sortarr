@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.6
+
+- Avoid logging instance labels during cold-start fetch/match steps to keep logs free of sensitive data.
+- Replace the trailing-parenthetical title cleanup regex with a safe string parser to avoid polynomial ReDoS.
+
 ## 0.6.5
 
 - Show live Tautulli refresh progress with processed/total counts and last update time in the status row

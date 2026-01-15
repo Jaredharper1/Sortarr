@@ -727,12 +727,28 @@ def _strip_parentheticals(value: str) -> str:
     return _collapse_whitespace(re.sub(r"\([^)]*\)", " ", str(value or "")))
 
 
+def _strip_trailing_parenthetical(value: str) -> str:
+    s = str(value or "")
+    if not s:
+        return ""
+    s = s.rstrip()
+    if not s or s[-1] != ")":
+        return s
+    last_open = s.rfind("(")
+    if last_open == -1:
+        return s
+    last_close_before_end = s.rfind(")", 0, len(s) - 1)
+    if last_close_before_end > last_open:
+        return s
+    return s[:last_open].rstrip()
+
+
 def _relaxed_title(value: str) -> str:
     cleaned = _collapse_whitespace(str(value or ""))
     if not cleaned:
         return ""
     while True:
-        relaxed = _collapse_whitespace(re.sub(r"\s*\([^)]*\)\s*$", "", cleaned))
+        relaxed = _strip_trailing_parenthetical(cleaned)
         if relaxed == cleaned:
             return cleaned
         cleaned = relaxed
@@ -3051,7 +3067,6 @@ def _get_cached_instance(
         return entry["data"], False
 
     now = time.time()
-    instance_label = instance.get("name") or instance.get("id") or app_name
     fetch_start = time.perf_counter()
     if app_name == "sonarr":
         entry["data"] = _compute_sonarr(
@@ -3068,7 +3083,7 @@ def _get_cached_instance(
     if log_cold_start:
         logger.info(
             "Cold start %s fetch completed in %.2fs (rows=%s)",
-            f"{app_name}:{instance_label}",
+            app_name,
             fetch_elapsed,
             len(entry["data"] or []),
         )
@@ -3083,7 +3098,7 @@ def _get_cached_instance(
         if log_cold_start:
             logger.info(
                 "Cold start %s Tautulli overlay in %.2fs (applied=%s)",
-                f"{app_name}:{instance_label}",
+                app_name,
                 overlay_elapsed,
                 applied,
             )
