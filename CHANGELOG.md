@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.9
+
+### Security
+
+- Redact credentialed URLs and identifiers from Arr/Tautulli warning logs.
+
 ## 0.6.8
 
 ### Deployment and configuration

@@ -10,6 +10,7 @@ import io
 import json
 import logging
 import threading
+from urllib.parse import urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 
@@ -18,7 +19,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.8"
+APP_VERSION = "0.6.9"
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
 SAFE_TAUTULLI_REFRESH_BUCKETS = {
@@ -351,6 +352,22 @@ def _normalize_url(value: str) -> str:
     else:
         value = f"http://{value}"
     return value.rstrip("/")
+
+
+def _sanitize_url_for_log(url: str) -> str:
+    if not url:
+        return ""
+    try:
+        parts = urlsplit(url)
+    except Exception:
+        return "<redacted>"
+    if not parts.scheme and not parts.netloc:
+        return "<redacted>"
+    netloc = parts.netloc
+    if "@" in netloc:
+        host = netloc.split("@", 1)[1]
+        netloc = f"<redacted>@{host}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
 def _load_env_file(path: str, override: bool = False):
@@ -888,7 +905,7 @@ def _arr_get(
             "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
             app_name or "unknown",
             r.status_code,
-            url,
+            _sanitize_url_for_log(url),
             snippet,
         )
         raise
@@ -934,7 +951,7 @@ def _arr_post(
             "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
             app_name or "unknown",
             r.status_code,
-            url,
+            _sanitize_url_for_log(url),
             snippet,
         )
         raise
@@ -1503,7 +1520,7 @@ def _tautulli_metadata_ids_uncached(
             session=session,
         )
     except (RuntimeError, requests.RequestException, ValueError) as exc:
-        logger.warning("Tautulli get_metadata failed for rating_key=%s: %s", key, exc)
+        logger.warning("Tautulli get_metadata failed for rating_key=<redacted>: %s", exc)
         return {}
 
     if isinstance(data, dict) and "metadata" in data:
@@ -1909,9 +1926,7 @@ def _tautulli_refresh_library_media_info(
         )
     except (RuntimeError, requests.RequestException, ValueError) as exc:
         logger.warning(
-            "Tautulli media info refresh failed for section_id=%s rating_key=%s: %s",
-            section_id,
-            rating_key,
+            "Tautulli media info refresh failed for section_id=<redacted> rating_key=<redacted>: %s",
             exc,
         )
         return False
