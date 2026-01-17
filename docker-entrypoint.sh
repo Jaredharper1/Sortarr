@@ -39,22 +39,21 @@ if [ -n "$PUID" ] && [ -n "$PGID" ]; then
         fi
     fi
 
-    chown_targets=""
+    safe_chown() {
+        dir_path="$1"
+        if [ -n "$dir_path" ]; then
+            mkdir -p "$dir_path"
+            chown -R "$PUID:$PGID" "$dir_path" 2>/dev/null || true
+        fi
+    }
+
     if [ -d "/config" ]; then
-        chown_targets="$chown_targets /config"
+        safe_chown "/config"
     fi
     for path in "$ENV_FILE_PATH" "$TAUTULLI_METADATA_CACHE" "$SONARR_CACHE_PATH" "$RADARR_CACHE_PATH"; do
         if [ -n "$path" ]; then
-            chown_targets="$chown_targets $(dirname "$path")"
+            safe_chown "$(dirname "$path")"
         fi
-    done
-
-    for target in $chown_targets; do
-        if [ -z "$target" ]; then
-            continue
-        fi
-        mkdir -p "$target"
-        chown -R "$PUID:$PGID" "$target" 2>/dev/null || true
     done
 
     if [ "$PUID" != "0" ] || [ "$PGID" != "0" ]; then

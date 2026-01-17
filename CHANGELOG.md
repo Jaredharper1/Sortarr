@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.6.8
+
+### Deployment and configuration
+
+- Default Docker image to a single Gunicorn worker with threads to keep cache/refresh state consistent.
+- Guard .env reloads with a lock to prevent concurrent config transitions.
+- Allow Arr timeouts to be disabled by setting `SONARR_TIMEOUT_SECONDS`/`RADARR_TIMEOUT_SECONDS` to `0`.
+- Increase default Sonarr/Radarr request timeouts to 90 seconds for large or remote instances.
+
+### Refresh and cache workflow
+
+- Serialize Arr cache writes in background threads to avoid request stalls and racey disk writes.
+- Apply cache snapshot/atomic updates for Tautulli overlays and in-memory cache refreshes.
+- Snapshot Arr cache payloads before background saves to avoid concurrent mutation issues.
+- Add Refresh Current Tab to update only the active app cache.
+- Add Sonarr/Radarr refresh-all endpoints and UI buttons plus per-row refresh that also triggers Tautulli when configured.
+- Ensure per-row Radarr refresh targets a single movie by sending movieIds to the Radarr command API.
+- Reload just the refreshed series/movie after row refreshes with a short delay for Arr/Tautulli updates.
+- Only force the Tautulli index on per-row reloads when the item lacks keys.
+- Place the per-row refresh control in the Title column as a subtle refresh icon.
+- Show longer per-row refresh status messages without delaying the row reload.
+- Add Deep Tautulli Refresh to rebuild library media info and rerun matching from the UI.
+- Defer Tautulli overlays on cold cache loads and apply matching in the background for faster first paint.
+
+### Playback stats and matching
+
+- Prefer library play counts over history or episode aggregates to avoid double-counted show stats.
+- Log Tautulli index build timings for shows, movies, and history buckets.
+
+### Performance and rendering
+
+- Parallelize Sonarr episodefile fetches with the `SONARR_EPISODEFILE_WORKERS` cap.
+- Stabilize row keys for duplicate titles and add optional render perf logging/reset hooks for UI baselines.
+- Allow batched rendering on large interactive updates (filters, chips, sorting) while keeping small tables synchronous.
+- Stabilize Title column width on large tables by measuring the longest title per load.
+- Apply column visibility during batched renders so hidden columns don't inflate row height mid-load.
+- Skip redundant full-table column visibility passes after batched renders unless columns changed mid-render.
+- Time-slice batched rendering with a frame budget to reduce main-thread stalls on large tables.
+- Gate inactive-tab prefetch on cold-cache loads and defer it until the first render completes.
+- Enable gzip compression for JSON/CSV API payloads to reduce cold-start transfer time.
+- Cache per-row display values, defer hidden heavy columns, merge deferred hydration passes, and increase batch size to reduce render overhead.
+- Lazily compute light column display values when hidden and hydrate them when columns become visible.
+- Skip filter passes when no query is active and memoize sorted results to avoid repeat sorts on stable data.
+
+### UI and columns
+
+- Add grouped column toggles for Playback and Language columns.
+- Add Date Added column for Sonarr and Radarr views.
+- Hide Date Added by default (available via Columns).
+- Add Radarr bitrate column with estimated fallback when media info is missing.
+- Hold the Tautulli matching notice until the first table render (chips visible).
+- Increase row refresh icon size and contrast in light/dark themes.
+- Spin the row refresh icon while per-row refresh is pending.
+- Mark per-row refreshes as partial when Tautulli is skipped or pending so the notice reflects missing playback data.
+- Stabilize Match Status pill width to reduce column jitter during row refreshes.
+- Restore filled Match Status pill backgrounds for clearer status emphasis.
+- Add purple/cyan pill styling for Future release and Not on disk statuses.
+- Lock column widths during batched renders to reduce post-sort jitter.
+- Clear stale column width locks between rapid sorts.
+- Add subtle per-column dividers (toggle by setting `--col-divider-color`).
+- Center table headers and data cells (keep Title, Path, Audio Codec left-aligned).
+- Animate and dim rows while per-row refresh is pending.
+- Clamp Audio Codec cell content to keep the column from expanding.
+- Trigger a one-time post-load re-render to stabilize initial column widths.
+- Re-run the column-width stabilization pass after tab or instance chip switches.
+- Add optional render debug flags to disable batching, deferred columns, width locks, or stabilization.
+- Disable deferred heavy-column hydration by default (toggleable via render flags).
+
+### Diagnostics
+
+- Log Arr JSON decode failures with response snippets for faster diagnosis.
+- Add sanitized `X-Sortarr-Error` headers when Arr fetches fail so the UI can surface hints.
+- Add optional per-item refresh timing output (timing=1) for row refresh diagnosis.
+- Add detailed Tautulli fetch timing breakdowns to the per-item timing output.
+
 ## 0.6.7
 
 - Align app version metadata with the 0.6.7 release.

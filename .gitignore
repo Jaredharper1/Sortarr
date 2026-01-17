@@ -1,5 +1,6 @@
 data/
 references/
+.vscode/
 smoke_test.py
 selenium_stress_test.py
 tautulli_id_match_test.py

@@ -20,6 +20,7 @@
         </div>
 
         <button id="loadBtn" title="Fetch fresh data from Sonarr/Radarr/Tautulli and update the cache">Fetch New Data</button>
+        <button id="refreshTabBtn" title="Refresh only the active tab and cache">Refresh Current Tab</button>
         <button id="resetUiBtn" title="Clear UI settings and reload cached data">Reset UI</button>
         <button id="settingsBtn" title="Open setup">Settings</button>
         <div class="column-menu">
@@ -40,6 +41,7 @@
   <div class="column-group">
     <div class="column-group-title">Core</div>
     <label class="column-row"><input type="checkbox" data-col="Title" /> Title</label>
+    <label class="column-row"><input type="checkbox" data-col="DateAdded" /> Date Added</label>
     <label class="column-row"><input type="checkbox" data-col="Instance" /> Instance</label>
     <label class="column-row"><input type="checkbox" data-col="Path" /> Path</label>
   </div>
@@ -55,6 +57,7 @@
             <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> Runtime (min)</label>
             <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> Size (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
+            <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> Bitrate (Mbps)</label>
           </div>
   <div class="column-group">
     <div class="column-group-title">Video</div>
@@ -65,6 +68,7 @@
   </div>
   <div class="column-group">
     <div class="column-group-title">Audio</div>
+    <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> Language columns</label>
     <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
     <label class="column-row"><input type="checkbox" data-col="AudioProfile" /> Audio Profile</label>
     <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
@@ -73,6 +77,7 @@
   </div>
   <div class="column-group">
     <div class="column-group-title">Playback (Tautulli)</div>
+    <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> Playback columns</label>
     <label class="column-row"><input type="checkbox" data-col="TautulliMatchStatus" /> Match Status</label>
     <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> Diagnostics</label>
     <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
@@ -110,7 +115,7 @@
             <input
               id="advancedFilter"
               class="advanced-filter"
-              placeholder="Advanced filtering examples: path:C:\ | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
+              placeholder="Advanced filtering examples: path:C:\ | dateadded:2024 | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
             />
           </div>
           <div class="filter-controls">
@@ -119,8 +124,8 @@
           </div>
         </div>
         <div id="advancedHelp" class="advanced-help hidden">
-          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr
-          Fields: title, titleslug, tmdbid, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiochannels, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
+          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr
+          Fields: title, titleslug, tmdbid, dateadded, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiochannels, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
         </div>
         <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="chip-wrap">
@@ -229,8 +234,11 @@
           <div class="status-value" id="cacheStatus">--</div>
         </div>
         <div class="status-actions">
-          <button id="refreshTautulliBtn" title="Refresh Tautulli matching in the background">Refresh Tautulli only</button>
-          <button id="clearCachesBtn" title="Clear caches and trigger a full rescan">Clear caches &amp; re-scan</button>
+          <button id="refreshSonarrBtn" title="Reload all Sonarr series data in Sortarr">Refresh Sonarr data</button>
+          <button id="refreshRadarrBtn" title="Reload all Radarr movie data in Sortarr">Refresh Radarr data</button>
+          <button id="refreshTautulliBtn" title="Rebuild Tautulli matches for existing library data">Refresh Tautulli matches</button>
+          <button id="deepRefreshTautulliBtn" title="Refresh Tautulli libraries/media info, then rebuild matches">Refresh Tautulli media + matches</button>
+          <button id="clearCachesBtn" title="Clear Sortarr caches and reload Sonarr/Radarr (and Tautulli if configured)">Clear cached data</button>
         </div>
         <div class="status-complete hidden" id="statusCompleteNote">All data is up to date. Hiding in 5s…</div>
       </div>
@@ -247,6 +255,7 @@
         <thead>
           <tr>
             <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
+            <th data-sort="DateAdded" data-col="DateAdded">Date Added <span class="sort-indicator"></span></th>
             <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
 
             <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Runtime (hh:mm) <span class="sort-indicator"></span></th>
@@ -257,6 +266,7 @@
             <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
             <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">GiB / Hour <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">Bitrate (Mbps) <span class="sort-indicator"></span></th>
 
             <th data-sort="VideoQuality" data-col="VideoQuality">Video Quality <span class="sort-indicator"></span></th>
             <th data-sort="Resolution" data-col="Resolution">Resolution <span class="sort-indicator"></span></th>

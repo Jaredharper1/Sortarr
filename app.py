@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import re
 import time
 import datetime
@@ -14,13 +15,26 @@ from functools import wraps
 
 import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
+from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.7"
+APP_VERSION = "0.6.8"
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
+SAFE_TAUTULLI_REFRESH_BUCKETS = {
+    "TVDB ID",
+    "TMDB ID",
+    "IMDB ID",
+    "Title + year",
+}
 
 app = Flask(__name__)
+app.config.update(
+    COMPRESS_MIMETYPES=["application/json", "text/csv"],
+    COMPRESS_MIN_SIZE=500,
+    COMPRESS_STREAMS=False,
+)
+Compress(app)
 
 LOG_LEVEL = os.environ.get("SORTARR_LOG_LEVEL", "INFO").upper()
 if not logging.getLogger().handlers:
@@ -33,11 +47,132 @@ logger.setLevel(LOG_LEVEL)
 
 _http = requests.Session()
 
-_cache = {
-    "sonarr": {},
-    "radarr": {},
-    "tautulli": {"ts": 0, "data": {}},
-}
+class CacheManager:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._store = {
+            "sonarr": {},
+            "radarr": {},
+            "tautulli": {"ts": 0, "data": {}},
+        }
+
+    @staticmethod
+    def _safe_int(value) -> int:
+        try:
+            return int(float(value))
+        except (TypeError, ValueError):
+            return 0
+
+    @staticmethod
+    def _safe_ts(value) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _clone_rows(rows) -> list[dict]:
+        if not isinstance(rows, list):
+            return []
+        return [dict(row) for row in rows]
+
+    def _clone_entry(self, entry: dict) -> dict:
+        return {
+            "ts": self._safe_ts(entry.get("ts")),
+            "tautulli_index_ts": self._safe_int(entry.get("tautulli_index_ts")),
+            "data": self._clone_rows(entry.get("data") or []),
+        }
+
+    def clear_app(self, app_name: str) -> None:
+        with self._lock:
+            store = self._store.get(app_name)
+            if store is not None:
+                store.clear()
+
+    def clear_all(self) -> None:
+        with self._lock:
+            self._store["sonarr"].clear()
+            self._store["radarr"].clear()
+            self._store["tautulli"] = {"ts": 0, "data": {}}
+
+    def get_app_snapshot(self, app_name: str) -> dict[str, dict]:
+        with self._lock:
+            store = self._store.get(app_name, {})
+            return {
+                str(instance_id): self._clone_entry(entry)
+                for instance_id, entry in store.items()
+            }
+
+    def get_app_entry_snapshot(self, app_name: str, instance_id: str) -> dict | None:
+        key = str(instance_id)
+        with self._lock:
+            entry = self._store.get(app_name, {}).get(key)
+            return self._clone_entry(entry) if entry else None
+
+    def set_app_entry(
+        self,
+        app_name: str,
+        instance_id: str,
+        data: list[dict],
+        ts: float | int = 0,
+        tautulli_index_ts: int = 0,
+    ) -> None:
+        key = str(instance_id)
+        with self._lock:
+            store = self._store.setdefault(app_name, {})
+            store[key] = {
+                "ts": self._safe_ts(ts),
+                "tautulli_index_ts": self._safe_int(tautulli_index_ts),
+                "data": self._clone_rows(data),
+            }
+
+    def update_app_entry(
+        self,
+        app_name: str,
+        instance_id: str,
+        data: list[dict] | None = None,
+        ts: float | int | None = None,
+        tautulli_index_ts: int | None = None,
+    ) -> None:
+        key = str(instance_id)
+        with self._lock:
+            store = self._store.setdefault(app_name, {})
+            entry = store.get(key)
+            if not entry:
+                entry = {"ts": 0, "tautulli_index_ts": 0, "data": []}
+            if data is not None:
+                entry["data"] = self._clone_rows(data)
+            if ts is not None:
+                entry["ts"] = self._safe_ts(ts)
+            if tautulli_index_ts is not None:
+                entry["tautulli_index_ts"] = self._safe_int(tautulli_index_ts)
+            store[key] = entry
+
+    def get_tautulli_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["tautulli"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
+    def set_tautulli(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            # Tautulli index is treated as immutable after storage.
+            self._store["tautulli"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
+
+    def snapshot_app_for_save(self, app_name: str) -> dict[str, dict]:
+        with self._lock:
+            store = self._store.get(app_name, {})
+            return {
+                str(instance_id): self._clone_entry(entry)
+                for instance_id, entry in store.items()
+            }
+
+
+_cache = CacheManager()
 _tautulli_match_progress = {"shows": None, "movies": None}
 _tautulli_match_progress_lock = threading.Lock()
 
@@ -58,27 +193,96 @@ ENV_FILE_PATH = os.environ.get(
 )
 _env_loaded = False
 _env_mtime = None
+_env_lock = threading.Lock()
 _startup_migrated = False
 _tautulli_refresh_seen = None
 _arr_refresh_state = {
     "sonarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
     "radarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
 }
+_arr_cache_save_state = {
+    "sonarr": {"lock": threading.Lock(), "in_progress": False, "pending": None},
+    "radarr": {"lock": threading.Lock(), "in_progress": False, "pending": None},
+}
+_perf_sink_module = None
+_perf_sink_checked = False
+
+
+def _get_perf_sink():
+    global _perf_sink_module, _perf_sink_checked
+    if _perf_sink_checked:
+        return _perf_sink_module
+    _perf_sink_checked = True
+    tests_dir = os.path.join(os.path.dirname(__file__), "tests")
+    if os.path.isdir(tests_dir) and tests_dir not in sys.path:
+        sys.path.insert(0, tests_dir)
+    try:
+        import perf_sink
+
+        _perf_sink_module = perf_sink
+    except Exception as exc:
+        logger.info("Perf sink unavailable: %s", exc)
+        _perf_sink_module = None
+    return _perf_sink_module
+
+
+def _record_perf_entry(entry: dict) -> str | None:
+    if not entry:
+        return None
+    perf_sink = _get_perf_sink()
+    if not perf_sink:
+        return None
+    try:
+        return perf_sink.record_perf(entry)
+    except Exception as exc:
+        logger.warning("Perf sink write failed: %s", exc)
+        return None
+
+
+def _record_timing(timing: dict | None, key: str, start: float) -> None:
+    if timing is None:
+        return
+    timing[key] = round((time.perf_counter() - start) * 1000)
+
+
+def _add_timing_ms(timing: dict | None, key: str, elapsed_seconds: float) -> None:
+    if timing is None:
+        return
+    timing[key] = timing.get(key, 0) + round(elapsed_seconds * 1000)
+
+
+def _format_timing_header(timing: dict | None) -> str:
+    if not timing:
+        return ""
+    parts = []
+    for key, value in timing.items():
+        if value is None:
+            continue
+        parts.append(f"{key}={value}ms")
+    return ", ".join(parts)
+
+
+def _attach_timing_headers(resp, timing: dict | None) -> None:
+    header = _format_timing_header(timing)
+    if not header:
+        return
+    resp.headers["X-Sortarr-Timing"] = header
 
 
 def _ensure_env_loaded():
     global _env_loaded, _env_mtime
-    try:
-        mtime = os.path.getmtime(ENV_FILE_PATH)
-    except OSError:
-        mtime = None
-    if _env_loaded and mtime is None:
-        return
-    if _env_loaded and _env_mtime is not None and mtime == _env_mtime:
-        return
-    _load_env_file(ENV_FILE_PATH, override=True)
-    _env_loaded = True
-    _env_mtime = mtime
+    with _env_lock:
+        try:
+            mtime = os.path.getmtime(ENV_FILE_PATH)
+        except OSError:
+            mtime = None
+        if _env_loaded and mtime is None:
+            return
+        if _env_loaded and _env_mtime is not None and mtime == _env_mtime:
+            return
+        _load_env_file(ENV_FILE_PATH, override=True)
+        _env_loaded = True
+        _env_mtime = mtime
 
 
 def _parse_env_value(value: str) -> str:
@@ -107,6 +311,16 @@ def _read_int_env(key: str, default: int) -> int:
         return int(os.environ.get(key, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _read_arr_timeout_seconds(app_name: str) -> int:
+    if app_name == "sonarr":
+        value = _read_int_env("SONARR_TIMEOUT_SECONDS", 90)
+    elif app_name == "radarr":
+        value = _read_int_env("RADARR_TIMEOUT_SECONDS", 90)
+    else:
+        value = 90
+    return value if value >= 0 else 45
 
 
 def _safe_log_path(path: str) -> str:
@@ -371,10 +585,7 @@ def _apply_startup_migrations() -> None:
             except OSError:
                 _env_mtime = None
 
-    _cache["sonarr"].clear()
-    _cache["radarr"].clear()
-    _cache["tautulli"]["ts"] = 0
-    _cache["tautulli"]["data"] = {}
+    _cache.clear_all()
     _wipe_cache_files()
     if version_changed:
         _save_startup_state(state_path, {"app_version": APP_VERSION})
@@ -504,10 +715,7 @@ def _config_complete(cfg: dict) -> bool:
 
 
 def _invalidate_cache():
-    _cache["sonarr"].clear()
-    _cache["radarr"].clear()
-    _cache["tautulli"]["ts"] = 0
-    _cache["tautulli"]["data"] = {}
+    _cache.clear_all()
     cfg = _get_config()
     for path in (cfg.get("sonarr_cache_path"), cfg.get("radarr_cache_path")):
         if not path:
@@ -521,7 +729,8 @@ def _invalidate_cache():
 def _collect_cached_rows(app_name: str) -> tuple[list[dict], int]:
     rows: list[dict] = []
     latest_ts = 0
-    for entry in (_cache.get(app_name) or {}).values():
+    store = _cache.get_app_snapshot(app_name)
+    for entry in store.values():
         data = entry.get("data")
         if isinstance(data, list):
             rows.extend(data)
@@ -531,7 +740,8 @@ def _collect_cached_rows(app_name: str) -> tuple[list[dict], int]:
 
 def _collect_cache_latest_ts(app_name: str) -> int:
     latest_ts = 0
-    for entry in (_cache.get(app_name) or {}).values():
+    store = _cache.get_app_snapshot(app_name)
+    for entry in store.values():
         latest_ts = max(latest_ts, _safe_int(entry.get("ts")))
     return latest_ts
 
@@ -644,6 +854,8 @@ def _arr_get(
     path: str,
     params: dict | None = None,
     timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    app_name: str | None = None,
 ):
     if not base_url:
         raise RuntimeError("Base URL is not set")
@@ -652,10 +864,167 @@ def _arr_get(
 
     url = f"{base_url}{path}"
     headers = {"X-Api-Key": api_key}
-    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
-    r = _http.get(url, headers=headers, params=params, timeout=request_timeout)
+    if isinstance(timeout, (int, float)):
+        if timeout == 0:
+            request_timeout = None
+        elif timeout > 0:
+            request_timeout = timeout
+        else:
+            request_timeout = 45
+    else:
+        request_timeout = _read_arr_timeout_seconds(app_name or "")
+        if request_timeout == 0:
+            request_timeout = None
+        elif request_timeout < 0:
+            request_timeout = 45
+    http = session or _http
+    r = http.get(url, headers=headers, params=params, timeout=request_timeout)
     r.raise_for_status()
-    return r.json()
+    try:
+        return r.json()
+    except ValueError:
+        snippet = (r.text or "").strip().replace("\n", " ")[:500]
+        logger.warning(
+            "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
+            app_name or "unknown",
+            r.status_code,
+            url,
+            snippet,
+        )
+        raise
+
+
+def _arr_post(
+    base_url: str,
+    api_key: str,
+    path: str,
+    payload: dict,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    app_name: str | None = None,
+):
+    if not base_url:
+        raise RuntimeError("Base URL is not set")
+    if not api_key:
+        raise RuntimeError("API key is not set")
+
+    url = f"{base_url}{path}"
+    headers = {"X-Api-Key": api_key}
+    if isinstance(timeout, (int, float)):
+        if timeout == 0:
+            request_timeout = None
+        elif timeout > 0:
+            request_timeout = timeout
+        else:
+            request_timeout = 45
+    else:
+        request_timeout = _read_arr_timeout_seconds(app_name or "")
+        if request_timeout == 0:
+            request_timeout = None
+        elif request_timeout < 0:
+            request_timeout = 45
+    http = session or _http
+    r = http.post(url, headers=headers, json=payload, timeout=request_timeout)
+    r.raise_for_status()
+    try:
+        return r.json()
+    except ValueError:
+        snippet = (r.text or "").strip().replace("\n", " ")[:500]
+        logger.warning(
+            "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
+            app_name or "unknown",
+            r.status_code,
+            url,
+            snippet,
+        )
+        raise
+
+
+def _arr_command_name(app_name: str) -> str:
+    return "RefreshSeries" if app_name == "sonarr" else "RefreshMovie"
+
+
+def _resolve_arr_instance(instances: list[dict], instance_id: str | None) -> dict | None:
+    if not instances:
+        return None
+    if instance_id:
+        for inst in instances:
+            if str(inst.get("id") or "") == instance_id:
+                return inst
+        return None
+    if len(instances) == 1:
+        return instances[0]
+    return None
+
+
+def _parse_arr_item_id(value) -> int | None:
+    if value is None:
+        return None
+    num = _safe_int(value)
+    return num if num > 0 else None
+
+
+def _arr_command_refresh_all(app_name: str, instances: list[dict]) -> dict:
+    command = _arr_command_name(app_name)
+    started = 0
+    errors = []
+    for inst in instances:
+        try:
+            _arr_post(
+                inst.get("url") or "",
+                inst.get("api_key") or "",
+                "/api/v3/command",
+                {"name": command},
+                app_name=app_name,
+            )
+            started += 1
+        except Exception as exc:
+            errors.append(
+                {
+                    "instance_id": inst.get("id") or "",
+                    "error": _arr_error_hint(app_name, exc),
+                }
+            )
+    return {"started": started, "errors": errors}
+
+
+def _arr_command_refresh_item(app_name: str, instance: dict, item_id: int) -> None:
+    command = _arr_command_name(app_name)
+    payload = {"name": command}
+    if app_name == "sonarr":
+        payload["seriesId"] = item_id
+    else:
+        payload["movieId"] = item_id
+        payload["movieIds"] = [item_id]
+    _arr_post(
+        instance.get("url") or "",
+        instance.get("api_key") or "",
+        "/api/v3/command",
+        payload,
+        app_name=app_name,
+    )
+
+
+def _arr_error_hint(app_name: str, exc: Exception) -> str:
+    label = "Sonarr" if app_name == "sonarr" else "Radarr" if app_name == "radarr" else "Arr"
+    if isinstance(exc, RuntimeError):
+        message = str(exc).strip()
+        if message == "Base URL is not set":
+            return f"{label} base URL is not set."
+        if message == "API key is not set":
+            return f"{label} API key is not set."
+    if isinstance(exc, requests.HTTPError):
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"{label} request failed (HTTP {status})."
+    if isinstance(exc, requests.Timeout):
+        return f"{label} request timed out."
+    if isinstance(exc, requests.ConnectionError):
+        return f"{label} connection failed."
+    if isinstance(exc, ValueError):
+        return f"{label} returned invalid JSON."
+    if isinstance(exc, requests.RequestException):
+        return f"{label} request failed."
+    return f"{label} request failed."
 
 
 def _arr_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str | None:
@@ -697,6 +1066,19 @@ def _safe_int(value) -> int:
         return int(float(value))
     except (TypeError, ValueError):
         return 0
+
+
+def _safe_float(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clone_rows(rows) -> list[dict]:
+    if not isinstance(rows, list):
+        return []
+    return [dict(row) for row in rows]
 
 
 def _normalize_epoch(value) -> int:
@@ -974,6 +1356,22 @@ def _load_arr_cache(path: str) -> dict[str, dict]:
     return cache
 
 
+def _clone_arr_cache(cache: dict[str, dict]) -> dict[str, dict]:
+    if not isinstance(cache, dict):
+        return {}
+    snapshot: dict[str, dict] = {}
+    for key, entry in cache.items():
+        if not isinstance(entry, dict):
+            continue
+        data = entry.get("data")
+        snapshot[str(key)] = {
+            "ts": _safe_int(entry.get("ts")),
+            "tautulli_index_ts": _safe_int(entry.get("tautulli_index_ts")),
+            "data": _clone_rows(data if isinstance(data, list) else []),
+        }
+    return snapshot
+
+
 def _save_arr_cache(path: str, cache: dict[str, dict]) -> None:
     if not path:
         return
@@ -989,6 +1387,65 @@ def _save_arr_cache(path: str, cache: dict[str, dict]) -> None:
         os.replace(tmp_path, path)
     except OSError:
         logger.warning("Failed to write Arr cache (path redacted).")
+
+
+def _queue_arr_cache_save(
+    app_name: str,
+    cache_path: str | None,
+    disk_cache: dict[str, dict],
+    reason: str,
+) -> bool:
+    if not cache_path:
+        return False
+    state = _arr_cache_save_state.get(app_name)
+    if not state:
+        return False
+    snapshot = _clone_arr_cache(disk_cache)
+    payload = {"path": cache_path, "cache": snapshot, "reason": reason}
+    with state["lock"]:
+        if state.get("in_progress"):
+            state["pending"] = payload
+            return False
+        state["in_progress"] = True
+
+    def worker(initial):
+        payload = initial
+        while payload:
+            start = time.perf_counter()
+            try:
+                _save_arr_cache(payload["path"], payload["cache"])
+                elapsed = time.perf_counter() - start
+                logger.info(
+                    "%s cache write completed in %.2fs (context=%s, instances=%s).",
+                    app_name.title(),
+                    elapsed,
+                    payload.get("reason") or "unknown",
+                    len(payload.get("cache") or {}),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "%s cache write failed (context=%s): %s",
+                    app_name.title(),
+                    payload.get("reason") or "unknown",
+                    exc,
+                )
+            with state["lock"]:
+                pending = state.get("pending")
+                if pending:
+                    payload = pending
+                    state["pending"] = None
+                else:
+                    state["in_progress"] = False
+                    payload = None
+
+    thread = threading.Thread(
+        target=worker,
+        args=(payload,),
+        name=f"sortarr-{app_name}-cache-save",
+        daemon=True,
+    )
+    thread.start()
+    return True
 
 
 def _check_deadline(deadline: float | None, label: str):
@@ -1158,6 +1615,19 @@ def _normalize_duration_seconds(value) -> int:
     return seconds
 
 
+def _tautulli_pick_rating_key(item: dict) -> str:
+    for key in ("grandparent_rating_key", "parent_rating_key", "rating_key"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _tautulli_pick_section_id(item: dict) -> str:
+    value = item.get("section_id")
+    return str(value) if value else ""
+
+
 def _tautulli_raw_stats_from_item(item: dict) -> dict:
     play_count = _safe_int(
         item.get("play_count")
@@ -1206,6 +1676,9 @@ def _tautulli_raw_stats_from_item(item: dict) -> dict:
         total_duration = duration * play_count
         total_source = "duration_x_play_count"
 
+    rating_key = _tautulli_pick_rating_key(item)
+    section_id = _tautulli_pick_section_id(item)
+
     return {
         "play_count": play_count,
         "users_watched": users_watched,
@@ -1213,6 +1686,8 @@ def _tautulli_raw_stats_from_item(item: dict) -> dict:
         "total_seconds": total_duration,
         "duration_seconds": duration,
         "total_seconds_source": total_source,
+        "rating_key": rating_key,
+        "section_id": section_id,
     }
 
 
@@ -1259,6 +1734,11 @@ def _tautulli_merge_raw(target: dict, raw: dict):
         target_ids.update(raw_ids)
         target["user_ids"] = target_ids
 
+    if raw.get("rating_key") and not target.get("rating_key"):
+        target["rating_key"] = raw.get("rating_key")
+    if raw.get("section_id") and not target.get("section_id"):
+        target["section_id"] = raw.get("section_id")
+
 
 def _tautulli_apply_history(target: dict, raw: dict):
     raw_total = _safe_int(raw.get("total_seconds"))
@@ -1272,8 +1752,8 @@ def _tautulli_apply_history(target: dict, raw: dict):
         target["user_ids"] = target_ids
     if _safe_int(raw.get("last_epoch")):
         target["last_epoch"] = max(_safe_int(target.get("last_epoch")), _safe_int(raw.get("last_epoch")))
-    if _safe_int(raw.get("play_count")):
-        target["play_count"] = max(_safe_int(target.get("play_count")), _safe_int(raw.get("play_count")))
+    if _safe_int(raw.get("play_count")) and not _safe_int(target.get("play_count")):
+        target["play_count"] = _safe_int(raw.get("play_count"))
 
 
 def _tautulli_raw_history_stats_from_item(item: dict) -> dict:
@@ -1399,6 +1879,104 @@ def _tautulli_fetch_history(
         start += length
 
     return items
+
+
+def _tautulli_refresh_library_media_info(
+    base_url: str,
+    api_key: str,
+    section_id: str | int | None = None,
+    rating_key: str | int | None = None,
+    timeout: int | float | None = None,
+) -> bool:
+    if not section_id and not rating_key:
+        return False
+    try:
+        params = {
+            "start": 0,
+            "length": 1,
+            "refresh": "true",
+        }
+        if rating_key:
+            params["rating_key"] = rating_key
+        else:
+            params["section_id"] = section_id
+        _tautulli_get(
+            base_url,
+            api_key,
+            "get_library_media_info",
+            params=params,
+            timeout=timeout,
+        )
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        logger.warning(
+            "Tautulli media info refresh failed for section_id=%s rating_key=%s: %s",
+            section_id,
+            rating_key,
+            exc,
+        )
+        return False
+    return True
+
+
+def _tautulli_refresh_library_type(
+    cfg: dict,
+    media_type: str,
+    timeout: int | float | None = None,
+) -> int:
+    if media_type not in ("show", "movie"):
+        return 0
+    base_url = cfg.get("tautulli_url") or ""
+    api_key = cfg.get("tautulli_api_key") or ""
+    if not base_url or not api_key:
+        return 0
+    try:
+        _tautulli_get(
+            base_url,
+            api_key,
+            "refresh_libraries_list",
+            timeout=timeout,
+        )
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        logger.warning("Tautulli libraries list refresh failed: %s", exc)
+
+    libraries = []
+    try:
+        data = _tautulli_get(
+            base_url,
+            api_key,
+            "get_libraries",
+            timeout=timeout,
+        )
+        if isinstance(data, dict) and "libraries" in data:
+            libraries = data.get("libraries") or []
+        elif isinstance(data, list):
+            libraries = data
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        logger.warning("Tautulli libraries list fetch failed: %s", exc)
+        return 0
+
+    refreshed = 0
+    for lib in libraries or []:
+        section_type = str(lib.get("section_type") or lib.get("type") or "").lower()
+        if section_type != media_type:
+            continue
+        section_id = lib.get("section_id") or lib.get("id")
+        if not section_id:
+            continue
+        if _tautulli_refresh_library_media_info(
+            base_url,
+            api_key,
+            section_id=section_id,
+            timeout=timeout,
+        ):
+            refreshed += 1
+    if refreshed:
+        logger.info(
+            "Tautulli %s library refresh requested for %s sections.",
+            media_type,
+            refreshed,
+        )
+    return refreshed
 
 
 def _tautulli_merge_into(store: dict, key, raw: dict):
@@ -1589,9 +2167,7 @@ def _tautulli_build_index(
         "title_variant",
     ]:
         for key, raw in episode_agg[bucket].items():
-            if key in index[bucket]:
-                _tautulli_merge_raw(index[bucket][key], raw)
-            else:
+            if key not in index[bucket]:
                 index[bucket][key] = raw
 
     return index
@@ -1684,15 +2260,19 @@ def _tautulli_build_history_index(
     return index
 
 
-def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
+def _get_tautulli_index(
+    cfg: dict,
+    force: bool = False,
+    timing: dict | None = None,
+) -> dict | None:
     if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
         return None
 
-    entry = _cache["tautulli"]
-    if not force and entry.get("data"):
-        return entry["data"]
+    cached_data, _ = _cache.get_tautulli_state()
+    if not force and cached_data:
+        return cached_data
 
-    if force or not entry.get("data"):
+    if force or not cached_data:
         now = time.time()
         request_timeout = _safe_int(cfg.get("tautulli_timeout_seconds"))
         if request_timeout <= 0:
@@ -1779,21 +2359,25 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 return {}
             _check_deadline(fetch_deadline, "Tautulli fetch")
             metadata_lookups += 1
+            lookup_start = time.perf_counter()
             ids = _tautulli_metadata_ids_uncached(
                 cfg["tautulli_url"],
                 cfg["tautulli_api_key"],
                 key,
                 timeout=request_timeout,
             )
+            _add_timing_ms(timing, "tautulli_metadata_lookup_ms", time.perf_counter() - lookup_start)
             note_fetch_progress()
             return _store_metadata_ids(key, ids)
         _check_deadline(fetch_deadline, "Tautulli fetch")
+        libraries_start = time.perf_counter()
         libraries = _tautulli_get(
             cfg["tautulli_url"],
             cfg["tautulli_api_key"],
             "get_libraries",
             timeout=request_timeout,
         )
+        _record_timing(timing, "tautulli_fetch_libraries_ms", libraries_start)
         note_fetch_progress()
         if isinstance(libraries, dict) and "libraries" in libraries:
             libraries = libraries.get("libraries")
@@ -1807,6 +2391,7 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             section_id = lib.get("section_id") or lib.get("id")
             if not section_id:
                 continue
+            items_start = time.perf_counter()
             items = _tautulli_fetch_library_items(
                 cfg["tautulli_url"],
                 cfg["tautulli_api_key"],
@@ -1815,11 +2400,16 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 deadline=fetch_deadline,
                 progress=note_fetch_progress,
             )
+            items_elapsed = time.perf_counter() - items_start
+            _add_timing_ms(timing, "tautulli_fetch_items_ms", items_elapsed)
             if section_type == "show":
+                _add_timing_ms(timing, "tautulli_fetch_items_show_ms", items_elapsed)
                 shows_items.extend(items)
             else:
+                _add_timing_ms(timing, "tautulli_fetch_items_movie_ms", items_elapsed)
                 movies_items.extend(items)
 
+        history_start = time.perf_counter()
         history_items = _tautulli_fetch_history(
             cfg["tautulli_url"],
             cfg["tautulli_api_key"],
@@ -1827,6 +2417,7 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             deadline=fetch_deadline,
             progress=note_fetch_progress,
         )
+        _record_timing(timing, "tautulli_fetch_history_ms", history_start)
 
         def _collect_metadata_keys(items: list[dict], media_type: str, history: bool = False) -> set[str]:
             keys = set()
@@ -1888,6 +2479,7 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 if session is None:
                     session = requests.Session()
                     thread_local.session = session
+                key_start = time.perf_counter()
                 ids = _tautulli_metadata_ids_uncached(
                     cfg["tautulli_url"],
                     cfg["tautulli_api_key"],
@@ -1895,6 +2487,7 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                     timeout=request_timeout,
                     session=session,
                 )
+                _add_timing_ms(timing, "tautulli_metadata_lookup_ms", time.perf_counter() - key_start)
                 note_fetch_progress()
                 return key, ids
 
@@ -1916,23 +2509,37 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
             metadata_keys.update(_collect_metadata_keys(movies_items, "movie"))
             metadata_keys.update(_collect_metadata_keys(history_items, "show", history=True))
             metadata_keys.update(_collect_metadata_keys(history_items, "movie", history=True))
+            prefetch_start = time.perf_counter()
             _prefetch_metadata(metadata_keys)
+            _record_timing(timing, "tautulli_metadata_prefetch_ms", prefetch_start)
+        shows_build_start = time.perf_counter()
         shows_index = _tautulli_build_index(shows_items, "show", metadata_lookup=metadata_lookup)
+        logger.info("Tautulli show index built in %.2fs.", time.perf_counter() - shows_build_start)
+        _record_timing(timing, "tautulli_build_shows_ms", shows_build_start)
+        movies_build_start = time.perf_counter()
         movies_index = _tautulli_build_index(movies_items, "movie", metadata_lookup=metadata_lookup)
+        logger.info("Tautulli movie index built in %.2fs.", time.perf_counter() - movies_build_start)
+        _record_timing(timing, "tautulli_build_movies_ms", movies_build_start)
         strict_show_ids = _build_strict_title_year_id_map(shows_items, "show", metadata_lookup=metadata_lookup)
         strict_movie_ids = _build_strict_title_year_id_map(movies_items, "movie", metadata_lookup=metadata_lookup)
+        history_show_start = time.perf_counter()
         history_shows = _tautulli_build_history_index(
             history_items,
             "show",
             metadata_lookup=metadata_lookup,
             strict_id_map=strict_show_ids,
         )
+        logger.info("Tautulli show history index built in %.2fs.", time.perf_counter() - history_show_start)
+        _record_timing(timing, "tautulli_build_history_shows_ms", history_show_start)
+        history_movie_start = time.perf_counter()
         history_movies = _tautulli_build_history_index(
             history_items,
             "movie",
             metadata_lookup=metadata_lookup,
             strict_id_map=strict_movie_ids,
         )
+        logger.info("Tautulli movie history index built in %.2fs.", time.perf_counter() - history_movie_start)
+        _record_timing(timing, "tautulli_build_history_movies_ms", history_movie_start)
 
         for bucket in [
             "tvdb",
@@ -1956,11 +2563,12 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 else:
                     movies_index[bucket][key] = raw
 
-        entry["data"] = {
+        index = {
             "shows": shows_index,
             "movies": movies_index,
         }
-        entry["ts"] = now
+        _cache.set_tautulli(index, now)
+        cached_data = index
         _maybe_save_metadata_cache(force=True)
         if metadata_lookups:
             logger.info(
@@ -1975,19 +2583,16 @@ def _get_tautulli_index(cfg: dict, force: bool = False) -> dict | None:
                 lookup_seconds,
             )
 
-    return entry["data"]
+    return cached_data
 
 
 def _get_tautulli_index_cached() -> dict | None:
-    entry = _cache["tautulli"]
-    return entry.get("data") or None
+    data, _ = _cache.get_tautulli_state()
+    return data
 
 
 def _get_tautulli_index_state() -> tuple[dict | None, int]:
-    entry = _cache["tautulli"]
-    data = entry.get("data") or None
-    ts = _safe_int(entry.get("ts")) if data else 0
-    return data, ts
+    return _cache.get_tautulli_state()
 
 
 def _tautulli_refresh_lock_path() -> str:
@@ -2019,8 +2624,8 @@ def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
         return
     if _tautulli_refresh_seen is None or mtime > _tautulli_refresh_seen:
         _tautulli_refresh_seen = mtime
-        _cache["sonarr"].clear()
-        _cache["radarr"].clear()
+        _cache.clear_app("sonarr")
+        _cache.clear_app("radarr")
 
 
 def _tautulli_refresh_lock_age(lock_path: str) -> float | None:
@@ -2083,16 +2688,16 @@ def _release_tautulli_refresh_lock(lock_path: str, fd) -> None:
 
 
 def _apply_tautulli_to_caches(cfg: dict, index: dict) -> None:
-    index_ts = _safe_int(_cache.get("tautulli", {}).get("ts"))
+    _, index_ts = _cache.get_tautulli_state()
     totals = {"shows": 0, "movies": 0}
     progress_instances: dict[str, dict[str, set[str]]] = {}
     disk_caches: dict[str, dict[str, dict]] = {}
 
     for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
-        store = _cache.get(app_name, {})
+        memory_snapshot = _cache.get_app_snapshot(app_name)
         memory_ids: set[str] = set()
         memory_total = 0
-        for instance_id, entry in store.items():
+        for instance_id, entry in memory_snapshot.items():
             data = entry.get("data")
             if isinstance(data, list) and data:
                 memory_ids.add(str(instance_id))
@@ -2115,22 +2720,33 @@ def _apply_tautulli_to_caches(cfg: dict, index: dict) -> None:
         totals[media_type] = memory_total + disk_only_total
         progress_instances[app_name] = {
             "disk_only": disk_only_ids,
+            "memory_ids": memory_ids,
         }
 
     _init_tautulli_match_progress(totals)
 
     for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
-        store = _cache.get(app_name, {})
         disk_only_ids = progress_instances.get(app_name, {}).get("disk_only", set())
+        memory_ids = progress_instances.get(app_name, {}).get("memory_ids", set())
 
-        for instance_id, entry in store.items():
-            _apply_tautulli_stats_once(
+        for instance_id in memory_ids:
+            entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+            if not entry:
+                continue
+            if _apply_tautulli_stats_once(
                 entry,
                 index,
                 media_type,
                 index_ts,
                 progress_media_type=media_type,
-            )
+            ):
+                _cache.update_app_entry(
+                    app_name,
+                    instance_id,
+                    data=entry.get("data") or [],
+                    ts=entry.get("ts") or 0,
+                    tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                )
 
         cache_info = disk_caches.get(app_name, {})
         cache_path = cache_info.get("path")
@@ -2147,7 +2763,30 @@ def _apply_tautulli_to_caches(cfg: dict, index: dict) -> None:
             ):
                 updated = True
         if updated:
-            _save_arr_cache(cache_path, disk_cache)
+            _queue_arr_cache_save(app_name, cache_path, disk_cache, "tautulli_refresh")
+
+
+def _start_tautulli_background_apply(cfg: dict, index: dict | None) -> bool:
+    if not index:
+        return False
+    lock_path = _tautulli_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
+    fd = _acquire_tautulli_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            _apply_tautulli_to_caches(cfg, index)
+        except Exception as exc:
+            logger.warning("Tautulli background apply failed: %s", exc)
+        finally:
+            _release_tautulli_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-tautulli-apply", daemon=True)
+    thread.start()
+    return True
 
 
 def _start_tautulli_background_refresh(cfg: dict) -> bool:
@@ -2172,6 +2811,83 @@ def _start_tautulli_background_refresh(cfg: dict) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-tautulli-refresh", daemon=True)
+    thread.start()
+    return True
+
+
+def _start_tautulli_deep_refresh(cfg: dict) -> bool:
+    if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
+        return False
+    lock_path = _tautulli_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
+    fd = _acquire_tautulli_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            request_timeout = _safe_int(cfg.get("tautulli_timeout_seconds"))
+            if request_timeout <= 0:
+                request_timeout = 45
+
+            try:
+                _tautulli_get(
+                    cfg["tautulli_url"],
+                    cfg["tautulli_api_key"],
+                    "refresh_libraries_list",
+                    timeout=request_timeout,
+                )
+            except (RuntimeError, requests.RequestException, ValueError) as exc:
+                logger.warning("Tautulli libraries list refresh failed: %s", exc)
+
+            libraries = []
+            try:
+                data = _tautulli_get(
+                    cfg["tautulli_url"],
+                    cfg["tautulli_api_key"],
+                    "get_libraries",
+                    timeout=request_timeout,
+                )
+                if isinstance(data, dict) and "libraries" in data:
+                    libraries = data.get("libraries") or []
+                elif isinstance(data, list):
+                    libraries = data
+            except (RuntimeError, requests.RequestException, ValueError) as exc:
+                logger.warning("Tautulli libraries list fetch failed: %s", exc)
+
+            refreshed = 0
+            for lib in libraries or []:
+                section_type = str(lib.get("section_type") or lib.get("type") or "").lower()
+                if section_type not in ("show", "movie"):
+                    continue
+                section_id = lib.get("section_id") or lib.get("id")
+                if not section_id:
+                    continue
+                if _tautulli_refresh_library_media_info(
+                    cfg["tautulli_url"],
+                    cfg["tautulli_api_key"],
+                    section_id,
+                    timeout=request_timeout,
+                ):
+                    refreshed += 1
+
+            if refreshed:
+                logger.info(
+                    "Tautulli media info refresh requested for %s library sections.",
+                    refreshed,
+                )
+
+            index = _get_tautulli_index(cfg, force=True)
+            if index:
+                _apply_tautulli_to_caches(cfg, index)
+                _touch_tautulli_refresh_marker()
+        except Exception as exc:
+            logger.warning("Tautulli deep refresh failed: %s", exc)
+        finally:
+            _release_tautulli_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-tautulli-deep-refresh", daemon=True)
     thread.start()
     return True
 
@@ -2523,6 +3239,8 @@ def _apply_tautulli_stats(
         row["TautulliMatchStatus"] = "unavailable"
         row["TautulliMatchReason"] = "Tautulli data unavailable"
         row["WatchContentRatio"] = ""
+        row["TautulliRatingKey"] = ""
+        row["TautulliSectionId"] = ""
         status = "unavailable"
         if not has_index_data:
             _advance_tautulli_match_progress(progress_media_type, status)
@@ -2542,6 +3260,12 @@ def _apply_tautulli_stats(
             row["TautulliMatchStatus"] = "matched"
             row["TautulliMatchReason"] = f"Matched by {bucket}" if bucket else "Matched by Tautulli"
             status = "matched"
+            rating_key = str(raw.get("rating_key") or "").strip()
+            section_id = str(raw.get("section_id") or "").strip()
+            if section_id:
+                row["TautulliSectionId"] = section_id
+            if rating_key and bucket in SAFE_TAUTULLI_REFRESH_BUCKETS:
+                row["TautulliRatingKey"] = rating_key
             content_hours = row.get("ContentHours")
             try:
                 content_hours_val = float(content_hours)
@@ -2730,217 +3454,342 @@ def _video_hdr_from_file(f: dict) -> str:
     return ""
 
 
+def _bitrate_mbps_from_file(f: dict) -> float:
+    media = f.get("mediaInfo") or {}
+    video = _safe_int(media.get("videoBitrate"))
+    audio = _safe_int(media.get("audioBitrate"))
+    total = video + audio if video and audio else (video or audio)
+    if total <= 0:
+        return 0.0
+    return round(total / 1_000_000, 2)
+
+
+def _build_sonarr_row(series: dict, files: list[dict], exclude_specials: bool = True) -> dict | None:
+    series_id = series.get("id")
+    if series_id is None:
+        return None
+    title = series.get("title") or ""
+    date_added = series.get("added") or ""
+    title_slug = series.get("titleSlug") or ""  # IMPORTANT for Sonarr UI links
+    path = series.get("path") or ""
+    year = series.get("year") or ""
+    tvdb_id = series.get("tvdbId") or ""
+    imdb_id = series.get("imdbId") or ""
+    tmdb_id = series.get("tmdbId") or ""
+    runtime_mins = _safe_int(series.get("runtime") or 0)
+
+    if exclude_specials:
+        files = [f for f in (files or []) if int(f.get("seasonNumber") or -1) != 0]
+    else:
+        files = files or []
+
+    count = len(files)
+    total_bytes = sum(int(f.get("size") or 0) for f in files)
+    content_hours = ""
+    if runtime_mins > 0 and count:
+        content_hours = round((runtime_mins * count) / 60.0, 2)
+
+    qualities = [_quality_from_file(f) for f in files]
+    resolutions = [_resolution_from_file(f) for f in files]
+    audio_formats = [_audio_format_from_file(f) for f in files]
+    audio_profiles = [_audio_profile_from_file(f) for f in files]
+    audio_channels = [
+        str(_audio_channels_from_file(f) or "") for f in files
+    ]
+    audio_languages = [_audio_languages_from_file(f) for f in files]
+    subtitle_languages = [_subtitle_languages_from_file(f) for f in files]
+    video_codecs = [_video_codec_from_file(f) for f in files]
+    video_hdrs = [_video_hdr_from_file(f) for f in files]
+
+    video_quality = _most_common(qualities)
+    resolution = _most_common(resolutions)
+    audio_format = _most_common(audio_formats)
+    audio_profile = _most_common(audio_profiles)
+    audio_channels = _most_common(audio_channels)
+    audio_codec_mixed = _is_mixed(audio_formats)
+    audio_profile_mixed = _is_mixed(audio_profiles)
+    audio_languages_value = _most_common(audio_languages)
+    subtitle_languages_value = _most_common(subtitle_languages)
+    audio_languages_mixed = _languages_mixed(audio_languages)
+    subtitle_languages_mixed = _languages_mixed(subtitle_languages)
+    video_codec = _most_common(video_codecs)
+    video_hdr = _most_common(video_hdrs)
+
+    total_gib = _bytes_to_gib(total_bytes)
+    avg_gib = round((total_bytes / count) / (1024 ** 3), 2) if count else 0.0
+
+    return {
+        "SeriesId": series_id,
+        "Title": title,
+        "DateAdded": date_added,
+        "TitleSlug": title_slug,
+        "Year": year,
+        "TvdbId": tvdb_id,
+        "ImdbId": imdb_id,
+        "TmdbId": tmdb_id,
+        "EpisodesCounted": count,
+        "TotalSizeGB": total_gib,
+        "AvgEpisodeSizeGB": avg_gib,
+        "ContentHours": content_hours,
+        "VideoQuality": video_quality,
+        "Resolution": resolution,
+        "AudioCodec": audio_format,
+        "AudioProfile": audio_profile,
+        "AudioChannels": audio_channels,
+        "AudioLanguages": audio_languages_value,
+        "SubtitleLanguages": subtitle_languages_value,
+        "AudioCodecMixed": audio_codec_mixed,
+        "AudioProfileMixed": audio_profile_mixed,
+        "AudioLanguagesMixed": audio_languages_mixed,
+        "SubtitleLanguagesMixed": subtitle_languages_mixed,
+        "VideoCodec": video_codec,
+        "VideoHDR": video_hdr,
+        "Path": path,
+    }
+
+
 def _compute_sonarr(base_url: str, api_key: str, exclude_specials: bool = True):
-    series = _arr_get(base_url, api_key, "/api/v3/series")
+    series = _arr_get(base_url, api_key, "/api/v3/series", app_name="sonarr")
     files_by_series = None
+    series_ids = [s.get("id") for s in series if s.get("id") is not None]
+    workers = _read_int_env("SONARR_EPISODEFILE_WORKERS", 8)
+    if workers <= 0:
+        workers = 1
+    max_workers = min(workers, len(series_ids)) if series_ids else 0
+    if max_workers > 1:
+        files_by_series = {}
+        thread_local = threading.local()
+
+        def fetch_files(series_id):
+            session = getattr(thread_local, "session", None)
+            if session is None:
+                session = requests.Session()
+                thread_local.session = session
+            try:
+                files = _arr_get(
+                    base_url,
+                    api_key,
+                    "/api/v3/episodefile",
+                    params={"seriesId": series_id},
+                    session=session,
+                    app_name="sonarr",
+                )
+            except Exception as exc:
+                logger.warning("Episode file fetch failed for seriesId=%s: %s", series_id, exc)
+                files = []
+            return series_id, files
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for series_id, files in executor.map(fetch_files, series_ids):
+                files_by_series[series_id] = files
 
     results = []
     for s in series:
         series_id = s.get("id")
-        title = s.get("title") or ""
-        title_slug = s.get("titleSlug") or ""  # IMPORTANT for Sonarr UI links
-        path = s.get("path") or ""
-        year = s.get("year") or ""
-        tvdb_id = s.get("tvdbId") or ""
-        imdb_id = s.get("imdbId") or ""
-        tmdb_id = s.get("tmdbId") or ""
-        runtime_mins = _safe_int(s.get("runtime") or 0)
+        if files_by_series is None:
+            files = _arr_get(
+                base_url,
+                api_key,
+                "/api/v3/episodefile",
+                params={"seriesId": series_id},
+                app_name="sonarr",
+            )
+        else:
+            files = files_by_series.get(series_id, [])
 
-        files = _arr_get(
-            base_url,
-            api_key,
-            "/api/v3/episodefile",
-            params={"seriesId": series_id},
-        )
-
-        if exclude_specials:
-            files = [f for f in files if int(f.get("seasonNumber") or -1) != 0]
-
-        count = len(files)
-        total_bytes = sum(int(f.get("size") or 0) for f in files)
-        content_hours = ""
-        if runtime_mins > 0 and count:
-            content_hours = round((runtime_mins * count) / 60.0, 2)
-
-        qualities = [_quality_from_file(f) for f in files]
-        resolutions = [_resolution_from_file(f) for f in files]
-        audio_formats = [_audio_format_from_file(f) for f in files]
-        audio_profiles = [_audio_profile_from_file(f) for f in files]
-        audio_channels = [
-            str(_audio_channels_from_file(f) or "") for f in files
-        ]
-        audio_languages = [_audio_languages_from_file(f) for f in files]
-        subtitle_languages = [_subtitle_languages_from_file(f) for f in files]
-        video_codecs = [_video_codec_from_file(f) for f in files]
-        video_hdrs = [_video_hdr_from_file(f) for f in files]
-
-        video_quality = _most_common(qualities)
-        resolution = _most_common(resolutions)
-        audio_format = _most_common(audio_formats)
-        audio_profile = _most_common(audio_profiles)
-        audio_channels = _most_common(audio_channels)
-        audio_codec_mixed = _is_mixed(audio_formats)
-        audio_profile_mixed = _is_mixed(audio_profiles)
-        audio_languages_value = _most_common(audio_languages)
-        subtitle_languages_value = _most_common(subtitle_languages)
-        audio_languages_mixed = _languages_mixed(audio_languages)
-        subtitle_languages_mixed = _languages_mixed(subtitle_languages)
-        video_codec = _most_common(video_codecs)
-        video_hdr = _most_common(video_hdrs)
-
-        total_gib = _bytes_to_gib(total_bytes)
-        avg_gib = round((total_bytes / count) / (1024 ** 3), 2) if count else 0.0
-
-        results.append(
-            {
-                "SeriesId": series_id,
-                "Title": title,
-                "TitleSlug": title_slug,
-                "Year": year,
-                "TvdbId": tvdb_id,
-                "ImdbId": imdb_id,
-                "TmdbId": tmdb_id,
-                "EpisodesCounted": count,
-                "TotalSizeGB": total_gib,
-                "AvgEpisodeSizeGB": avg_gib,
-                "ContentHours": content_hours,
-                "VideoQuality": video_quality,
-                "Resolution": resolution,
-                "AudioCodec": audio_format,
-                "AudioProfile": audio_profile,
-                "AudioChannels": audio_channels,
-                "AudioLanguages": audio_languages_value,
-                "SubtitleLanguages": subtitle_languages_value,
-                "AudioCodecMixed": audio_codec_mixed,
-                "AudioProfileMixed": audio_profile_mixed,
-                "AudioLanguagesMixed": audio_languages_mixed,
-                "SubtitleLanguagesMixed": subtitle_languages_mixed,
-                "VideoCodec": video_codec,
-                "VideoHDR": video_hdr,
-                "Path": path,
-            }
-        )
+        row = _build_sonarr_row(s, files, exclude_specials=exclude_specials)
+        if row:
+            results.append(row)
 
     results.sort(key=lambda x: x["AvgEpisodeSizeGB"], reverse=True)
     return results
 
 
+def _compute_sonarr_item(
+    base_url: str,
+    api_key: str,
+    series_id: int,
+    exclude_specials: bool = True,
+    timing: dict | None = None,
+):
+    start = time.perf_counter()
+    series = _arr_get(
+        base_url,
+        api_key,
+        f"/api/v3/series/{series_id}",
+        app_name="sonarr",
+    )
+    _record_timing(timing, "sonarr_series_ms", start)
+    start = time.perf_counter()
+    files = _arr_get(
+        base_url,
+        api_key,
+        "/api/v3/episodefile",
+        params={"seriesId": series_id},
+        app_name="sonarr",
+    )
+    _record_timing(timing, "sonarr_episodefiles_ms", start)
+    return _build_sonarr_row(series, files, exclude_specials=exclude_specials)
+
+
+def _radarr_movie_files(
+    movie: dict,
+    base_url: str,
+    api_key: str,
+    timing: dict | None = None,
+) -> list[dict]:
+    movie_file = movie.get("movieFile")
+    if movie_file:
+        if isinstance(movie_file, list):
+            return movie_file
+        return [movie_file]
+    if movie.get("hasFile"):
+        radarr_internal_id = movie.get("id")
+        if radarr_internal_id is None:
+            return []
+        start = time.perf_counter()
+        files = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/moviefile",
+            params={"movieId": radarr_internal_id},
+            app_name="radarr",
+        )
+        _record_timing(timing, "radarr_moviefile_ms", start)
+        return files
+    return []
+
+
+def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
+    radarr_internal_id = movie.get("id")
+    if radarr_internal_id is None:
+        return None
+    tmdb_id = movie.get("tmdbId")  # IMPORTANT for Radarr UI links
+    imdb_id = movie.get("imdbId") or ""
+    title = movie.get("title") or ""
+    date_added = movie.get("added") or ""
+    path = movie.get("path") or ""
+    runtime = int(movie.get("runtime") or 0)
+    content_hours = round(runtime / 60.0, 2) if runtime > 0 else ""
+    year = movie.get("year") or ""
+
+    file_size_bytes = 0
+    video_quality = ""
+    resolution = ""
+    audio_format = ""
+    audio_profile = ""
+    audio_channels = ""
+    audio_languages = ""
+    subtitle_languages = ""
+    video_codec = ""
+    video_hdr = ""
+    audio_codec_mixed = False
+    audio_profile_mixed = False
+    audio_languages_mixed = False
+    subtitle_languages_mixed = False
+    bitrate_mbps = 0.0
+    bitrate_estimated = False
+
+    primary = None
+    for f in files or []:
+        size = int(f.get("size") or 0)
+        file_size_bytes += size
+        if not primary or size > int(primary.get("size") or 0):
+            primary = f
+
+    if primary:
+        video_quality = _quality_from_file(primary)
+        resolution = _resolution_from_file(primary)
+        audio_format = _audio_format_from_file(primary)
+        audio_profile = _audio_profile_from_file(primary)
+        audio_channels = str(_audio_channels_from_file(primary) or "")
+        audio_languages = _audio_languages_from_file(primary)
+        subtitle_languages = _subtitle_languages_from_file(primary)
+        audio_languages_mixed = _languages_mixed([audio_languages])
+        subtitle_languages_mixed = _languages_mixed([subtitle_languages])
+        video_codec = _video_codec_from_file(primary)
+        video_hdr = _video_hdr_from_file(primary)
+        bitrate_mbps = _bitrate_mbps_from_file(primary)
+
+    size_gib = _bytes_to_gib(file_size_bytes)
+
+    if not bitrate_mbps and runtime > 0 and file_size_bytes > 0:
+        bitrate_bps = (file_size_bytes * 8) / (runtime * 60)
+        bitrate_mbps = round(bitrate_bps / 1_000_000, 2)
+        bitrate_estimated = True
+
+    gb_per_hour = 0.0
+    if runtime > 0 and size_gib > 0:
+        gb_per_hour = round(size_gib / (runtime / 60.0), 2)
+
+    return {
+        # Keep internal id if you want it for debugging or future API calls
+        "MovieId": radarr_internal_id,
+        # Use this for building the Radarr UI link
+        "TmdbId": tmdb_id,
+        "ImdbId": imdb_id,
+        "Title": title,
+        "DateAdded": date_added,
+        "Year": year,
+        "RuntimeMins": runtime if runtime else "",
+        "ContentHours": content_hours,
+        "FileSizeGB": size_gib if size_gib else "",
+        "GBPerHour": gb_per_hour if gb_per_hour else "",
+        "BitrateMbps": bitrate_mbps if bitrate_mbps else "",
+        "BitrateEstimated": bitrate_estimated if bitrate_mbps else False,
+        "VideoQuality": video_quality,
+        "Resolution": resolution,
+        "AudioCodec": audio_format,
+        "AudioProfile": audio_profile,
+        "AudioChannels": audio_channels,
+        "AudioLanguages": audio_languages,
+        "SubtitleLanguages": subtitle_languages,
+        "AudioCodecMixed": audio_codec_mixed,
+        "AudioProfileMixed": audio_profile_mixed,
+        "AudioLanguagesMixed": audio_languages_mixed,
+        "SubtitleLanguagesMixed": subtitle_languages_mixed,
+        "VideoCodec": video_codec,
+        "VideoHDR": video_hdr,
+        "Path": path,
+    }
+
+
 def _compute_radarr(base_url: str, api_key: str):
-    movies = _arr_get(base_url, api_key, "/api/v3/movie")
+    movies = _arr_get(base_url, api_key, "/api/v3/movie", app_name="radarr")
 
     results = []
     for m in movies:
-        radarr_internal_id = m.get("id")
-        tmdb_id = m.get("tmdbId")  # IMPORTANT for Radarr UI links
-        imdb_id = m.get("imdbId") or ""
-        title = m.get("title") or ""
-        path = m.get("path") or ""
-        runtime = int(m.get("runtime") or 0)
-        content_hours = round(runtime / 60.0, 2) if runtime > 0 else ""
-        year = m.get("year") or ""
-
-        file_size_bytes = 0
-        video_quality = ""
-        resolution = ""
-        audio_format = ""
-        audio_profile = ""
-        audio_channels = ""
-        audio_languages = ""
-        subtitle_languages = ""
-        video_codec = ""
-        video_hdr = ""
-        audio_codec_mixed = False
-        audio_profile_mixed = False
-        audio_languages_mixed = False
-        subtitle_languages_mixed = False
-        files = []
-        movie_file = m.get("movieFile")
-        if movie_file:
-            if isinstance(movie_file, list):
-                files = movie_file
-            else:
-                files = [movie_file]
-        elif m.get("hasFile"):
-            files = _arr_get(
-                base_url,
-                api_key,
-                "/api/v3/moviefile",
-                params={"movieId": radarr_internal_id},
-            )
-
-        primary = None
-        for f in files:
-            size = int(f.get("size") or 0)
-            file_size_bytes += size
-            if not primary or size > int(primary.get("size") or 0):
-                primary = f
-
-        if primary:
-            video_quality = _quality_from_file(primary)
-            resolution = _resolution_from_file(primary)
-            audio_format = _audio_format_from_file(primary)
-            audio_profile = _audio_profile_from_file(primary)
-            audio_channels = str(_audio_channels_from_file(primary) or "")
-            audio_languages = _audio_languages_from_file(primary)
-            subtitle_languages = _subtitle_languages_from_file(primary)
-            audio_languages_mixed = _languages_mixed([audio_languages])
-            subtitle_languages_mixed = _languages_mixed([subtitle_languages])
-            video_codec = _video_codec_from_file(primary)
-            video_hdr = _video_hdr_from_file(primary)
-
-        size_gib = _bytes_to_gib(file_size_bytes)
-
-        gb_per_hour = 0.0
-        if runtime > 0 and size_gib > 0:
-            gb_per_hour = round(size_gib / (runtime / 60.0), 2)
-
-        results.append(
-            {
-                # Keep internal id if you want it for debugging or future API calls
-                "MovieId": radarr_internal_id,
-                # Use this for building the Radarr UI link
-                "TmdbId": tmdb_id,
-                "ImdbId": imdb_id,
-                "Title": title,
-                "Year": year,
-                "RuntimeMins": runtime if runtime else "",
-                "ContentHours": content_hours,
-                "FileSizeGB": size_gib if size_gib else "",
-                "GBPerHour": gb_per_hour if gb_per_hour else "",
-                "VideoQuality": video_quality,
-                "Resolution": resolution,
-                "AudioCodec": audio_format,
-                "AudioProfile": audio_profile,
-                "AudioChannels": audio_channels,
-                "AudioLanguages": audio_languages,
-                "SubtitleLanguages": subtitle_languages,
-                "AudioCodecMixed": audio_codec_mixed,
-                "AudioProfileMixed": audio_profile_mixed,
-                "AudioLanguagesMixed": audio_languages_mixed,
-                "SubtitleLanguagesMixed": subtitle_languages_mixed,
-                "VideoCodec": video_codec,
-                "VideoHDR": video_hdr,
-                "Path": path,
-            }
-        )
+        files = _radarr_movie_files(m, base_url, api_key)
+        row = _build_radarr_row(m, files)
+        if row:
+            results.append(row)
 
     results.sort(key=lambda x: (x["GBPerHour"] or 0), reverse=True)
     return results
+
+
+def _compute_radarr_item(
+    base_url: str,
+    api_key: str,
+    movie_id: int,
+    timing: dict | None = None,
+):
+    start = time.perf_counter()
+    movie = _arr_get(
+        base_url,
+        api_key,
+        f"/api/v3/movie/{movie_id}",
+        app_name="radarr",
+    )
+    _record_timing(timing, "radarr_movie_ms", start)
+    files = _radarr_movie_files(movie, base_url, api_key, timing=timing)
+    return _build_radarr_row(movie, files)
 
 
 def _apply_instance_meta(rows: list[dict], instance: dict):
     for row in rows:
         row["InstanceId"] = instance.get("id", "")
         row["InstanceName"] = instance.get("name", "")
-
-
-def _get_cache_entry(app_name: str, instance_id: str) -> dict:
-    store = _cache[app_name]
-    entry = store.get(instance_id)
-    if not entry:
-        entry = {"ts": 0, "tautulli_index_ts": 0, "data": []}
-        store[instance_id] = entry
-    return entry
 
 
 def _cache_entry_has_data(entry: dict | None) -> bool:
@@ -2955,10 +3804,10 @@ def _has_complete_cached_data(
     instances: list[dict],
     disk_cache: dict[str, dict],
 ) -> bool:
-    store = _cache.get(app_name, {})
+    store = _cache.get_app_snapshot(app_name)
     for instance in instances:
         instance_id = instance.get("id")
-        entry = store.get(instance_id)
+        entry = store.get(str(instance_id))
         if _cache_entry_has_data(entry):
             continue
         disk_entry = disk_cache.get(str(instance_id))
@@ -3015,7 +3864,7 @@ def _start_arr_background_refresh(
                 )
                 updated = updated or refreshed
             if updated:
-                _save_arr_cache(cache_path, disk_cache)
+                _queue_arr_cache_save(app_name, cache_path, disk_cache, "arr_refresh")
             success = True
         except Exception as exc:
             logger.warning("%s background refresh failed: %s", app_name.title(), exc)
@@ -3038,8 +3887,8 @@ def _start_arr_background_refresh(
 
 def _is_cold_cache(app_name: str, instances: list[dict]) -> bool:
     for instance in instances:
-        entry = _get_cache_entry(app_name, instance["id"])
-        if entry.get("ts", 0) <= 0:
+        entry = _cache.get_app_entry_snapshot(app_name, instance["id"])
+        if not entry or entry.get("ts", 0) <= 0:
             return True
     return False
 
@@ -3052,30 +3901,51 @@ def _get_cached_instance(
     tautulli_index: dict | None,
     tautulli_index_ts: int = 0,
     log_cold_start: bool = False,
+    defer_tautulli_overlay: bool = False,
 ) -> tuple[list[dict], bool]:
-    entry = _get_cache_entry(app_name, instance["id"])
-    if not force and entry["data"]:
-        _apply_instance_meta(entry["data"], instance)
-        return entry["data"], False
+    instance_id = instance["id"]
+    entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_id)
+    if not force and entry_snapshot and entry_snapshot.get("data"):
+        rows = entry_snapshot["data"]
+        _apply_instance_meta(rows, instance)
+        return rows, False
 
-    cached_entry = None if force else disk_cache.get(instance["id"])
+    cached_entry = None if force else disk_cache.get(instance_id)
     if cached_entry and isinstance(cached_entry.get("data"), list):
-        entry["data"] = cached_entry["data"]
-        entry["ts"] = _safe_int(cached_entry.get("ts"))
-        entry["tautulli_index_ts"] = _safe_int(cached_entry.get("tautulli_index_ts"))
-        _apply_instance_meta(entry["data"], instance)
-        return entry["data"], False
+        data = _clone_rows(cached_entry.get("data") or [])
+        entry_ts = _safe_int(cached_entry.get("ts")) or time.time()
+        entry_index_ts = _safe_int(cached_entry.get("tautulli_index_ts"))
+        temp_entry = {
+            "ts": entry_ts,
+            "tautulli_index_ts": entry_index_ts,
+            "data": data,
+        }
+        if tautulli_index:
+            if app_name == "sonarr":
+                _apply_tautulli_stats_once(temp_entry, tautulli_index, "shows", tautulli_index_ts)
+            else:
+                _apply_tautulli_stats_once(temp_entry, tautulli_index, "movies", tautulli_index_ts)
+        _cache.set_app_entry(
+            app_name,
+            instance_id,
+            temp_entry["data"],
+            ts=entry_ts,
+            tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
+        )
+        rows = _clone_rows(temp_entry.get("data") or [])
+        _apply_instance_meta(rows, instance)
+        return rows, False
 
     now = time.time()
     fetch_start = time.perf_counter()
     if app_name == "sonarr":
-        entry["data"] = _compute_sonarr(
+        data = _compute_sonarr(
             instance["url"],
             instance["api_key"],
             exclude_specials=True,
         )
     else:
-        entry["data"] = _compute_radarr(
+        data = _compute_radarr(
             instance["url"],
             instance["api_key"],
         )
@@ -3085,36 +3955,148 @@ def _get_cached_instance(
             "Cold start %s fetch completed in %.2fs (rows=%s)",
             app_name,
             fetch_elapsed,
-            len(entry["data"] or []),
+            len(data or []),
         )
-    entry["ts"] = now
+    temp_entry = {"ts": now, "tautulli_index_ts": 0, "data": data}
     if tautulli_index:
-        overlay_start = time.perf_counter()
-        if app_name == "sonarr":
-            applied = _apply_tautulli_stats_once(entry, tautulli_index, "shows", tautulli_index_ts)
+        if defer_tautulli_overlay:
+            if log_cold_start:
+                logger.info(
+                    "Cold start %s deferring Tautulli overlay (background matching).",
+                    app_name,
+                )
         else:
-            applied = _apply_tautulli_stats_once(entry, tautulli_index, "movies", tautulli_index_ts)
-        overlay_elapsed = time.perf_counter() - overlay_start
-        if log_cold_start:
-            logger.info(
-                "Cold start %s Tautulli overlay in %.2fs (applied=%s)",
-                app_name,
-                overlay_elapsed,
-                applied,
-            )
-    if entry["data"]:
-        _apply_instance_meta(entry["data"], instance)
-    disk_cache[instance["id"]] = {
-        "ts": entry["ts"],
-        "tautulli_index_ts": _safe_int(entry.get("tautulli_index_ts")),
-        "data": entry["data"],
+            overlay_start = time.perf_counter()
+            if app_name == "sonarr":
+                applied = _apply_tautulli_stats_once(temp_entry, tautulli_index, "shows", tautulli_index_ts)
+            else:
+                applied = _apply_tautulli_stats_once(temp_entry, tautulli_index, "movies", tautulli_index_ts)
+            overlay_elapsed = time.perf_counter() - overlay_start
+            if log_cold_start:
+                logger.info(
+                    "Cold start %s Tautulli overlay in %.2fs (applied=%s)",
+                    app_name,
+                    overlay_elapsed,
+                    applied,
+                )
+    _cache.set_app_entry(
+        app_name,
+        instance_id,
+        temp_entry.get("data") or [],
+        ts=temp_entry.get("ts") or 0,
+        tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
+    )
+    disk_cache[instance_id] = {
+        "ts": temp_entry.get("ts") or 0,
+        "tautulli_index_ts": _safe_int(temp_entry.get("tautulli_index_ts")),
+        "data": temp_entry.get("data") or [],
     }
-    return entry["data"], True
+    rows = _clone_rows(temp_entry.get("data") or [])
+    if rows:
+        _apply_instance_meta(rows, instance)
+    return rows, True
+
+
+def _replace_arr_row(rows: list[dict], row: dict, app_name: str) -> None:
+    id_key = "SeriesId" if app_name == "sonarr" else "MovieId"
+    row_id = row.get(id_key)
+    if row_id is None:
+        return
+    for idx, existing in enumerate(rows):
+        if existing.get(id_key) == row_id:
+            rows[idx] = row
+            return
+    rows.append(row)
+
+
+def _sort_arr_rows(app_name: str, rows: list[dict]) -> None:
+    if not isinstance(rows, list):
+        return
+    sort_key = "AvgEpisodeSizeGB" if app_name == "sonarr" else "GBPerHour"
+    rows.sort(key=lambda item: _safe_float(item.get(sort_key)), reverse=True)
+
+
+def _refresh_arr_item_cache(
+    app_name: str,
+    instance: dict,
+    item_id: int,
+    cfg: dict,
+    force_tautulli: bool = False,
+    timing: dict | None = None,
+) -> dict | None:
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    if app_name == "sonarr":
+        row = _compute_sonarr_item(
+            base_url,
+            api_key,
+            item_id,
+            exclude_specials=True,
+            timing=timing,
+        )
+        media_type = "shows"
+    else:
+        row = _compute_radarr_item(base_url, api_key, item_id, timing=timing)
+        media_type = "movies"
+    if not row:
+        return None
+
+    cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
+    if force_tautulli and cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+        start = time.perf_counter()
+        try:
+            _get_tautulli_index(cfg, force=True, timing=timing)
+            cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
+        except Exception as exc:
+            logger.warning("Tautulli item refresh index fetch failed: %s", exc)
+        _record_timing(timing, "tautulli_index_ms", start)
+    tautulli_index_ts = 0
+    if cached_tautulli and cached_tautulli_ts:
+        temp_entry = {"data": [row], "tautulli_index_ts": 0}
+        start = time.perf_counter()
+        _apply_tautulli_stats_once(temp_entry, cached_tautulli, media_type, cached_tautulli_ts)
+        _record_timing(timing, "tautulli_overlay_ms", start)
+        if temp_entry.get("data"):
+            row = temp_entry["data"][0]
+        tautulli_index_ts = _safe_int(temp_entry.get("tautulli_index_ts"))
+
+    now = time.time()
+    instance_id = str(instance.get("id") or "")
+    cache_start = time.perf_counter()
+    entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_id) or {}
+    entry_rows = _clone_rows(entry_snapshot.get("data") or [])
+    _replace_arr_row(entry_rows, row, app_name)
+    _sort_arr_rows(app_name, entry_rows)
+    _cache.set_app_entry(
+        app_name,
+        instance_id,
+        entry_rows,
+        ts=now,
+        tautulli_index_ts=tautulli_index_ts,
+    )
+
+    cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
+    disk_cache = _load_arr_cache(cache_path)
+    disk_entry = disk_cache.get(instance_id, {})
+    disk_rows = _clone_rows(disk_entry.get("data") or [])
+    _replace_arr_row(disk_rows, row, app_name)
+    _sort_arr_rows(app_name, disk_rows)
+    disk_cache[instance_id] = {
+        "ts": now,
+        "tautulli_index_ts": tautulli_index_ts,
+        "data": disk_rows,
+    }
+    _queue_arr_cache_save(app_name, cache_path, disk_cache, "item_refresh")
+    _record_timing(timing, "cache_update_ms", cache_start)
+
+    row_with_instance = dict(row)
+    _apply_instance_meta([row_with_instance], instance)
+    return row_with_instance
 
 
 def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool = False):
     if not instances:
-        return [], "", ""
+        return [], "", "", False
 
     _maybe_bust_arr_cache_on_tautulli_refresh()
 
@@ -3130,33 +4112,57 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     missing_instances = []
     media_type = "shows" if app_name == "sonarr" else "movies"
     cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
+    defer_tautulli_overlay = False
     for instance in instances:
-        entry = _get_cache_entry(app_name, instance["id"])
-        if cache_seconds > 0 and entry["data"] and (time.time() - entry["ts"] > cache_seconds):
-            entry["data"] = []
-            entry["tautulli_index_ts"] = 0
-        if not force and entry["data"]:
-            if cached_tautulli and cached_tautulli_ts:
-                _apply_tautulli_stats_once(entry, cached_tautulli, media_type, cached_tautulli_ts)
-            _apply_instance_meta(entry["data"], instance)
-            results.extend(entry["data"])
-            continue
-        cached_entry = None if force else disk_cache.get(instance["id"])
-        if cached_entry and isinstance(cached_entry.get("data"), list):
-            entry["data"] = cached_entry["data"]
-            entry["ts"] = _safe_int(cached_entry.get("ts")) or time.time()
-            entry["tautulli_index_ts"] = _safe_int(cached_entry.get("tautulli_index_ts"))
+        instance_id = instance["id"]
+        entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+        if entry and cache_seconds > 0 and entry.get("data") and (time.time() - entry.get("ts", 0) > cache_seconds):
+            _cache.update_app_entry(app_name, instance_id, data=[], tautulli_index_ts=0)
+            entry = None
+        if not force and entry and entry.get("data"):
             if cached_tautulli and cached_tautulli_ts:
                 if _apply_tautulli_stats_once(entry, cached_tautulli, media_type, cached_tautulli_ts):
-                    cached_entry["tautulli_index_ts"] = _safe_int(entry.get("tautulli_index_ts"))
+                    _cache.update_app_entry(
+                        app_name,
+                        instance_id,
+                        data=entry.get("data") or [],
+                        ts=entry.get("ts") or 0,
+                        tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                    )
+            rows = _clone_rows(entry.get("data") or [])
+            _apply_instance_meta(rows, instance)
+            results.extend(rows)
+            continue
+        cached_entry = None if force else disk_cache.get(instance_id)
+        if cached_entry and isinstance(cached_entry.get("data"), list):
+            entry_ts = _safe_int(cached_entry.get("ts")) or time.time()
+            entry_index_ts = _safe_int(cached_entry.get("tautulli_index_ts"))
+            temp_entry = {
+                "ts": entry_ts,
+                "tautulli_index_ts": entry_index_ts,
+                "data": _clone_rows(cached_entry.get("data") or []),
+            }
+            if cached_tautulli and cached_tautulli_ts:
+                if _apply_tautulli_stats_once(temp_entry, cached_tautulli, media_type, cached_tautulli_ts):
+                    cached_entry["tautulli_index_ts"] = _safe_int(temp_entry.get("tautulli_index_ts"))
+                    cached_entry["data"] = temp_entry.get("data") or []
                     disk_dirty = True
-            _apply_instance_meta(entry["data"], instance)
-            results.extend(entry["data"])
+            _cache.set_app_entry(
+                app_name,
+                instance_id,
+                temp_entry.get("data") or [],
+                ts=entry_ts,
+                tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
+            )
+            rows = _clone_rows(temp_entry.get("data") or [])
+            _apply_instance_meta(rows, instance)
+            results.extend(rows)
             continue
         missing_instances.append(instance)
 
     if not force and missing_instances:
         cold_cache = True
+        defer_tautulli_overlay = bool(cached_tautulli and cached_tautulli_ts)
     if missing_instances:
         for instance in missing_instances:
             data, updated = _get_cached_instance(
@@ -3167,31 +4173,24 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 tautulli_index=cached_tautulli,
                 tautulli_index_ts=cached_tautulli_ts,
                 log_cold_start=cold_cache,
+                defer_tautulli_overlay=defer_tautulli_overlay,
             )
             results.extend(data)
             disk_dirty = disk_dirty or updated
 
     if disk_dirty:
-        if cold_cache:
-            save_start = time.perf_counter()
-            _save_arr_cache(cache_path, disk_cache)
-            save_elapsed = time.perf_counter() - save_start
-            logger.info(
-                "Cold start %s cache write completed in %.2fs (instances=%s rows=%s)",
-                app_name,
-                save_elapsed,
-                len(disk_cache),
-                len(results),
-            )
-        else:
-            _save_arr_cache(cache_path, disk_cache)
+        reason = "cold_cache" if cold_cache else "request_refresh"
+        _queue_arr_cache_save(app_name, cache_path, disk_cache, reason)
 
     if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+        apply_started = False
+        if defer_tautulli_overlay:
+            apply_started = _start_tautulli_background_apply(cfg, cached_tautulli)
         refresh_needed = force or not cached_tautulli
         started = False
         if refresh_needed:
             started = _start_tautulli_background_refresh(cfg)
-        if started or _tautulli_refresh_in_progress(cfg):
+        if apply_started or started or _tautulli_refresh_in_progress(cfg):
             tautulli_notice = "Tautulli matching in progress."
 
     return results, tautulli_warning, tautulli_notice, cold_cache
@@ -3475,8 +4474,7 @@ def api_status():
             app_payload["counts"] = counts
         apps[app_name] = app_payload
 
-    tautulli_entry = _cache.get("tautulli", {})
-    tautulli_ts = _safe_int(tautulli_entry.get("ts")) if tautulli_entry else 0
+    _, tautulli_ts = _cache.get_tautulli_state()
     if not tautulli_enabled:
         tautulli_status = "disabled"
     elif refresh_in_progress:
@@ -3500,6 +4498,32 @@ def api_status():
             },
         }
     )
+
+
+@app.route("/api/perf/render", methods=["POST"])
+@_auth_required
+def api_perf_render():
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict):
+        return jsonify({"error": "Invalid payload."}), 400
+    entry = {
+        "test": "render_perf",
+        "scenario": str(payload.get("scenario") or "").strip(),
+        "story": str(payload.get("story") or "").strip(),
+        "app": str(payload.get("app") or "").strip(),
+        "rows": _safe_int(payload.get("rows")),
+        "filtered_rows": _safe_int(payload.get("filtered_rows")),
+        "shouldBatch": bool(payload.get("shouldBatch")),
+        "useDeferred": bool(payload.get("useDeferred")),
+        "renderMs": _safe_float(payload.get("renderMs")),
+        "hydrateMs": _safe_float(payload.get("hydrateMs")),
+        "totalMs": _safe_float(payload.get("totalMs")),
+        "cacheHitRate": _safe_float(payload.get("cacheHitRate")),
+        "source": "ui",
+    }
+    if not _record_perf_entry(entry):
+        return jsonify({"ok": False, "skipped": True})
+    return jsonify({"ok": True})
 
 
 @app.route("/api/version")
@@ -3542,6 +4566,252 @@ def api_tautulli_refresh():
             "refresh_in_progress": _tautulli_refresh_in_progress(cfg),
         }
     )
+
+
+@app.route("/api/tautulli/deep_refresh", methods=["POST"])
+@_auth_required
+def api_tautulli_deep_refresh():
+    cfg = _get_config()
+    if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
+        return jsonify({"error": "Tautulli is not configured."}), 503
+    started = _start_tautulli_deep_refresh(cfg)
+    return jsonify(
+        {
+            "started": started,
+            "refresh_in_progress": _tautulli_refresh_in_progress(cfg),
+        }
+    )
+
+
+@app.route("/api/sonarr/refresh", methods=["POST"])
+@_auth_required
+def api_sonarr_refresh():
+    cfg = _get_config()
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Sonarr is not configured."}), 503
+    payload = request.get_json(silent=True) or {}
+    series_id = request.args.get("seriesId") or payload.get("seriesId") or payload.get("series_id")
+    instance_id = (
+        payload.get("instance_id")
+        or payload.get("instanceId")
+        or request.args.get("instance_id")
+        or request.args.get("instanceId")
+    )
+    if series_id:
+        item_id = _parse_arr_item_id(series_id)
+        if not item_id:
+            return jsonify({"error": "seriesId is required."}), 400
+        instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+        if not instance:
+            if instance_id:
+                return jsonify({"error": "Unknown Sonarr instance."}), 400
+            return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+        try:
+            _arr_command_refresh_item("sonarr", instance, item_id)
+        except Exception as exc:
+            resp = jsonify({"error": "Sonarr refresh failed."})
+            resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+            return resp, 502
+        return jsonify(
+            {
+                "started": True,
+                "scope": "series",
+                "instance_id": instance.get("id") or "",
+                "series_id": item_id,
+            }
+        )
+
+    results = _arr_command_refresh_all("sonarr", instances)
+    if results["started"] == 0:
+        resp = jsonify({"error": "Sonarr refresh failed."})
+        if results["errors"]:
+            resp.headers["X-Sortarr-Error"] = results["errors"][0].get("error", "")
+        return resp, 502
+    return jsonify(
+        {
+            "started": results["started"],
+            "failed": len(results["errors"]),
+            "errors": results["errors"],
+        }
+    )
+
+
+@app.route("/api/sonarr/item")
+@_auth_required
+def api_sonarr_item():
+    cfg = _get_config()
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Sonarr is not configured."}), 503
+    series_id = request.args.get("seriesId") or request.args.get("series_id")
+    force_tautulli = request.args.get("tautulli_refresh") == "1"
+    timing_enabled = request.args.get("timing") == "1"
+    timing = {} if timing_enabled else None
+    timing_start = time.perf_counter() if timing_enabled else 0.0
+    if not series_id:
+        return jsonify({"error": "seriesId is required."}), 400
+    item_id = _parse_arr_item_id(series_id)
+    if not item_id:
+        return jsonify({"error": "seriesId is required."}), 400
+    instance_id = request.args.get("instance_id") or request.args.get("instanceId")
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Sonarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+    try:
+        row = _refresh_arr_item_cache(
+            "sonarr",
+            instance,
+            item_id,
+            cfg,
+            force_tautulli=force_tautulli,
+            timing=timing,
+        )
+    except Exception as exc:
+        resp = jsonify({"error": "Sonarr item refresh failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    if not row:
+        return jsonify({"error": "Series not found."}), 404
+    if timing is not None:
+        timing["total_ms"] = round((time.perf_counter() - timing_start) * 1000)
+        resp = jsonify({"row": row, "timing": timing})
+        _attach_timing_headers(resp, timing)
+        return resp
+    return jsonify(row)
+
+
+@app.route("/api/radarr/refresh", methods=["POST"])
+@_auth_required
+def api_radarr_refresh():
+    cfg = _get_config()
+    instances = cfg.get("radarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Radarr is not configured."}), 503
+    payload = request.get_json(silent=True) or {}
+    movie_id = request.args.get("movieId") or payload.get("movieId") or payload.get("movie_id")
+    instance_id = (
+        payload.get("instance_id")
+        or payload.get("instanceId")
+        or request.args.get("instance_id")
+        or request.args.get("instanceId")
+    )
+    if movie_id:
+        item_id = _parse_arr_item_id(movie_id)
+        if not item_id:
+            return jsonify({"error": "movieId is required."}), 400
+        instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+        if not instance:
+            if instance_id:
+                return jsonify({"error": "Unknown Radarr instance."}), 400
+            return jsonify({"error": "instance_id is required for multiple Radarr instances."}), 400
+        try:
+            _arr_command_refresh_item("radarr", instance, item_id)
+        except Exception as exc:
+            resp = jsonify({"error": "Radarr refresh failed."})
+            resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+            return resp, 502
+        return jsonify(
+            {
+                "started": True,
+                "scope": "movie",
+                "instance_id": instance.get("id") or "",
+                "movie_id": item_id,
+            }
+        )
+
+    results = _arr_command_refresh_all("radarr", instances)
+    if results["started"] == 0:
+        resp = jsonify({"error": "Radarr refresh failed."})
+        if results["errors"]:
+            resp.headers["X-Sortarr-Error"] = results["errors"][0].get("error", "")
+        return resp, 502
+    return jsonify(
+        {
+            "started": results["started"],
+            "failed": len(results["errors"]),
+            "errors": results["errors"],
+        }
+    )
+
+
+@app.route("/api/radarr/item")
+@_auth_required
+def api_radarr_item():
+    cfg = _get_config()
+    instances = cfg.get("radarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Radarr is not configured."}), 503
+    movie_id = request.args.get("movieId") or request.args.get("movie_id")
+    force_tautulli = request.args.get("tautulli_refresh") == "1"
+    timing_enabled = request.args.get("timing") == "1"
+    timing = {} if timing_enabled else None
+    timing_start = time.perf_counter() if timing_enabled else 0.0
+    if not movie_id:
+        return jsonify({"error": "movieId is required."}), 400
+    item_id = _parse_arr_item_id(movie_id)
+    if not item_id:
+        return jsonify({"error": "movieId is required."}), 400
+    instance_id = request.args.get("instance_id") or request.args.get("instanceId")
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Radarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Radarr instances."}), 400
+    try:
+        row = _refresh_arr_item_cache(
+            "radarr",
+            instance,
+            item_id,
+            cfg,
+            force_tautulli=force_tautulli,
+            timing=timing,
+        )
+    except Exception as exc:
+        resp = jsonify({"error": "Radarr item refresh failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+        return resp, 502
+    if not row:
+        return jsonify({"error": "Movie not found."}), 404
+    if timing is not None:
+        timing["total_ms"] = round((time.perf_counter() - timing_start) * 1000)
+        resp = jsonify({"row": row, "timing": timing})
+        _attach_timing_headers(resp, timing)
+        return resp
+    return jsonify(row)
+
+
+@app.route("/api/tautulli/refresh_item", methods=["POST"])
+@_auth_required
+def api_tautulli_refresh_item():
+    cfg = _get_config()
+    if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
+        return jsonify({"error": "Tautulli is not configured."}), 503
+    payload = request.get_json(silent=True) or {}
+    rating_key = str(payload.get("rating_key") or payload.get("ratingKey") or "").strip()
+    section_id = str(payload.get("section_id") or payload.get("sectionId") or "").strip()
+    request_timeout = _safe_int(cfg.get("tautulli_timeout_seconds"))
+    if rating_key or section_id:
+        ok = _tautulli_refresh_library_media_info(
+            cfg.get("tautulli_url"),
+            cfg.get("tautulli_api_key"),
+            section_id=section_id or None,
+            rating_key=rating_key or None,
+            timeout=request_timeout,
+        )
+        if not ok:
+            return jsonify({"error": "Tautulli refresh failed."}), 502
+        return jsonify({"ok": True, "scope": "item"})
+    app_name = str(payload.get("app") or "").strip().lower()
+    media_type = "show" if app_name == "sonarr" else "movie" if app_name == "radarr" else ""
+    if not media_type:
+        return jsonify({"error": "rating_key or section_id is required."}), 400
+    refreshed = _tautulli_refresh_library_type(cfg, media_type, timeout=request_timeout)
+    if refreshed <= 0:
+        return jsonify({"error": "Tautulli library refresh failed."}), 502
+    return jsonify({"ok": True, "scope": "library", "refreshed": refreshed})
 
 
 @app.route("/api/caches/clear", methods=["POST"])
@@ -3635,13 +4905,12 @@ def api_tautulli_match_diagnostics():
     cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
     disk_cache = _load_arr_cache(cache_path)
     instance_id = str(row_diag.get("InstanceId") or "").strip()
-    memory_entry = _get_cache_entry(app_name, instance_id) if instance_id else {"ts": 0}
+    memory_entry = _cache.get_app_entry_snapshot(app_name, instance_id) if instance_id else {"ts": 0}
     disk_entry = disk_cache.get(instance_id, {}) if instance_id else {}
     disk_ts = _safe_int(disk_entry.get("ts")) if disk_entry else 0
     disk_age = _age_seconds(disk_ts)
 
-    tautulli_entry = _cache.get("tautulli", {})
-    tautulli_ts = _safe_int(tautulli_entry.get("ts")) if tautulli_entry else 0
+    _, tautulli_ts = _cache.get_tautulli_state()
     tautulli_age = _age_seconds(tautulli_ts)
     bucket_counts = {}
     index_data = index.get(media_type) if isinstance(index, dict) else None
@@ -3822,9 +5091,11 @@ def api_shows():
         if notices:
             resp.headers["X-Sortarr-Notice"] = " | ".join(notices)
         return resp
-    except Exception:
+    except Exception as exc:
         logger.exception("Sonarr request failed")
-        return jsonify({"error": "Sonarr request failed"}), 502
+        resp = jsonify({"error": "Sonarr request failed"})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
 
 
 @app.route("/api/movies")
@@ -3884,9 +5155,11 @@ def api_movies():
         if notices:
             resp.headers["X-Sortarr-Notice"] = " | ".join(notices)
         return resp
-    except Exception:
+    except Exception as exc:
         logger.exception("Radarr request failed")
-        return jsonify({"error": "Radarr request failed"}), 502
+        resp = jsonify({"error": "Radarr request failed"})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+        return resp, 502
 
 
 @app.route("/api/shows.csv")
@@ -3900,9 +5173,11 @@ def shows_csv():
     force = request.args.get("refresh") == "1"
     try:
         data, _, _, _ = _get_cached_all("sonarr", instances, cfg, force=force)
-    except Exception:
+    except Exception as exc:
         logger.exception("Sonarr request failed")
-        return jsonify({"error": "Sonarr request failed"}), 502
+        resp = jsonify({"error": "Sonarr request failed"})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
 
     include_instance = len(instances) > 1
     fieldnames = []
@@ -3911,6 +5186,7 @@ def shows_csv():
     fieldnames.extend(
         [
             "Title",
+            "DateAdded",
             "TitleSlug",
             "TmdbId",
             "EpisodesCounted",
@@ -3972,9 +5248,11 @@ def movies_csv():
     force = request.args.get("refresh") == "1"
     try:
         data, _, _, _ = _get_cached_all("radarr", instances, cfg, force=force)
-    except Exception:
+    except Exception as exc:
         logger.exception("Radarr request failed")
-        return jsonify({"error": "Radarr request failed"}), 502
+        resp = jsonify({"error": "Radarr request failed"})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+        return resp, 502
 
     include_instance = len(instances) > 1
     fieldnames = []
@@ -3983,10 +5261,12 @@ def movies_csv():
     fieldnames.extend(
         [
             "Title",
+            "DateAdded",
             "TmdbId",
             "RuntimeMins",
             "FileSizeGB",
             "GBPerHour",
+            "BitrateMbps",
             "VideoQuality",
             "Resolution",
             "VideoCodec",
