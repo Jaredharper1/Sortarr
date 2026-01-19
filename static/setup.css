@@ -2,12 +2,28 @@
   --setup-bg: radial-gradient(circle at 10% 10%, #fff3c4, transparent 60%),
     radial-gradient(circle at 90% 20%, #c8f2ff, transparent 55%),
     linear-gradient(120deg, #f7f3eb 0%, #eef4f8 60%, #f0f5f7 100%);
+  --setup-card-bg: rgba(255, 255, 255, 0.9);
+  --setup-card-glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(245, 248, 252, 0.42));
+  --setup-glass-blur: 10px;
+  --setup-submit-bg: rgba(245, 248, 252, 0.76);
+  --setup-submit-border: rgba(214, 222, 232, 0.7);
+  --setup-submit-text: #1f2933;
 }
 
 html[data-theme="dark"] {
   --setup-bg: radial-gradient(circle at 10% 10%, #2b2a19, transparent 60%),
     radial-gradient(circle at 90% 20%, #15232b, transparent 55%),
     linear-gradient(120deg, #1c1c1c 0%, #212629 60%, #1e2022 100%);
+  --setup-card-bg: rgba(37, 37, 38, 0.82);
+  --setup-card-glass-bg: linear-gradient(180deg, rgba(37, 37, 38, 0.46), rgba(30, 32, 36, 0.4));
+  --setup-submit-bg: rgba(36, 39, 44, 0.62);
+  --setup-submit-border: rgba(64, 70, 80, 0.55);
+  --setup-submit-text: #f8fafc;
+}
+
+html,
+body {
+  overflow: auto;
 }
 
 body {
@@ -24,11 +40,19 @@ body {
 
 .setup-card {
   width: min(720px, 100%);
-  background: var(--panel);
+  background: var(--setup-card-bg);
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 20px;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.15);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .setup-card {
+    background: var(--setup-card-glass-bg);
+    backdrop-filter: blur(var(--setup-glass-blur)) saturate(120%);
+    -webkit-backdrop-filter: blur(var(--setup-glass-blur)) saturate(120%);
+  }
 }
 
 .setup-header {
@@ -143,6 +167,9 @@ html[data-theme="dark"] .setup-error {
   padding: 10px 14px;
   font-weight: 600;
   border: 1px solid var(--border);
+  background: var(--setup-submit-bg);
+  border-color: var(--setup-submit-border);
+  color: var(--setup-submit-text);
 }
 
 .setup-inline {

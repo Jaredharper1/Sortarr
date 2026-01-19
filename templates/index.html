@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <title>{{ app_name }}</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
@@ -19,8 +20,6 @@
           </div>
         </div>
 
-        <button id="loadBtn" title="Fetch fresh data from Sonarr/Radarr/Tautulli and update the cache">Fetch New Data</button>
-        <button id="refreshTabBtn" title="Refresh only the active tab and cache">Refresh Current Tab</button>
         <button id="resetUiBtn" title="Clear UI settings and reload cached data">Reset UI</button>
         <button id="settingsBtn" title="Open setup">Settings</button>
         <div class="column-menu">
@@ -47,17 +46,48 @@
   </div>
           <div class="column-group" data-app="sonarr">
             <div class="column-group-title">Sonarr</div>
-            <label class="column-row"><input type="checkbox" data-col="ContentHours" /> Runtime (hh:mm)</label>
-            <label class="column-row"><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
+            <label class="column-row"><input type="checkbox" data-col="SeriesType" /> Series Type</label>
+            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
+            <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
+            <label class="column-row"><input type="checkbox" data-col="LastAired" /> Last Aired</label>
+            <label class="column-row" title="Episodes missing on disk."><input type="checkbox" data-col="MissingCount" /> Missing</label>
+            <label class="column-row" title="Episodes where the quality cutoff is unmet."><input type="checkbox" data-col="CutoffUnmetCount" /> Cutoff Unmet</label>
+            <label class="column-row" title="Total content hours based on non-special episodes."><input type="checkbox" data-col="ContentHours" /> Runtime (hh:mm)</label>
+            <label class="column-row" title="Episode count excludes specials."><input type="checkbox" data-col="EpisodesCounted" /> Episodes</label>
+            <label class="column-row" title="Season count excludes specials and only counts seasons with files."><input type="checkbox" data-col="SeasonCount" /> Seasons</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
-            <label class="column-row"><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
+            <label class="column-row" title="Total size includes specials."><input type="checkbox" data-col="TotalSizeGB" /> Total (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="Status" /> Status</label>
+            <label class="column-row"><input type="checkbox" data-col="Monitored" /> Monitored</label>
+            <label class="column-row"><input type="checkbox" data-col="Tags" /> Tags</label>
+            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> Release Group</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> Quality Profile</label>
           </div>
           <div class="column-group" data-app="radarr">
             <div class="column-group-title">Radarr</div>
-            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> Runtime (min)</label>
+            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> Runtime (hh:mm)</label>
             <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> Size (GiB)</label>
             <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
             <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> Bitrate (Mbps)</label>
+            <label class="column-row"><input type="checkbox" data-col="Status" /> Status</label>
+            <label class="column-row"><input type="checkbox" data-col="Monitored" /> Monitored</label>
+            <label class="column-row"><input type="checkbox" data-col="Tags" /> Tags</label>
+            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> Release Group</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> Quality Profile</label>
+            <label class="column-row"><input type="checkbox" data-col="Studio" /> Studio</label>
+            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
+            <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
+            <label class="column-row" title="Movies missing on disk."><input type="checkbox" data-col="MissingCount" /> Missing</label>
+            <label class="column-row" title="Movies where the quality cutoff is unmet."><input type="checkbox" data-col="CutoffUnmetCount" /> Cutoff Unmet</label>
+            <label class="column-row"><input type="checkbox" data-col="HasFile" /> Has File</label>
+            <label class="column-row"><input type="checkbox" data-col="IsAvailable" /> Available</label>
+            <label class="column-row"><input type="checkbox" data-col="InCinemas" /> In Cinemas</label>
+            <label class="column-row"><input type="checkbox" data-col="LastSearchTime" /> Last Search</label>
+            <label class="column-row"><input type="checkbox" data-col="Edition" /> Edition</label>
+            <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> Custom Formats</label>
+            <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> Custom Format Score</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> Cutoff Not Met</label>
+            <label class="column-row"><input type="checkbox" data-col="Languages" /> Languages</label>
           </div>
   <div class="column-group">
     <div class="column-group-title">Video</div>
@@ -70,7 +100,6 @@
     <div class="column-group-title">Audio</div>
     <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> Language columns</label>
     <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
-    <label class="column-row"><input type="checkbox" data-col="AudioProfile" /> Audio Profile</label>
     <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
     <label class="column-row"><input type="checkbox" data-col="AudioLanguages" /> Audio Languages</label>
     <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> Subtitle Languages</label>
@@ -78,7 +107,6 @@
   <div class="column-group">
     <div class="column-group-title">Playback (Tautulli)</div>
     <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> Playback columns</label>
-    <label class="column-row"><input type="checkbox" data-col="TautulliMatchStatus" /> Match Status</label>
     <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> Diagnostics</label>
     <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
     <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
@@ -92,7 +120,6 @@
     <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> Title Slug</label>
     <label class="column-row"><input type="checkbox" data-col="TmdbId" /> TMDB ID</label>
     <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> Audio Codec Mixed</label>
-    <label class="column-row"><input type="checkbox" data-col="AudioProfileMixed" /> Audio Profile Mixed</label>
     <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages Mixed</label>
     <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages Mixed</label>
   </div>
@@ -102,122 +129,161 @@
         <button id="themeBtn" title="Toggle theme">☀️</button>
         <span class="status" id="status" role="status" aria-live="polite"></span>
         <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
-        <span class="version-badge">v{{ app_version }}</span>
+        <span class="version-badge">{{ app_name }} v{{ app_version }} - Sonarr & Radarr efficiency view</span>
       </div>
 
-      <div class="filters">
-        <div class="filter-row">
-          <div class="filter-inputs" id="filterInputs">
-            <div class="simple-filters" id="simpleFilters">
-              <input id="titleFilter" placeholder="Filter title (supports * and ?)" />
-              <input id="pathFilter" placeholder="Filter path (supports * and ?)" />
+      <div class="filters" id="filtersPanel">
+        <div class="filters-body">
+          <div class="filter-row">
+            <div class="filter-inputs" id="filterInputs">
+              <div class="simple-filters" id="simpleFilters">
+                <input id="titleFilter" placeholder="Filter title (supports * and ?)" />
+                <input id="pathFilter" placeholder="Filter path (supports * and ?)" />
+              </div>
+              <input
+                id="advancedFilter"
+                class="advanced-filter"
+                placeholder="Advanced filtering examples: path:C:\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2"
+              />
             </div>
-            <input
-              id="advancedFilter"
-              class="advanced-filter"
-              placeholder="Advanced filtering examples: path:C:\ | dateadded:2024 | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p"
-            />
+            <div class="filter-controls">
+              <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">Advanced</button>
+              <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
+            </div>
           </div>
-          <div class="filter-controls">
-            <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">Advanced</button>
-            <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
+          <div id="advancedHelp" class="advanced-help hidden">
+            Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true
+            Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags, releasegroup, seriestype, originallanguage, genres, lastaired, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
+          </div>
+          <div id="advancedWarnings" class="advanced-warnings hidden"></div>
+          <div class="chip-wrap">
+            <div class="chip-groups">
+              <div class="chip-group">
+                <div class="chip-group-title">Audio</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="audio:Atmos">Atmos</button>
+                  <button class="chip" type="button" data-query="audio:eac3">DD+</button>
+                  <button class="chip" type="button" data-query="audio:truehd">TrueHD</button>
+                  <button class="chip" type="button" data-query="audiochannels>=6">5.1+</button>
+                  <button class="chip" type="button" data-query="audiochannels>=8">7.1+</button>
+                  <button class="chip" type="button" data-query="audiochannels<=2">Stereo</button>
+                </div>
+              </div>
+              <div class="chip-group">
+                <div class="chip-group-title">Audio Language</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="audiolang:eng">English</button>
+                  <button class="chip" type="button" data-query="audiolang:spa">Spanish</button>
+                  <button class="chip" type="button" data-query="audiolang:fra">French</button>
+                  <button class="chip" type="button" data-query="audiolang:deu">German</button>
+                  <button class="chip" type="button" data-query="audiolang:jpn">Japanese</button>
+                </div>
+              </div>
+              <div class="chip-group">
+                <div class="chip-group-title">Subtitles</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="sublang:eng">English</button>
+                  <button class="chip" type="button" data-query="sublang:spa">Spanish</button>
+                  <button class="chip" type="button" data-query="sublang:fra">French</button>
+                  <button class="chip" type="button" data-query="sublang:deu">German</button>
+                  <button class="chip" type="button" data-query="sublang:jpn">Japanese</button>
+                  <button class="chip" type="button" data-query="nosubs:true">No Subtitles</button>
+                </div>
+              </div>
+              <div class="chip-group" data-tautulli="true">
+                <div class="chip-group-title">Match (Tautulli)</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:matched">Matched</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unmatched">Potential Mismatch</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:future">Future Release</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:nodisk">Not On Disk</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:notchecked">Not Checked</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unavailable">Unavailable</button>
+                </div>
+              </div>
+              <div class="chip-group" data-tautulli="true">
+                <div class="chip-group-title">Playback (Tautulli)</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never Watched</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">Watched</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">Rewatched</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">Recent (30d)</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">Heavy (10+ hrs)</button>
+                  <button class="chip" type="button" data-tautulli="true" data-query="users>=2">Multi-user</button>
+                </div>
+              </div>
+              <div class="chip-group">
+                <div class="chip-group-title">Resolution</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="videoquality:2160p">4K</button>
+                  <button class="chip" type="button" data-query="videoquality:1080p">1080p</button>
+                  <button class="chip" type="button" data-query="videoquality:720p">720p</button>
+                  <button class="chip" type="button" data-query="videoquality:480p">480p</button>
+                </div>
+              </div>
+              <div class="chip-group">
+                <div class="chip-group-title">Source</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="videoquality:webdl">WEB-DL</button>
+                  <button class="chip" type="button" data-query="videoquality:webrip">WEBRip</button>
+                  <button class="chip" type="button" data-query="videoquality:bluray">BluRay</button>
+                  <button class="chip" type="button" data-query="videoquality:remux">Remux</button>
+                </div>
+              </div>
+              <div class="chip-group">
+                <div class="chip-group-title">Video Tags</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="videocodec:x265">x265</button>
+                  <button class="chip" type="button" data-query="videocodec:x264">x264</button>
+                  <button class="chip" type="button" data-query="videohdr:dolby">Dolby Vision</button>
+                  <button class="chip" type="button" data-query="videohdr:hdr">HDR</button>
+                </div>
+              </div>
+              <div class="chip-group" data-app="sonarr">
+                <div class="chip-group-title">Sonarr</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="missing:true">Missing</button>
+                  <button class="chip" type="button" data-query="cutoff:true">Cutoff Unmet</button>
+                  <button class="chip" type="button" data-query="recentlygrabbed:true">Recently Grabbed</button>
+                  <button class="chip" type="button" data-query="scene:true">Scene</button>
+                  <button class="chip" type="button" data-query="airing:true">Airing</button>
+                </div>
+              </div>
+              <div class="chip-group" data-app="radarr">
+                <div class="chip-group-title">Radarr</div>
+                <div class="chip-row">
+                  <button class="chip" type="button" data-query="missing:true">Missing</button>
+                  <button class="chip" type="button" data-query="cutoff:true">Cutoff Unmet</button>
+                  <button class="chip" type="button" data-query="recentlygrabbed:true">Recently Grabbed</button>
+                  <button class="chip" type="button" data-query="scene:true">Scene</button>
+                  <button class="chip" type="button" data-query="airing:true">Available</button>
+                </div>
+              </div>
+              <div class="chip-group hidden" data-app="sonarr" data-instance-group="true">
+                <div class="chip-group-title">Instance</div>
+                <div class="chip-row" id="instanceChipsSonarr"></div>
+              </div>
+              <div class="chip-group hidden" data-app="radarr" data-instance-group="true">
+                <div class="chip-group-title">Instance</div>
+                <div class="chip-row" id="instanceChipsRadarr"></div>
+              </div>
+            </div>
           </div>
         </div>
-        <div id="advancedHelp" class="advanced-help hidden">
-          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr
-          Fields: title, titleslug, tmdbid, dateadded, path, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiochannels, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
-        </div>
-        <div id="advancedWarnings" class="advanced-warnings hidden"></div>
-        <div class="chip-wrap">
-          <div class="chip-groups">
-            <div class="chip-group">
-              <div class="chip-group-title">Audio</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-query="audio:Atmos">Atmos</button>
-                <button class="chip" type="button" data-query="audio:eac3">DD+</button>
-                <button class="chip" type="button" data-query="audio:truehd">TrueHD</button>
-                <button class="chip" type="button" data-query="audiochannels>=6">5.1+</button>
-                <button class="chip" type="button" data-query="audiochannels>=8">7.1+</button>
-                <button class="chip" type="button" data-query="audiochannels<=2">Stereo</button>
-              </div>
-            </div>
-            <div class="chip-group">
-              <div class="chip-group-title">Audio Language</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-query="audiolang:eng">English</button>
-                <button class="chip" type="button" data-query="audiolang:spa">Spanish</button>
-                <button class="chip" type="button" data-query="audiolang:fra">French</button>
-                <button class="chip" type="button" data-query="audiolang:deu">German</button>
-                <button class="chip" type="button" data-query="audiolang:jpn">Japanese</button>
-              </div>
-            </div>
-            <div class="chip-group">
-              <div class="chip-group-title">Subtitles</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-query="sublang:eng">English</button>
-                <button class="chip" type="button" data-query="sublang:spa">Spanish</button>
-                <button class="chip" type="button" data-query="sublang:fra">French</button>
-                <button class="chip" type="button" data-query="sublang:deu">German</button>
-                <button class="chip" type="button" data-query="sublang:jpn">Japanese</button>
-                <button class="chip" type="button" data-query="nosubs:true">No Subtitles</button>
-              </div>
-            </div>
-            <div class="chip-group hidden" data-app="sonarr" data-instance-group="true">
-              <div class="chip-group-title">Instance</div>
-              <div class="chip-row" id="instanceChipsSonarr"></div>
-            </div>
-            <div class="chip-group hidden" data-app="radarr" data-instance-group="true">
-              <div class="chip-group-title">Instance</div>
-              <div class="chip-row" id="instanceChipsRadarr"></div>
-            </div>
-            <div class="chip-group" data-tautulli="true">
-              <div class="chip-group-title">Playback (Tautulli)</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-tautulli="true" data-query="mismatch:true">Potential Mismatch</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never Watched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">Watched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">Rewatched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">Recent (30d)</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">Heavy (10+ hrs)</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="users>=2">Multi-user</button>
-              </div>
-            </div>
-            <div class="chip-group">
-              <div class="chip-group-title">Resolution</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-query="videoquality:2160p">4K</button>
-                <button class="chip" type="button" data-query="videoquality:1080p">1080p</button>
-                <button class="chip" type="button" data-query="videoquality:720p">720p</button>
-                <button class="chip" type="button" data-query="videoquality:480p">480p</button>
-              </div>
-            </div>
-            <div class="chip-group">
-              <div class="chip-group-title">Source</div>
-              <div class="chip-row">
-                <button class="chip" type="button" data-query="videoquality:webdl">WEB-DL</button>
-                <button class="chip" type="button" data-query="videoquality:webrip">WEBRip</button>
-                <button class="chip" type="button" data-query="videoquality:bluray">BluRay</button>
-                <button class="chip" type="button" data-query="videoquality:remux">Remux</button>
-              </div>
-            </div>
-            <div class="chip-group">
-            <div class="chip-group-title">Video Tags</div>
-            <div class="chip-row">
-              <button class="chip" type="button" data-query="videocodec:x265">x265</button>
-              <button class="chip" type="button" data-query="videocodec:x264">x264</button>
-              <button class="chip" type="button" data-query="videohdr:dolby">Dolby Vision</button>
-              <button class="chip" type="button" data-query="videohdr:hdr">HDR</button>
+        <div class="filters-footer">
+          <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="Hide filters and chips" aria-expanded="true" aria-controls="filtersPanel">▴</button>
+          <div class="tabs">
+            <button class="tab active" id="tabSonarr">Sonarr</button>
+            <button class="tab" id="tabRadarr">Radarr</button>
+            <span class="spacer"></span>
+            <button id="exportCsvBtn">Export CSV</button>
+          </div>
+          <div class="filters-footer-chips">
+            <div class="status-pill status-pill--hidden" id="statusPill" title="Hover to expand data status">
+              Data status
             </div>
           </div>
-          </div>
         </div>
-      </div>
-
-      <div class="tabs">
-        <button class="tab active" id="tabSonarr">Sonarr</button>
-        <button class="tab" id="tabRadarr">Radarr</button>
-        <span class="spacer"></span>
-        <button id="exportCsvBtn">Export CSV</button>
       </div>
 
       <div class="status-row" id="statusRow">
@@ -234,72 +300,112 @@
           <div class="status-value" id="cacheStatus">--</div>
         </div>
         <div class="status-actions">
-          <button id="refreshSonarrBtn" title="Reload all Sonarr series data in Sortarr">Refresh Sonarr data</button>
-          <button id="refreshRadarrBtn" title="Reload all Radarr movie data in Sortarr">Refresh Radarr data</button>
-          <button id="refreshTautulliBtn" title="Rebuild Tautulli matches for existing library data">Refresh Tautulli matches</button>
-          <button id="deepRefreshTautulliBtn" title="Refresh Tautulli libraries/media info, then rebuild matches">Refresh Tautulli media + matches</button>
-          <button id="clearCachesBtn" title="Clear Sortarr caches and reload Sonarr/Radarr (and Tautulli if configured)">Clear cached data</button>
+          <div class="status-actions-group">
+            <button id="refreshTabBtn" title="Refresh only the active tab from Sonarr/Radarr and update the cache">Refresh active tab</button>
+            <button id="loadBtn" title="Refresh both tabs from Sonarr/Radarr (and Tautulli if configured) and update the cache">Refresh all data</button>
+            <button id="clearCachesBtn" title="Clear Sortarr caches, then reload Sonarr/Radarr (and Tautulli if configured)">Clear cached data</button>
+          </div>
+          <div class="status-actions-group" id="arrRefreshButtons"></div>
+          <div class="status-actions-group">
+            <button id="refreshTautulliBtn" title="Rebuild Tautulli matches from existing library data">Rebuild Tautulli matches</button>
+            <button id="deepRefreshTautulliBtn" title="Refresh Tautulli library data, then rebuild matches">Refresh Tautulli media + matches</button>
+          </div>
         </div>
         <div class="status-complete hidden" id="statusCompleteNote">All data is up to date. Hiding in 5s…</div>
-      </div>
-
-      <div class="status-pill status-pill--hidden" id="statusPill" title="Hover to expand data status">
-        Data status
       </div>
 
       <div class="status-banner hidden" id="partialBanner">
         Partial Tautulli data loaded. Matching will continue in the background.
       </div>
+      <div class="status-banner hidden" id="fastModeBanner">
+        Sonarr fast mode enabled. Codec and language details may be missing.
+      </div>
 
-      <table class="stable-columns">
-        <thead>
-          <tr>
-            <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
-            <th data-sort="DateAdded" data-col="DateAdded">Date Added <span class="sort-indicator"></span></th>
-            <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
+      <div class="table-wrap" id="tableWrap">
+        <table class="stable-columns">
+          <thead>
+            <tr>
+              <th data-sort="Title" data-col="Title">Title <span class="sort-indicator"></span></th>
+              <th data-sort="DateAdded" data-col="DateAdded">Date Added <span class="sort-indicator"></span></th>
+              <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
+              <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">Series Type <span class="sort-indicator"></span></th>
+              <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">Original Language <span class="sort-indicator"></span></th>
+              <th data-sort="Genres" data-app="sonarr" data-col="Genres">Genres <span class="sort-indicator"></span></th>
+              <th data-sort="LastAired" data-app="sonarr" data-col="LastAired">Last Aired <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="MissingCount" data-app="sonarr" data-col="MissingCount" title="Episodes missing on disk.">Missing <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="CutoffUnmetCount" data-app="sonarr" data-col="CutoffUnmetCount" title="Episodes where the quality cutoff is unmet.">Cutoff Unmet <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours" title="Total content hours based on non-special episodes.">Runtime (hh:mm) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted" title="Episode count excludes specials.">Episodes <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount" title="Season count excludes specials and only counts seasons with files.">Seasons <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
+              <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB" title="Total size includes specials.">Total (GiB) <span class="sort-indicator"></span></th>
 
-            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours">Runtime (hh:mm) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted">Episodes <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">Avg / Ep (GiB) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB">Total (GiB) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (hh:mm) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">GiB / Hour <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">Bitrate (Mbps) <span class="sort-indicator"></span></th>
 
-            <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (min) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">Size (GiB) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">GiB / Hour <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">Bitrate (Mbps) <span class="sort-indicator"></span></th>
+              <th data-sort="Status" data-col="Status">Status <span class="sort-indicator"></span></th>
+              <th data-sort="Monitored" data-col="Monitored">Monitored <span class="sort-indicator"></span></th>
+              <th data-sort="Tags" data-col="Tags">Tags <span class="sort-indicator"></span></th>
+              <th data-sort="ReleaseGroup" data-col="ReleaseGroup">Release Group <span class="sort-indicator"></span></th>
+              <th data-sort="QualityProfile" data-col="QualityProfile">Quality Profile <span class="sort-indicator"></span></th>
+              <th data-sort="Studio" data-app="radarr" data-col="Studio">Studio <span class="sort-indicator"></span></th>
+              <th data-sort="OriginalLanguage" data-app="radarr" data-col="OriginalLanguage">Original Language <span class="sort-indicator"></span></th>
+              <th data-sort="Genres" data-app="radarr" data-col="Genres">Genres <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="MissingCount" data-app="radarr" data-col="MissingCount" title="Movies missing on disk.">Missing <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="CutoffUnmetCount" data-app="radarr" data-col="CutoffUnmetCount" title="Movies where the quality cutoff is unmet.">Cutoff Unmet <span class="sort-indicator"></span></th>
+              <th data-sort="HasFile" data-app="radarr" data-col="HasFile">Has File <span class="sort-indicator"></span></th>
+              <th data-sort="IsAvailable" data-app="radarr" data-col="IsAvailable">Available <span class="sort-indicator"></span></th>
+              <th data-sort="InCinemas" data-app="radarr" data-col="InCinemas">In Cinemas <span class="sort-indicator"></span></th>
+              <th data-sort="LastSearchTime" data-app="radarr" data-col="LastSearchTime">Last Search <span class="sort-indicator"></span></th>
+              <th data-sort="Edition" data-app="radarr" data-col="Edition">Edition <span class="sort-indicator"></span></th>
+              <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">Custom Formats <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">Custom Format Score <span class="sort-indicator"></span></th>
+              <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">Cutoff Not Met <span class="sort-indicator"></span></th>
+              <th data-sort="Languages" data-app="radarr" data-col="Languages">Languages <span class="sort-indicator"></span></th>
 
-            <th data-sort="VideoQuality" data-col="VideoQuality">Video Quality <span class="sort-indicator"></span></th>
-            <th data-sort="Resolution" data-col="Resolution">Resolution <span class="sort-indicator"></span></th>
-            <th data-sort="VideoCodec" data-col="VideoCodec">Video Codec <span class="sort-indicator"></span></th>
-            <th data-sort="VideoHDR" data-col="VideoHDR">Video HDR <span class="sort-indicator"></span></th>
-            <th data-sort="AudioCodec" data-col="AudioCodec">Audio Codec <span class="sort-indicator"></span></th>
-            <th data-sort="AudioProfile" data-col="AudioProfile">Audio Profile <span class="sort-indicator"></span></th>
-            <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
-            <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
-            <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
-            <th data-sort="TautulliMatchStatus" data-col="TautulliMatchStatus">Match Status <span class="sort-indicator"></span></th>
-            <th data-col="Diagnostics">Diagnostics</th>
-            <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
-            <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hh:mm) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">Watch / Runtime (hh:mm) <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="UsersWatched" data-col="UsersWatched">Users Watched <span class="sort-indicator"></span></th>
-            <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">Title Slug <span class="sort-indicator"></span></th>
-            <th data-sort="TmdbId" data-col="TmdbId">TMDB ID <span class="sort-indicator"></span></th>
-            <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">Audio Codec Mixed <span class="sort-indicator"></span></th>
-            <th data-sort="AudioProfileMixed" data-col="AudioProfileMixed">Audio Profile Mixed <span class="sort-indicator"></span></th>
-            <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">Audio Languages Mixed <span class="sort-indicator"></span></th>
-            <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">Subtitle Languages Mixed <span class="sort-indicator"></span></th>
+              <th data-sort="VideoQuality" data-col="VideoQuality">Video Quality <span class="sort-indicator"></span></th>
+              <th data-sort="Resolution" data-col="Resolution">Resolution <span class="sort-indicator"></span></th>
+              <th data-sort="VideoCodec" data-col="VideoCodec">Video Codec <span class="sort-indicator"></span></th>
+              <th data-sort="VideoHDR" data-col="VideoHDR">Video HDR <span class="sort-indicator"></span></th>
+              <th data-sort="AudioCodec" data-col="AudioCodec">Audio Codec <span class="sort-indicator"></span></th>
+              <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span></th>
+              <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span class="sort-indicator"></span></th>
+              <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span class="sort-indicator"></span></th>
+              <th data-col="Diagnostics">Diagnostics</th>
+              <th class="right" data-sort="PlayCount" data-col="PlayCount">Times Watched <span class="sort-indicator"></span></th>
+              <th data-sort="LastWatched" data-col="LastWatched">Last Watched <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">Days Since <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">Watch Time (hh:mm) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">Watch / Runtime (hh:mm) <span class="sort-indicator"></span></th>
+              <th class="right" data-sort="UsersWatched" data-col="UsersWatched">Users Watched <span class="sort-indicator"></span></th>
+              <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">Title Slug <span class="sort-indicator"></span></th>
+              <th data-sort="TmdbId" data-col="TmdbId">TMDB ID <span class="sort-indicator"></span></th>
+              <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">Audio Codec Mixed <span class="sort-indicator"></span></th>
+              <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">Audio Languages Mixed <span class="sort-indicator"></span></th>
+              <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">Subtitle Languages Mixed <span class="sort-indicator"></span></th>
 
-            <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
-          </tr>
-        </thead>
-        <tbody id="tbody"></tbody>
-      </table>
+              <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
 
-      <div class="footer">{{ app_name }} v{{ app_version }} - Sonarr & Radarr efficiency view</div>
     </div>
+
+    <template id="sonarrSeriesExpansionTemplate">
+      <div class="series-expansion">
+        <div class="series-expansion-header">
+          <div class="series-expansion-title">Seasons</div>
+          <div class="series-expansion-actions">
+            <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
+          </div>
+        </div>
+        <div class="series-expansion-body" data-role="series-expansion-body"></div>
+      </div>
+    </template>
 
     <script src="/static/app.js?v={{ app_version }}"></script>
   </body>

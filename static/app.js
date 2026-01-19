@@ -11,10 +11,12 @@ const statusRowEl = document.getElementById("statusRow");
 const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
 const statusPillEl = document.getElementById("statusPill");
 const partialBannerEl = document.getElementById("partialBanner");
+const fastModeBannerEl = document.getElementById("fastModeBanner");
 const refreshTautulliBtn = document.getElementById("refreshTautulliBtn");
 const deepRefreshTautulliBtn = document.getElementById("deepRefreshTautulliBtn");
 const refreshSonarrBtn = document.getElementById("refreshSonarrBtn");
 const refreshRadarrBtn = document.getElementById("refreshRadarrBtn");
+const arrRefreshButtonsEl = document.getElementById("arrRefreshButtons");
 const clearCachesBtn = document.getElementById("clearCachesBtn");
 const resetUiBtn = document.getElementById("resetUiBtn");
 const settingsBtn = document.getElementById("settingsBtn");
@@ -41,15 +43,561 @@ const columnsShowAll = document.getElementById("columnsShowAll");
 const columnsHideAll = document.getElementById("columnsHideAll");
 const columnsReset = document.getElementById("columnsReset");
 const csvColumnsToggle = document.getElementById("csvColumnsToggle");
+const filtersToggleBtn = document.getElementById("filtersToggleBtn");
+const filtersEl = document.getElementById("filtersPanel");
 
 const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
 const root = document.documentElement; // <html>
 const tableEl = document.querySelector("table");
+const tableWrapEl = document.getElementById("tableWrap");
+const TABLE_SCROLL_SNAP_IDLE_MS = 140;
+const TABLE_SCROLL_SNAP_EPSILON = 4;
+const TABLE_SCROLL_SNAP_MIN_MS = 140;
+const TABLE_SCROLL_SNAP_MAX_MS = 260;
+const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
+const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
+const TABLE_SCROLL_ANCHOR_MAX_FRAMES = 90;
+let tableScrollSnapTimer = null;
+let tableScrollSnapInProgress = false;
+let lastTableScrollTop = 0;
+let tableScrollSnapAnimFrame = null;
+let tableScrollSnapLocked = false;
+let tableScrollSnapIgnoreUntil = 0;
+let pendingScrollAnchor = null;
+let scrollAnchorFrame = null;
+let tableLayoutFrame = null;
+let tableLayoutForce = false;
+let tableLayoutSkipIfUnchanged = false;
+let lastTableWrapSize = { width: 0, height: 0 };
+let chipGroupLayoutPending = false;
+let tableHasFocus = false;
+let selectedRowEl = null;
+let selectedSeasonRowEl = null;
+let selectedEpisodeRowEl = null;
+let pointerSelectionEnabled = true;
+const keyboardNavState = {
+  level: "rows",
+  rowIndex: -1,
+  seriesRowKey: "",
+  seriesKey: "",
+  seasonIndex: -1,
+  seasonNumber: "",
+  episodeIndex: -1,
+};
+const appEl = document.querySelector(".app");
 // Build API URLs without embedded credentials (basic-auth URLs break fetch).
 const API_ORIGIN = window.location && window.location.host
   ? `${window.location.protocol}//${window.location.host}`
   : "";
+
+let tableWrapLayoutPending = false;
+const FILTER_RENDER_DEBOUNCE_MS = 140;
+let filterRenderTimer = null;
+
+function scheduleFilterRender() {
+  if (filterRenderTimer) {
+    window.clearTimeout(filterRenderTimer);
+  }
+  filterRenderTimer = window.setTimeout(() => {
+    filterRenderTimer = null;
+    render(dataByApp[activeApp] || []);
+  }, FILTER_RENDER_DEBOUNCE_MS);
+}
+
+function flushFilterRender() {
+  if (filterRenderTimer) {
+    window.clearTimeout(filterRenderTimer);
+    filterRenderTimer = null;
+  }
+  render(dataByApp[activeApp] || []);
+}
+
+function bindFilterInput(input) {
+  if (!input) return;
+  input.addEventListener("input", scheduleFilterRender);
+  input.addEventListener("blur", flushFilterRender);
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      flushFilterRender();
+    }
+  });
+}
+
+function updateTableWrapMaxHeight() {
+  if (!tableWrapEl) return;
+  const rect = tableWrapEl.getBoundingClientRect();
+  const bottomPadding = 12;
+  const available = window.innerHeight - rect.top - bottomPadding;
+  if (available > 200) {
+    tableWrapEl.style.maxHeight = `${available}px`;
+  } else {
+    tableWrapEl.style.maxHeight = "";
+  }
+  scheduleTableLayoutSync({ force: false, skipIfUnchanged: true });
+}
+
+function scheduleTableWrapLayout() {
+  if (tableWrapLayoutPending) return;
+  tableWrapLayoutPending = true;
+  window.requestAnimationFrame(() => {
+    tableWrapLayoutPending = false;
+    updateTableWrapMaxHeight();
+  });
+}
+
+if (tableWrapEl) {
+  tableWrapEl.setAttribute("tabindex", "0");
+  scheduleTableWrapLayout();
+  window.addEventListener("resize", scheduleTableWrapLayout);
+  if (window.ResizeObserver && appEl) {
+    const tableWrapObserver = new ResizeObserver(scheduleTableWrapLayout);
+    tableWrapObserver.observe(appEl);
+  }
+  lastTableScrollTop = tableWrapEl.scrollTop;
+  tableWrapEl.addEventListener("scroll", handleTableWrapScroll, { passive: true });
+  tableWrapEl.addEventListener("wheel", cancelTableScrollSnap, { passive: true });
+  tableWrapEl.addEventListener("touchstart", cancelTableScrollSnap, { passive: true });
+  window.addEventListener("keydown", cancelTableScrollSnap);
+  tableWrapEl.addEventListener("focus", () => {
+    tableHasFocus = true;
+  });
+  tableWrapEl.addEventListener("blur", () => {
+    tableHasFocus = false;
+  });
+  tableWrapEl.addEventListener("keydown", handleTableKeydown);
+}
+
+function getTableHeaderHeight() {
+  if (!tableEl) return 0;
+  const header = tableEl.querySelector("thead");
+  if (!header) return 0;
+  const rect = header.getBoundingClientRect();
+  return rect.height || 0;
+}
+
+function scrollElementIntoTableView(el) {
+  if (!tableWrapEl || !el) return false;
+  const wrapRect = tableWrapEl.getBoundingClientRect();
+  const elRect = el.getBoundingClientRect();
+  if (!wrapRect.height || !elRect.height) return false;
+  const headerHeight = getTableHeaderHeight();
+  // Keep selected rows clear of the sticky header.
+  const visibleTop = wrapRect.top + headerHeight;
+  const visibleBottom = wrapRect.bottom;
+  let nextTop = null;
+  if (elRect.top < visibleTop) {
+    nextTop = tableWrapEl.scrollTop - (visibleTop - elRect.top);
+  } else if (elRect.bottom > visibleBottom) {
+    nextTop = tableWrapEl.scrollTop + (elRect.bottom - visibleBottom);
+  }
+  if (nextTop == null) return false;
+  return applyTableScrollTop(nextTop);
+}
+
+function isSeriesExpansionActive() {
+  if (sonarrExpansionState.expandedSeries.size) return true;
+  if (!tbody) return false;
+  return Boolean(tbody.querySelector("tr.series-child-row"));
+}
+
+function tableCanSnapScroll() {
+  if (!tableWrapEl || !tbody || !tableEl) return false;
+  if (pendingScrollAnchor) return false;
+  if (tableEl.classList.contains("is-batching")) return false;
+  if (isSeriesExpansionActive()) return false;
+  if (!tbody.rows.length) return false;
+  if (tableWrapEl.scrollHeight - tableWrapEl.clientHeight < 2) return false;
+  return true;
+}
+
+function tableNearBottom() {
+  if (!tableWrapEl) return false;
+  const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+  if (maxScroll < 1) return false;
+  return (maxScroll - tableWrapEl.scrollTop) <= TABLE_SCROLL_SNAP_BOTTOM_EPSILON;
+}
+
+function findTopVisibleRowIndex(rows, visibleTop) {
+  let low = 0;
+  let high = rows.length - 1;
+  let bestIndex = 0;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const row = rows[mid];
+    const rowTop = row.offsetTop;
+    if (rowTop <= visibleTop) {
+      bestIndex = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  return bestIndex;
+}
+
+function captureTableScrollAnchor() {
+  if (!tableWrapEl || !tbody) return null;
+  const rows = tbody.rows;
+  if (!rows || !rows.length) return null;
+  const headerHeight = getTableHeaderHeight();
+  const visibleTop = tableWrapEl.scrollTop + headerHeight;
+  const index = findTopVisibleRowIndex(rows, visibleTop);
+  const row = rows[index];
+  if (!row) return null;
+  const rowTop = row.offsetTop;
+  return {
+    app: activeApp,
+    rowKey: row.dataset.rowKey || "",
+    rowIndex: index,
+    offset: Math.max(0, visibleTop - rowTop),
+    scrollTop: tableWrapEl.scrollTop,
+    renderToken: 0,
+    attempts: 0,
+  };
+}
+
+function applyTableScrollTop(targetTop) {
+  if (!tableWrapEl) return false;
+  const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+  const nextTop = Math.max(0, Math.min(maxScroll, Math.round(targetTop)));
+  cancelTableScrollSnap();
+  tableScrollSnapLocked = true;
+  tableScrollSnapIgnoreUntil = perfNow() + TABLE_SCROLL_ANCHOR_LOCK_MS;
+  tableWrapEl.scrollTop = nextTop;
+  lastTableScrollTop = tableWrapEl.scrollTop;
+  return true;
+}
+
+function restoreTableScrollAnchor(anchor) {
+  if (!anchor || !tableWrapEl || !tbody) return false;
+  if (anchor.app && anchor.app !== activeApp) return true;
+  if (anchor.renderToken && anchor.renderToken !== renderToken) return true;
+  let rowEl = null;
+  if (anchor.rowKey) {
+    rowEl = findRowElement(activeApp, anchor.rowKey);
+  }
+  if (!rowEl && Number.isInteger(anchor.rowIndex)) {
+    rowEl = tbody.rows[anchor.rowIndex] || null;
+  }
+  if (!rowEl) {
+    if (!tableReadyByApp[activeApp]) return false;
+    return applyTableScrollTop(anchor.scrollTop || 0);
+  }
+  const headerHeight = getTableHeaderHeight();
+  const offset = Number(anchor.offset) || 0;
+  const targetTop = rowEl.offsetTop - headerHeight + offset;
+  return applyTableScrollTop(targetTop);
+}
+
+function scheduleScrollAnchorRestore(anchor, token) {
+  if (!anchor) return;
+  pendingScrollAnchor = {
+    ...anchor,
+    renderToken: token || anchor.renderToken || renderToken,
+    attempts: anchor.attempts || 0,
+  };
+  if (scrollAnchorFrame) return;
+  scrollAnchorFrame = window.requestAnimationFrame(attemptScrollAnchorRestore);
+}
+
+function attemptScrollAnchorRestore() {
+  scrollAnchorFrame = null;
+  const anchor = pendingScrollAnchor;
+  if (!anchor) return;
+  const restored = restoreTableScrollAnchor(anchor);
+  if (restored) {
+    pendingScrollAnchor = null;
+    return;
+  }
+  anchor.attempts += 1;
+  if (anchor.attempts >= TABLE_SCROLL_ANCHOR_MAX_FRAMES) {
+    pendingScrollAnchor = null;
+    return;
+  }
+  scrollAnchorFrame = window.requestAnimationFrame(attemptScrollAnchorRestore);
+}
+
+function snapTableScroll() {
+  if (!tableCanSnapScroll()) return;
+  if (tableScrollSnapInProgress) return;
+  if (tableNearBottom()) return;
+  const headerHeight = getTableHeaderHeight();
+  const currentTop = tableWrapEl.scrollTop;
+  const visibleTop = currentTop + headerHeight;
+  const rows = tbody.rows;
+  if (!rows.length) return;
+  const currentIndex = findTopVisibleRowIndex(rows, visibleTop);
+  const currentRow = rows[currentIndex];
+  if (!currentRow) return;
+  let targetIndex = currentIndex;
+  const currentRowTop = currentRow.offsetTop;
+  const nextRow = rows[currentIndex + 1];
+  if (nextRow) {
+    const nextTop = nextRow.offsetTop;
+    if (nextTop > currentRowTop) {
+      const distUp = Math.abs(visibleTop - currentRowTop);
+      const distDown = Math.abs(nextTop - visibleTop);
+      if (distDown < distUp) {
+        targetIndex = currentIndex + 1;
+      }
+    }
+  }
+  const targetRow = rows[targetIndex];
+  if (!targetRow) return;
+  const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+  const targetTop = Math.max(0, Math.min(maxScroll, targetRow.offsetTop - headerHeight));
+  const delta = Math.abs(targetTop - currentTop);
+  if (delta <= TABLE_SCROLL_SNAP_EPSILON) return;
+  animateTableScrollTo(targetTop);
+}
+
+function scheduleTableScrollSnap() {
+  if (tableScrollSnapTimer) {
+    window.clearTimeout(tableScrollSnapTimer);
+  }
+  tableScrollSnapTimer = window.setTimeout(() => {
+    tableScrollSnapTimer = null;
+    snapTableScroll();
+  }, TABLE_SCROLL_SNAP_IDLE_MS);
+}
+
+function cancelTableScrollSnap() {
+  if (tableScrollSnapTimer) {
+    window.clearTimeout(tableScrollSnapTimer);
+    tableScrollSnapTimer = null;
+  }
+  if (tableScrollSnapAnimFrame) {
+    window.cancelAnimationFrame(tableScrollSnapAnimFrame);
+    tableScrollSnapAnimFrame = null;
+  }
+  tableScrollSnapInProgress = false;
+  tableScrollSnapLocked = false;
+  tableScrollSnapIgnoreUntil = 0;
+}
+
+function animateTableScrollTo(targetTop) {
+  if (!tableWrapEl) return;
+  cancelTableScrollSnap();
+  const startTop = tableWrapEl.scrollTop;
+  if (Math.abs(targetTop - startTop) < 1) return;
+  const delta = Math.abs(targetTop - startTop);
+  const duration = Math.min(
+    TABLE_SCROLL_SNAP_MAX_MS,
+    Math.max(TABLE_SCROLL_SNAP_MIN_MS, delta * 8)
+  );
+  tableScrollSnapInProgress = true;
+  tableScrollSnapLocked = true;
+  tableScrollSnapIgnoreUntil = perfNow() + duration + 80;
+  const startAt = performance.now();
+  const step = (now) => {
+    if (!tableWrapEl) {
+      cancelTableScrollSnap();
+      return;
+    }
+    const elapsed = now - startAt;
+    const t = Math.min(1, elapsed / duration);
+    const eased = t < 0.5
+      ? 4 * t * t * t
+      : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    const nextTop = startTop + (targetTop - startTop) * eased;
+    tableWrapEl.scrollTop = nextTop;
+    if (t < 1) {
+      tableScrollSnapAnimFrame = window.requestAnimationFrame(step);
+      return;
+    }
+    tableScrollSnapAnimFrame = null;
+    tableScrollSnapInProgress = false;
+  };
+  tableScrollSnapAnimFrame = window.requestAnimationFrame(step);
+}
+
+function handleTableWrapScroll() {
+  if (!tableWrapEl) return;
+  if (tableScrollSnapInProgress) return;
+  if (isSeriesExpansionActive()) {
+    lastTableScrollTop = tableWrapEl.scrollTop;
+    return;
+  }
+  const now = perfNow();
+  const nextTop = tableWrapEl.scrollTop;
+  const deltaTop = Math.abs(nextTop - lastTableScrollTop);
+  lastTableScrollTop = nextTop;
+  if (tableNearBottom()) {
+    cancelTableScrollSnap();
+    return;
+  }
+  if (tableScrollSnapLocked) {
+    if (now < tableScrollSnapIgnoreUntil) return;
+    tableScrollSnapLocked = false;
+  }
+  if (deltaTop <= 0) return;
+  scheduleTableScrollSnap();
+}
+
+function setTruncationTooltip(el, value) {
+  if (!el) return;
+  if (el.classList.contains("col-hidden")) {
+    el.removeAttribute("title");
+    return;
+  }
+  if (el.offsetParent === null) return;
+  const max = el.clientWidth;
+  const actual = el.scrollWidth;
+  const truncated = actual - max > 2;
+  if (truncated && value) {
+    el.setAttribute("title", value);
+  } else {
+    el.removeAttribute("title");
+  }
+}
+
+function updateTruncationTooltips() {
+  if (!tbody) return;
+  Array.from(tbody.rows).forEach(tr => {
+    const row = tr.__sortarrRow;
+    if (!row) return;
+    const app = tr.dataset.app || activeApp;
+    const titleEl = tr.querySelector(".title-text");
+    const rawTitle = formatRowTitle(row, app);
+    if (titleEl) setTruncationTooltip(titleEl, rawTitle);
+    const pathCell = tr.querySelector('td[data-col="Path"]');
+    if (pathCell) {
+      const rawPath = String(row.Path ?? row.path ?? "").trim();
+      setTruncationTooltip(pathCell, rawPath);
+    }
+  });
+}
+
+function lockTitlePathWidths() {
+  if (!root || !tableEl) return;
+  const app = activeApp;
+  const titleTh = tableEl.querySelector('th[data-col="Title"]');
+  const pathTh = tableEl.querySelector('th[data-col="Path"]');
+  if (!titleTh || !pathTh) return;
+  const filtersActive = hasActiveFilters();
+  const hasTitleWidth = titleWidthByApp[app] > 0;
+  const hasPathWidth = pathWidthByApp[app] > 0;
+  if (filtersActive && hasTitleWidth && hasPathWidth) {
+    root.style.setProperty("--title-col-width", `${titleWidthByApp[app]}px`);
+    root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
+    return;
+  }
+  const versionChanged = titlePathWidthVersionByApp[app] !== columnVisibilityVersion;
+  const shouldMeasure = !hasTitleWidth ||
+    !hasPathWidth ||
+    versionChanged ||
+    (!filtersActive && titlePathWidthFilterDirtyByApp[app]);
+  if (shouldMeasure) {
+    root.style.removeProperty("--title-col-width");
+    root.style.removeProperty("--path-col-width");
+    const titleWidth = Math.round(titleTh.getBoundingClientRect().width);
+    const pathWidth = Math.round(pathTh.getBoundingClientRect().width);
+    if (titleWidth > 0) {
+      titleWidthByApp[app] = titleWidth;
+    }
+    if (pathWidth > 0) {
+      pathWidthByApp[app] = pathWidth;
+    }
+    titlePathWidthVersionByApp[app] = columnVisibilityVersion;
+    titlePathWidthFilterDirtyByApp[app] = filtersActive;
+  }
+  const canonicalTitleWidth = titleWidthByApp[app] || 0;
+  if (canonicalTitleWidth > 0) {
+    root.style.setProperty("--title-col-width", `${canonicalTitleWidth}px`);
+  }
+  if (pathWidthByApp[app] > 0) {
+    root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
+  }
+}
+
+function isTableWrapOffscreen(rect) {
+  if (!rect) return true;
+  return rect.bottom <= 0 ||
+    rect.top >= window.innerHeight ||
+    rect.right <= 0 ||
+    rect.left >= window.innerWidth;
+}
+
+function scheduleTableLayoutSync(options = {}) {
+  const force = options.force ?? true;
+  const skipIfUnchanged = Boolean(options.skipIfUnchanged);
+  if (force) tableLayoutForce = true;
+  if (skipIfUnchanged) tableLayoutSkipIfUnchanged = true;
+  if (tableLayoutFrame) return;
+  tableLayoutFrame = window.requestAnimationFrame(() => {
+    tableLayoutFrame = null;
+    const shouldForce = tableLayoutForce;
+    const shouldSkipIfUnchanged = tableLayoutSkipIfUnchanged && !shouldForce;
+    tableLayoutForce = false;
+    tableLayoutSkipIfUnchanged = false;
+    if (!tableWrapEl) return;
+    const rect = tableWrapEl.getBoundingClientRect();
+    if (!rect || isTableWrapOffscreen(rect)) return;
+    if (shouldSkipIfUnchanged) {
+      const sizeUnchanged =
+        rect.width === lastTableWrapSize.width &&
+        rect.height === lastTableWrapSize.height;
+      if (sizeUnchanged) return;
+    }
+    lastTableWrapSize = { width: rect.width, height: rect.height };
+    lockTitlePathWidths();
+    updateTruncationTooltips();
+    updateChipGroupDividers();
+  });
+}
+
+function scheduleTitlePathWidthLock(options = {}) {
+  scheduleTableLayoutSync(options);
+}
+
+function scheduleTruncationTooltipUpdate(options = {}) {
+  scheduleTableLayoutSync(options);
+}
+
+function updateChipGroupDividers() {
+  if (!chipWrapEl || chipWrapEl.classList.contains("chip-wrap--hidden")) return;
+  const groups = Array.from(document.querySelectorAll(".chip-group"));
+  if (!groups.length) return;
+  let lastTop = null;
+  groups.forEach(group => {
+    if (group.classList.contains("hidden")) {
+      group.classList.remove("chip-group--row-start");
+      return;
+    }
+    const rect = group.getBoundingClientRect();
+    if (!rect) return;
+    const top = Math.round(rect.top);
+    const isRowStart = lastTop === null || Math.abs(top - lastTop) > 2;
+    group.classList.toggle("chip-group--row-start", isRowStart);
+    if (isRowStart) lastTop = top;
+  });
+}
+
+function scheduleChipGroupLayout() {
+  if (chipGroupLayoutPending) return;
+  chipGroupLayoutPending = true;
+  window.requestAnimationFrame(() => {
+    chipGroupLayoutPending = false;
+    updateChipGroupDividers();
+  });
+}
+
+function setFiltersCollapsed(collapsed) {
+  if (!filtersEl) return;
+  filtersCollapsed = Boolean(collapsed);
+  filtersEl.classList.toggle("filters--collapsed", filtersCollapsed);
+  if (filtersToggleBtn) {
+    filtersToggleBtn.setAttribute("aria-expanded", String(!filtersCollapsed));
+    filtersToggleBtn.textContent = filtersCollapsed ? "▾" : "▴";
+    filtersToggleBtn.title = filtersCollapsed ? "Show filters and chips" : "Hide filters and chips";
+  }
+  try {
+    localStorage.setItem(FILTERS_COLLAPSED_KEY, filtersCollapsed ? "1" : "0");
+  } catch {}
+  syncStatusPillVisibility();
+  scheduleTableWrapLayout();
+}
 
 function apiUrl(path) {
   if (/^https?:\/\//i.test(path)) return path;
@@ -58,6 +606,29 @@ function apiUrl(path) {
     normalized = `/${normalized}`;
   }
   return API_ORIGIN ? `${API_ORIGIN}${normalized}` : normalized;
+}
+
+const CSRF_COOKIE_NAME = "sortarr_csrf";
+
+function readCookie(name) {
+  if (typeof document === "undefined") return "";
+  const value = `; ${document.cookie || ""}`;
+  const parts = value.split(`; ${name}=`);
+  if (parts.length < 2) return "";
+  return parts.pop().split(";").shift() || "";
+}
+
+function getCsrfToken() {
+  const meta = document.querySelector('meta[name="csrf-token"]');
+  const metaToken = meta && meta.getAttribute("content");
+  if (metaToken) return metaToken;
+  return readCookie(CSRF_COOKIE_NAME);
+}
+
+function withCsrfHeaders(headers = {}) {
+  const token = getCsrfToken();
+  if (!token) return headers;
+  return { ...headers, "X-CSRF-Token": token };
 }
 
 let activeApp = "sonarr"; // "sonarr" | "radarr"
@@ -71,17 +642,18 @@ let chipQuery = "";
 let tautulliEnabled = false;
 let backgroundLoading = false;
 let chipsVisible = true;
+let filtersCollapsed = false;
 const tableReadyByApp = { sonarr: false, radarr: false };
-const titleWidthByApp = { sonarr: 0, radarr: 0 };
-const titleWidthSigByApp = { sonarr: "", radarr: "" };
-const titleWidthAppliedSigByApp = { sonarr: "", radarr: "" };
-let titleMeasureCtx = null;
-let titleMeasureFont = "";
-let titleMeasurePadding = 0;
 const columnWidthLock = { active: false, widths: new Map(), token: 0 };
+const columnWidthCacheByApp = { sonarr: new Map(), radarr: new Map() };
+const columnWidthCacheVersionByApp = { sonarr: -1, radarr: -1 };
 let statusPollTimer = null;
 let statusCountdownTimer = null;
 let statusCountdownRemaining = 0;
+
+if (tableEl) {
+  tableEl.dataset.app = activeApp;
+}
 const STATUS_COUNTDOWN_SECONDS = 5;
 let statusFlashTimer = null;
 let statusCompletionFlashed = false;
@@ -90,10 +662,31 @@ let statusFetchTimer = null;
 let lastStatusFetchAt = null;
 let statusCollapsed = false;
 let statusPillTimer = null;
+let statusPillLoadedTimer = null;
+let statusPillLoadedUntil = 0;
+const STATUS_PILL_LOADED_MS = 5000;
 let tautulliRefreshReloadTimer = null;
 let copyToastEl = null;
 let copyToastTimer = null;
 const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null };
+const progressDisplayByApp = {
+  sonarr: {
+    processed: 0,
+    total: 0,
+    targetProcessed: 0,
+    targetTotal: 0,
+    startedTs: 0,
+    timer: null,
+  },
+  radarr: {
+    processed: 0,
+    total: 0,
+    targetProcessed: 0,
+    targetTotal: 0,
+    startedTs: 0,
+    timer: null,
+  },
+};
 const rowRefreshTimers = new WeakMap();
 const ROW_REFRESH_FLASH_MS = 2200;
 const ROW_REFRESH_NOTICE_MS = 6000;
@@ -117,6 +710,9 @@ const COLD_CACHE_NOTICE =
 const TAUTULLI_MATCHING_NOTICE = "Tautulli matching in progress.";
 const NOTICE_FLAGS_HEADER = "X-Sortarr-Notice-Flags";
 const TAUTULLI_POLL_INTERVAL_MS = 4000;
+const TAUTULLI_STATUS_POLL_INTERVAL_MS = 1000;
+const PROGRESS_ANIMATION_INTERVAL_MS = 120;
+const PROGRESS_ANIMATION_STEPS = 12;
 const ITEM_REFRESH_DELAY_MS = 1200;
 const ITEM_REFRESH_TAUTULLI_DELAY_MS = 2000;
 const TAUTULLI_ROW_REFRESH_STATUS_TIMEOUT_MS = 1500;
@@ -133,7 +729,6 @@ const SKIPPED_REASON_SORT_ORDER = {
 };
 
 const TAUTULLI_COLUMNS = new Set([
-  "TautulliMatchStatus",
   "Diagnostics",
   "PlayCount",
   "LastWatched",
@@ -145,6 +740,7 @@ const TAUTULLI_COLUMNS = new Set([
 const LANGUAGE_COLUMNS = new Set([
   "AudioLanguages",
   "SubtitleLanguages",
+  "Languages",
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
 ]);
@@ -175,19 +771,18 @@ const CSV_COLUMNS_BY_APP = {
     "TitleSlug",
     "TmdbId",
     "AudioCodecMixed",
-    "AudioProfileMixed",
     "AudioLanguagesMixed",
     "SubtitleLanguagesMixed",
   ]),
   radarr: new Set([
     "TmdbId",
     "AudioCodecMixed",
-    "AudioProfileMixed",
     "AudioLanguagesMixed",
     "SubtitleLanguagesMixed",
   ]),
 };
 const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
+const FILTERS_COLLAPSED_KEY = "Sortarr-filters-collapsed";
 const csvColumnsState = { sonarr: false, radarr: false };
 const RESET_UI_PARAM = "reset_ui";
 const RENDER_PERF_PARAM = "render_perf";
@@ -201,22 +796,31 @@ const renderPerfState = {
 };
 
 const noticeByApp = { sonarr: "", radarr: "" };
+const fastModeByApp = { sonarr: false, radarr: false };
 const coldCacheByApp = { sonarr: false, radarr: false };
+const coldCacheStickyByApp = { sonarr: false, radarr: false };
 const pendingPrefetchByApp = { sonarr: null, radarr: null };
+const liteHydrateInFlightByApp = { sonarr: false, radarr: false };
 const tautulliPendingByApp = { sonarr: false, radarr: false };
 const tautulliPollTimers = { sonarr: null, radarr: null };
 const followUpRefreshTimers = { sonarr: null, radarr: null };
+const arrRefreshBusy = { sonarr: new Set(), radarr: new Set() };
+let arrRefreshRenderKey = "";
+const titleWidthByApp = { sonarr: null, radarr: null };
+const pathWidthByApp = { sonarr: null, radarr: null };
+const titlePathWidthVersionByApp = { sonarr: -1, radarr: -1 };
+const titlePathWidthFilterDirtyByApp = { sonarr: false, radarr: false };
 
 const ADVANCED_PLACEHOLDER_BASE =
-  "Advanced filtering examples: path:C:\\ | dateadded:2024 | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | dateadded:2024 | audio:eac3 | audio:Atmos | audiochannels>=6 | audiolang:eng | sublang:eng | nosubs:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_HELP_BASE =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true videocodec:x265 videohdr:hdr instance:sonarr-2 " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, episodes, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true " +
+  "Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
 const ADVANCED_HELP_TAUTULLI =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 audio:Atmos audiocodec:eac3 audiolang:eng sublang:eng nosubs:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 videocodec:x265 videohdr:hdr instance:sonarr-2 " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, instance, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audioprofile, audiocodecmixed, audioprofilemixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 " +
+  "Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour";
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
@@ -233,18 +837,84 @@ const prefetchTokens = { sonarr: 0, radarr: 0 };
 const RENDER_FLAG_STORAGE_KEY = "Sortarr-render-flags";
 const DEFAULT_RENDER_FLAGS = {
   batch: true,
-  deferHeavy: false,
+  deferHeavy: { sonarr: true, radarr: true },
   widthLock: true,
   stabilize: true,
+  virtualize: { sonarr: false, radarr: true },
 };
+const HEADER_WIDTH_CAP_COLUMNS = new Set([
+  "ContentHours",
+  "RuntimeMins",
+  "EpisodesCounted",
+  "SeasonCount",
+  "MissingCount",
+  "CutoffUnmetCount",
+  "AvgEpisodeSizeGB",
+  "TotalSizeGB",
+  "FileSizeGB",
+  "GBPerHour",
+  "BitrateMbps",
+  "VideoQuality",
+  "Resolution",
+  "VideoCodec",
+  "AudioCodec",
+  "AudioChannels",
+  "Status",
+  "Instance",
+  "QualityProfile",
+  "ReleaseGroup",
+  "Tags",
+  "Studio",
+  "OriginalLanguage",
+  "Genres",
+  "Edition",
+  "CustomFormats",
+  "Languages",
+  "AudioLanguages",
+  "SubtitleLanguages",
+  "VideoHDR",
+]);
+const HEADER_CAP_MIN_TEXT = {
+  ContentHours: "Runtime (hh:mm) v",
+  EpisodesCounted: "Episodes v",
+  AvgEpisodeSizeGB: "Avg / Ep (GiB) v",
+  TotalSizeGB: "Total (GiB) v",
+  RuntimeMins: "Runtime (hh:mm) v",
+  VideoQuality: "WEBRip-2160p",
+  Resolution: "3840x2160p",
+  VideoCodec: "Video Codec v",
+  AudioCodec: "EAC3 Atmos v",
+  AudioChannels: "Audio Channels v",
+  Status: "Status v",
+  Instance: "Instance Name v",
+  QualityProfile: "Quality Profile v",
+  ReleaseGroup: "Release Group v",
+  Tags: "Tag List v",
+  Studio: "Studio Name v",
+  OriginalLanguage: "Original Language v",
+  Genres: "Drama, Sci-Fi, Thriller",
+  Edition: "Director Cut v",
+  CustomFormats: "Custom Formats v",
+  Languages: "Languages v",
+  AudioLanguages: "Audio Languages v",
+  SubtitleLanguages: "Subtitle Languages v",
+  VideoHDR: "Dolby Vision v",
+};
+const HEADER_CAP_EXTRA_PX = 4;
 const RENDER_BATCH_SIZE = 300;
 const RENDER_BATCH_MIN = 1200;
 const RENDER_BATCH_SIZE_LARGE = 600;
 const RENDER_BATCH_LARGE_MIN = 7000;
+const RADARR_RENDER_BATCH_MIN = 800;
+const RADARR_VIRTUAL_MIN_ROWS = 1000;
 const LAZY_CELL_BATCH_SIZE = 240;
+const RADARR_LAZY_CELL_BATCH_SIZE = 320;
 const HYDRATE_FRAME_BUDGET_MS = 10;
+const RADARR_HYDRATE_FRAME_BUDGET_MS = 14;
 const RENDER_FRAME_BUDGET_MS = 10;
+const RADARR_RENDER_FRAME_BUDGET_MS = 12;
 const RENDER_FRAME_CHECK_EVERY = 25;
+const RADARR_RENDER_FRAME_CHECK_EVERY = 20;
 
 let sonarrBase = "";
 let radarrBase = "";
@@ -252,19 +922,42 @@ let renderToken = 0;
 let sonarrHeaderNormalized = false;
 const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const pendingStabilizeByApp = { sonarr: false, radarr: false };
+const sonarrExpansionState = {
+  expandedSeries: new Set(),
+  expandedSeasons: new Set(),
+  extrasBySeason: new Set(),
+  seasonsBySeries: new Map(),
+  episodesBySeason: new Map(),
+  inflight: new Map(),
+  fastModeBySeries: new Map(),
+};
+const SERIES_EXPANSION_MAX_HEIGHT = 280;
+const SERIES_EXPANSION_ROW_HEIGHT = 32;
+const SERIES_EXPANSION_OVERSCAN = 8;
+const SERIES_EXPANSION_ANIM_MS = 420;
 const hydrationState = {
   token: 0,
+  app: "",
   rows: [],
   index: 0,
   scheduled: false,
   perf: null,
 };
+const headerCapCacheByApp = { sonarr: new Map(), radarr: new Map() };
+const headerCapKeyByApp = { sonarr: new Map(), radarr: new Map() };
+const headerCapAppliedVersionByApp = { sonarr: -1, radarr: -1 };
+let headerCapMeasureEl = null;
+let headerCapCleanupDone = false;
 
 function perfNow() {
   if (window.performance && typeof window.performance.now === "function") {
     return window.performance.now();
   }
   return Date.now();
+}
+
+function getRenderBatchMin(app) {
+  return app === "radarr" ? RADARR_RENDER_BATCH_MIN : RENDER_BATCH_MIN;
 }
 
 function loadRenderFlags() {
@@ -353,7 +1046,7 @@ function queueRenderPerfSink(perf) {
   };
   fetch(apiUrl("/api/perf/render"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     keepalive: true,
   }).catch(() => {});
@@ -405,6 +1098,7 @@ function setChipsVisible(visible) {
   chipsVisible = Boolean(visible);
   if (chipWrapEl) {
     chipWrapEl.classList.toggle("chip-wrap--hidden", !chipsVisible);
+    scheduleChipGroupLayout();
   }
   syncStatusNotice(activeApp);
 }
@@ -440,6 +1134,20 @@ function setRowRefreshNotice(token, message) {
   }
   if (token !== rowRefreshStatusToken) return;
   setStatusFor(message, ROW_REFRESH_NOTICE_MS);
+}
+
+function showRowRefreshFollowupNow(token, message) {
+  rowRefreshNoticeStartedAt = Date.now();
+  if (rowRefreshFollowupTimer) {
+    clearTimeout(rowRefreshFollowupTimer);
+    rowRefreshFollowupTimer = null;
+  }
+  if (rowRefreshStatusTimer) {
+    clearTimeout(rowRefreshStatusTimer);
+    rowRefreshStatusTimer = null;
+  }
+  if (token !== rowRefreshStatusToken) return;
+  setStatusFor(message, ROW_REFRESH_FOLLOWUP_MS);
 }
 
 function scheduleRowRefreshFollowup(token, message) {
@@ -480,7 +1188,7 @@ function stripNoticePart(text, part) {
 function clearPageFreshNotice() {
   if (isPageFresh()) return;
   ["sonarr", "radarr"].forEach(app => {
-    if (coldCacheByApp[app]) return;
+    if (coldCacheByApp[app] || coldCacheStickyByApp[app]) return;
     const current = noticeByApp[app];
     if (!current || !current.includes(COLD_CACHE_NOTICE)) return;
     const next = stripNoticePart(current, COLD_CACHE_NOTICE);
@@ -571,7 +1279,13 @@ function setPartialBanner(show) {
   partialBannerEl.classList.toggle("hidden", !show);
 }
 
-function formatProgress(counts, configured, progressMeta, tautulliState) {
+function updateFastModeBanner() {
+  if (!fastModeBannerEl) return;
+  const show = activeApp === "sonarr" && fastModeByApp.sonarr;
+  fastModeBannerEl.classList.toggle("hidden", !show);
+}
+
+function formatProgress(counts, configured, progressMeta, tautulliState, displayProcessed = null) {
   if (!configured) return "Not configured";
   const progressActive = Boolean(tautulliState?.refresh_in_progress && progressMeta?.total);
   const total = progressActive
@@ -579,7 +1293,7 @@ function formatProgress(counts, configured, progressMeta, tautulliState) {
     : counts?.total || 0;
   if (!total) return "No cached data";
   const matched = progressActive
-    ? progressMeta?.processed || 0
+    ? (Number.isFinite(displayProcessed) ? displayProcessed : (progressMeta?.processed || 0))
     : counts?.matched || 0;
   const label = progressActive ? "processed" : "matched";
   const base = `${matched}/${total} ${label}`;
@@ -599,45 +1313,62 @@ function formatProgress(counts, configured, progressMeta, tautulliState) {
   return `${base}${progressSuffix}`;
 }
 
-function formatTautulliStatus(state) {
+function formatTautulliStatus(state, progressMeta) {
   if (!state || !state.configured) return "Not configured";
-  if (state.refresh_in_progress) return "Matching in progress";
+  if (state.refresh_in_progress) {
+    const total = Number.isFinite(progressMeta?.total) ? progressMeta.total : 0;
+    return total > 0 ? "Matching in progress" : "Receiving Tautulli data...";
+  }
   if (state.status === "stale") return "Awaiting data";
   const age = formatAgeShort(withElapsedAge(state.index_age_seconds));
   return age === "--" ? "Matched" : `Matched (${age} ago)`;
 }
 
-function formatStatusPillText(appState, tautulli) {
+function formatStatusPillText(appState, tautulli, displayProcessed = null) {
   if (!appState?.configured) return "Data status";
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     const total = appState?.progress?.total || 0;
+    if (!total) {
+      return "Receiving Tautulli data...";
+    }
     if (total > 0) {
-      const processed = appState?.progress?.processed || 0;
+      const processed = Number.isFinite(displayProcessed)
+        ? displayProcessed
+        : (appState?.progress?.processed || 0);
       return `Matching ${processed}/${total}`;
     }
     return "Matching...";
   }
+  if (isStatusPillLoadedActive(appState, tautulli)) {
+    return "Data loaded";
+  }
   return "Data status";
 }
 
-function updateStatusPill(appState, tautulli) {
+function updateStatusPill(appState, tautulli, displayProcessed = null) {
   if (!statusPillEl) return;
-  statusPillEl.textContent = formatStatusPillText(appState, tautulli);
+  statusPillEl.textContent = formatStatusPillText(appState, tautulli, displayProcessed);
   const progress = appState?.progress;
   let title = "Hover to expand data status";
+  const showLoaded = isStatusPillLoadedActive(appState, tautulli);
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     if (progress?.total) {
-      const processed = progress.processed || 0;
+      const processed = Number.isFinite(displayProcessed)
+        ? displayProcessed
+        : (progress.processed || 0);
       title = `Tautulli matching in progress (${processed}/${progress.total} processed). Hover to expand status.`;
     } else {
-      title = "Tautulli matching in progress. Hover to expand status.";
+      title = "Receiving Tautulli data. Hover to expand status.";
     }
+  } else if (showLoaded) {
+    title = "Data loaded. Hover to expand status.";
   }
   statusPillEl.title = title;
   statusPillEl.classList.toggle(
     "status-pill--pending",
     Boolean(tautulli?.refresh_in_progress)
   );
+  statusPillEl.classList.toggle("status-pill--loaded", showLoaded);
 }
 
 function pauseStatusCountdown() {
@@ -684,12 +1415,141 @@ function clearStatusPillTimer() {
   }
 }
 
+function isStatusHovering() {
+  if (!statusRowEl) return false;
+  return statusRowEl.matches(":hover") ||
+    (statusPillEl && statusPillEl.matches(":hover"));
+}
+
+function clearStatusPillLoaded() {
+  if (statusPillLoadedTimer) {
+    clearTimeout(statusPillLoadedTimer);
+    statusPillLoadedTimer = null;
+  }
+  statusPillLoadedUntil = 0;
+}
+
+function startStatusPillLoaded() {
+  clearStatusPillLoaded();
+  statusPillLoadedUntil = Date.now() + STATUS_PILL_LOADED_MS;
+  statusPillLoadedTimer = setTimeout(() => {
+    statusPillLoadedTimer = null;
+    statusPillLoadedUntil = 0;
+    updateStatusPanel();
+  }, STATUS_PILL_LOADED_MS);
+  updateStatusPanel();
+}
+
+function isStatusPillLoadedActive(appState, tautulli) {
+  if (!appState?.configured) return false;
+  if (!tautulli?.configured || tautulli.refresh_in_progress) return false;
+  if (!statusPillLoadedUntil) return false;
+  return Date.now() < statusPillLoadedUntil;
+}
+
+function shouldShowStatusPill() {
+  return true;
+}
+
+function syncStatusPillVisibility() {
+  if (!statusPillEl) return;
+  statusPillEl.classList.toggle("status-pill--hidden", !shouldShowStatusPill());
+}
+
+function getProgressDisplayState(app) {
+  return progressDisplayByApp[app] || null;
+}
+
+function stopProgressDisplayTimer(app) {
+  const state = getProgressDisplayState(app);
+  if (!state || !state.timer) return;
+  clearInterval(state.timer);
+  state.timer = null;
+}
+
+function resetProgressDisplay(app) {
+  const state = getProgressDisplayState(app);
+  if (!state) return;
+  stopProgressDisplayTimer(app);
+  state.processed = 0;
+  state.total = 0;
+  state.targetProcessed = 0;
+  state.targetTotal = 0;
+  state.startedTs = 0;
+}
+
+function updateProgressTargets(app, progressMeta, tautulliState) {
+  const state = getProgressDisplayState(app);
+  if (!state) return null;
+  const totalRaw = progressMeta?.total;
+  const total = Number.isFinite(totalRaw) ? Math.max(0, totalRaw) : 0;
+  const refreshing = Boolean(tautulliState?.refresh_in_progress && total > 0);
+  if (!refreshing) {
+    resetProgressDisplay(app);
+    return null;
+  }
+  const processedRaw = progressMeta?.processed;
+  const processed = Number.isFinite(processedRaw)
+    ? Math.max(0, Math.min(total, processedRaw))
+    : 0;
+  const startedTs = Number.isFinite(progressMeta?.started_ts) ? progressMeta.started_ts : 0;
+  if (!state.startedTs || (startedTs && startedTs !== state.startedTs)) {
+    state.startedTs = startedTs || state.startedTs;
+    state.processed = 0;
+    state.total = total;
+  }
+  if (total !== state.total) {
+    state.total = total;
+  }
+  if (processed < state.processed) {
+    state.processed = processed;
+  }
+  state.targetProcessed = processed;
+  state.targetTotal = total;
+  if (state.processed < state.targetProcessed) {
+    startProgressDisplayTimer(app);
+  }
+  return state;
+}
+
+function renderProgressStatus(appState, tautulliState) {
+  const displayState = getProgressDisplayState(activeApp);
+  const displayProcessed = displayState?.total
+    ? displayState.processed
+    : null;
+  if (progressStatusEl) {
+    progressStatusEl.textContent = (tautulliState && tautulliState.configured)
+      ? formatProgress(appState?.counts, appState?.configured, appState?.progress, tautulliState, displayProcessed)
+      : "--";
+  }
+  updateStatusPill(appState, tautulliState, displayProcessed);
+}
+
+function startProgressDisplayTimer(app) {
+  const state = getProgressDisplayState(app);
+  if (!state || state.timer) return;
+  state.timer = setInterval(() => {
+    if (activeApp !== app) {
+      stopProgressDisplayTimer(app);
+      return;
+    }
+    const remaining = state.targetProcessed - state.processed;
+    if (remaining <= 0) {
+      stopProgressDisplayTimer(app);
+      return;
+    }
+    const step = Math.max(1, Math.ceil(remaining / PROGRESS_ANIMATION_STEPS));
+    state.processed = Math.min(state.targetProcessed, state.processed + step);
+    renderProgressStatus(statusState.apps?.[activeApp], statusState.tautulli);
+  }, PROGRESS_ANIMATION_INTERVAL_MS);
+}
+
 function showStatusRow() {
   if (!statusRowEl) return;
   clearStatusPillTimer();
   statusRowEl.classList.remove("status-row--hidden");
-  if (statusPillEl) statusPillEl.classList.add("status-pill--hidden");
   statusCollapsed = false;
+  syncStatusPillVisibility();
 }
 
 function hideStatusRow() {
@@ -697,11 +1557,7 @@ function hideStatusRow() {
   clearStatusPillTimer();
   statusRowEl.classList.add("status-row--hidden");
   statusCollapsed = true;
-  if (!statusPillEl) return;
-  statusPillEl.classList.add("status-pill--hidden");
-  statusPillTimer = setTimeout(() => {
-    if (statusCollapsed) statusPillEl.classList.remove("status-pill--hidden");
-  }, 360);
+  syncStatusPillVisibility();
 }
 
 function updateStatusCompleteNote(text, show) {
@@ -736,7 +1592,8 @@ function startStatusCountdown() {
     }, 2600);
   }
   statusCountdownTimer = setInterval(() => {
-    if (statusRowEl.matches(":hover") || (statusPillEl && statusPillEl.matches(":hover"))) {
+    const hovering = isStatusHovering();
+    if (hovering) {
       return;
     }
     statusCountdownRemaining -= 1;
@@ -753,7 +1610,7 @@ function startStatusCountdown() {
 function updateStatusRowVisibility(appState, tautulli) {
   if (!statusRowEl) return;
   const shouldAutoHide = shouldAutoHideStatus(appState, tautulli);
-  const hovering = statusRowEl.matches(":hover") || (statusPillEl && statusPillEl.matches(":hover"));
+  const hovering = isStatusHovering();
   if (shouldAutoHide) {
     if (hovering) {
       pauseStatusCountdown();
@@ -775,6 +1632,100 @@ function updateArrRefreshButton(btn, configured) {
   btn.disabled = !configured || busy;
 }
 
+function getAppConfigured(app) {
+  if (app === "sonarr") {
+    return Boolean(configState.sonarrConfigured || statusState.apps?.sonarr?.configured);
+  }
+  return Boolean(configState.radarrConfigured || statusState.apps?.radarr?.configured);
+}
+
+function normalizeInstanceId(value) {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function getArrRefreshInstances(app) {
+  const instances = instanceConfig[app] || [];
+  if (instances.length) return instances;
+  if (!getAppConfigured(app)) return [];
+  return [{ id: "", name: "" }];
+}
+
+function getArrRefreshSuffix(app, instance, index, total) {
+  if (total <= 1) return "";
+  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const name = String(instance?.name || "").trim();
+  if (name) return name;
+  return `${appLabel} ${index + 1}`;
+}
+
+function formatArrRefreshLabel(app, suffix) {
+  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const base = `Refresh ${appLabel} metadata`;
+  if (!suffix) return base;
+  return `${base} (${suffix})`;
+}
+
+function formatArrRefreshStatusLabel(app, suffix) {
+  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  if (!suffix) return appLabel;
+  return `${appLabel} (${suffix})`;
+}
+
+function updateArrRefreshButtons() {
+  if (!arrRefreshButtonsEl) return;
+  const app = activeApp;
+  const configured = getAppConfigured(app);
+  const instances = getArrRefreshInstances(app);
+  const busySet = arrRefreshBusy[app];
+  const keyParts = [
+    app,
+    configured ? "1" : "0",
+    instances.map(inst => `${normalizeInstanceId(inst?.id)}:${String(inst?.name || "")}`).join("|"),
+    Array.from(busySet).sort().join(","),
+  ];
+  const renderKey = keyParts.join("||");
+  if (renderKey === arrRefreshRenderKey) return;
+  arrRefreshRenderKey = renderKey;
+  arrRefreshButtonsEl.textContent = "";
+  if (!configured || !instances.length) {
+    arrRefreshButtonsEl.classList.add("hidden");
+    return;
+  }
+  arrRefreshButtonsEl.classList.remove("hidden");
+  instances.forEach((inst, index) => {
+    const suffix = getArrRefreshSuffix(app, inst, index, instances.length);
+    const label = formatArrRefreshLabel(app, suffix);
+    const statusLabel = formatArrRefreshStatusLabel(app, suffix);
+    const instanceId = normalizeInstanceId(inst?.id);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = label;
+    btn.title = `Ask ${statusLabel} to refresh its metadata. Sortarr updates on the next fetch.`;
+    btn.dataset.app = app;
+    if (instanceId) btn.dataset.instanceId = instanceId;
+    const busy = busySet.has(instanceId);
+    btn.disabled = !configured || busy;
+    if (busy) btn.setAttribute("data-busy", "1");
+    btn.addEventListener("click", async () => {
+      if (busySet.has(instanceId)) return;
+      busySet.add(instanceId);
+      updateArrRefreshButtons();
+      setStatus(`Refreshing ${statusLabel}...`);
+      try {
+        await requestArrRefresh(app, instanceId ? { instanceId } : {});
+        setStatus(`${statusLabel} refresh queued.`);
+      } catch (e) {
+        setStatus(`Error: ${e.message}`);
+      } finally {
+        busySet.delete(instanceId);
+        updateArrRefreshButtons();
+      }
+    });
+    arrRefreshButtonsEl.appendChild(btn);
+  });
+}
+
 function updateStatusPanel() {
   if (!progressStatusEl && !tautulliStatusEl && !cacheStatusEl) return;
   const appState = statusState.apps?.[activeApp];
@@ -790,13 +1741,10 @@ function updateStatusPanel() {
     lastStatusFetchAt = Date.now();
   }
 
-  if (progressStatusEl) {
-    progressStatusEl.textContent = (tautulli && tautulli.configured)
-      ? formatProgress(appState?.counts, appState?.configured, appState?.progress, tautulli)
-      : "--";
-  }
+  updateProgressTargets(activeApp, appState?.progress, tautulli);
+  renderProgressStatus(appState, tautulli);
   if (tautulliStatusEl) {
-    tautulliStatusEl.textContent = formatTautulliStatus(tautulli);
+    tautulliStatusEl.textContent = formatTautulliStatus(tautulli, appState?.progress);
   }
   if (cacheStatusEl) {
     const parts = [];
@@ -820,10 +1768,8 @@ function updateStatusPanel() {
     deepRefreshTautulliBtn.classList.toggle("hidden", !(tautulli && tautulli.configured));
     deepRefreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
   }
-  updateArrRefreshButton(refreshSonarrBtn, configState.sonarrConfigured);
-  updateArrRefreshButton(refreshRadarrBtn, configState.radarrConfigured);
+  updateArrRefreshButtons();
   updateStatusRowVisibility(appState, tautulli);
-  updateStatusPill(appState, tautulli);
 }
 
 function syncTautulliPendingFromStatus(prevTautulli, nextTautulli) {
@@ -863,10 +1809,17 @@ function scheduleTautulliRefreshReload() {
 }
 
 function handleTautulliRefreshState(prevTautulli, nextTautulli) {
-  if (!nextTautulli?.configured) return;
+  if (!nextTautulli?.configured) {
+    clearStatusPillLoaded();
+    return;
+  }
   const wasRefreshing = Boolean(prevTautulli?.refresh_in_progress);
   const isRefreshing = Boolean(nextTautulli?.refresh_in_progress);
+  if (isRefreshing) {
+    clearStatusPillLoaded();
+  }
   if (wasRefreshing && !isRefreshing) {
+    startStatusPillLoaded();
     scheduleTautulliRefreshReload();
   }
 }
@@ -874,10 +1827,15 @@ function handleTautulliRefreshState(prevTautulli, nextTautulli) {
 function scheduleStatusPoll() {
   if (statusPollTimer) return;
   if (!statusState.tautulli?.refresh_in_progress) return;
+  const progress = statusState.apps?.[activeApp]?.progress;
+  const hasProgress = Number.isFinite(progress?.total) && Number.isFinite(progress?.processed);
+  const interval = hasProgress && progress.processed < progress.total
+    ? TAUTULLI_STATUS_POLL_INTERVAL_MS
+    : TAUTULLI_POLL_INTERVAL_MS;
   statusPollTimer = setTimeout(async () => {
     statusPollTimer = null;
     await fetchStatus({ silent: true, lite: true });
-  }, TAUTULLI_POLL_INTERVAL_MS);
+  }, interval);
 }
 
 function mergeStatusApps(prevApps, nextApps) {
@@ -1056,9 +2014,19 @@ function setTautulliPending(app, pending) {
 
 function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
   const tautulliPending = flags.has("tautulli_refresh");
+  fastModeByApp[app] = flags.has("sonarr_fast");
   const pageFresh = isPageFresh();
-  const coldCache = flags.has("cold_cache");
+  const background = options.background === true;
+  const coldCacheFlag = flags.has("cold_cache");
   const prevColdCache = coldCacheByApp[app];
+  let sticky = coldCacheStickyByApp[app];
+  if (coldCacheFlag) {
+    sticky = true;
+  } else if (sticky) {
+    sticky = false;
+  }
+  coldCacheStickyByApp[app] = sticky;
+  const coldCache = coldCacheFlag || sticky || (background && prevColdCache && !coldCacheFlag);
   coldCacheByApp[app] = coldCache;
   if (app === activeApp && prevColdCache && !coldCache) {
     flushDeferredPrefetch({ requireWarm: true });
@@ -1080,7 +2048,7 @@ function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
   if (tautulliPending) {
     notices.push(TAUTULLI_MATCHING_NOTICE);
   }
-  if (coldCache || pageFresh) {
+  if (coldCache) {
     notices.push(COLD_CACHE_NOTICE);
   }
   if (!notices.length && fallbackNotice) {
@@ -1093,6 +2061,7 @@ function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
   if (app === activeApp) {
     setStatusNotice(combined);
     updateBackgroundLoading();
+    updateFastModeBanner();
   }
   if (pageFresh) {
     schedulePageFreshNoticeClear();
@@ -1102,7 +2071,75 @@ function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
 function resetUiState() {
   localStorage.removeItem(COLUMN_STORAGE_KEY);
   localStorage.removeItem(CSV_COLUMNS_KEY);
+  localStorage.removeItem(FILTERS_COLLAPSED_KEY);
   localStorage.removeItem("Sortarr-theme");
+}
+
+function getSonarrSeriesKey(seriesId, instanceId) {
+  if (!seriesId) return "";
+  const cleanInstance = String(instanceId || "").trim();
+  return `${cleanInstance}::${seriesId}`;
+}
+
+function getSonarrSeriesKeyFromRow(row) {
+  if (!row) return "";
+  const seriesId = row.SeriesId ?? row.seriesId ?? "";
+  const instanceId = row.InstanceId ?? row.instanceId ?? "";
+  return getSonarrSeriesKey(seriesId, instanceId);
+}
+
+function clearSonarrSeriesExpansion(seriesKey) {
+  if (!seriesKey) return;
+  sonarrExpansionState.seasonsBySeries.delete(seriesKey);
+  sonarrExpansionState.fastModeBySeries.delete(seriesKey);
+  Array.from(sonarrExpansionState.episodesBySeason.keys()).forEach(key => {
+    if (key.startsWith(`${seriesKey}::`)) {
+      sonarrExpansionState.episodesBySeason.delete(key);
+    }
+  });
+  Array.from(sonarrExpansionState.expandedSeasons).forEach(key => {
+    if (key.startsWith(`${seriesKey}::`)) {
+      sonarrExpansionState.expandedSeasons.delete(key);
+    }
+  });
+  sonarrExpansionState.expandedSeries.delete(seriesKey);
+  if (tbody) {
+    const safeKey = window.CSS && CSS.escape ? CSS.escape(seriesKey) : seriesKey.replace(/["\\]/g, "\\$&");
+    tbody.querySelectorAll(`tr.series-child-row[data-series-key="${safeKey}"]`).forEach(row => row.remove());
+    tbody.querySelectorAll(`button.series-expander[data-series-key="${safeKey}"]`).forEach(btn => {
+      btn.setAttribute("aria-expanded", "false");
+      const icon = btn.querySelector("span");
+      if (icon) icon.textContent = "+";
+    });
+    tbody.querySelectorAll(`tr.series-expanded[data-series-key="${safeKey}"]`).forEach(row => {
+      row.classList.remove("series-expanded");
+    });
+  }
+}
+
+function resetSonarrExpansionState(options = {}) {
+  sonarrExpansionState.expandedSeries.clear();
+  sonarrExpansionState.expandedSeasons.clear();
+  sonarrExpansionState.seasonsBySeries.clear();
+  sonarrExpansionState.episodesBySeason.clear();
+  sonarrExpansionState.inflight.clear();
+  sonarrExpansionState.fastModeBySeries.clear();
+  if (options.clearDom === false) return;
+  if (!tbody) return;
+  tbody.querySelectorAll("tr.series-child-row").forEach(row => row.remove());
+  tbody.querySelectorAll("button.series-expander[aria-expanded=\"true\"]").forEach(btn => {
+    btn.setAttribute("aria-expanded", "false");
+    const icon = btn.querySelector("span");
+    if (icon) icon.textContent = "+";
+  });
+  tbody.querySelectorAll("tr.series-expanded").forEach(row => {
+    row.classList.remove("series-expanded");
+  });
+}
+
+function resetSonarrExpansionDisplayState() {
+  sonarrExpansionState.expandedSeries.clear();
+  sonarrExpansionState.expandedSeasons.clear();
 }
 
 function getInstanceCount(app) {
@@ -1128,7 +2165,8 @@ function bindChipButtons(rootEl = document) {
       if (tableReadyByApp[activeApp]) {
         pendingStabilizeByApp[activeApp] = true;
       }
-      render(dataByApp[activeApp] || []);
+      const scrollAnchor = captureTableScrollAnchor();
+      render(dataByApp[activeApp] || [], { scrollAnchor });
     });
   });
 }
@@ -1161,6 +2199,7 @@ function buildInstanceChips() {
   });
 
   bindChipButtons();
+  scheduleChipGroupLayout();
 }
 
 function formatLastUpdatedTimestamp(ts) {
@@ -1426,7 +2465,7 @@ async function requestMatchDiagnostics(row, app) {
 
   const res = await fetch(apiUrl("/api/diagnostics/tautulli-match"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -1482,7 +2521,7 @@ async function requestArrRefresh(app, options = {}) {
   if (itemId) payload[idKey] = itemId;
   const res = await fetch(apiUrl(url), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -1512,6 +2551,46 @@ async function requestArrItemReload(app, options = {}) {
   const res = await fetch(apiUrl(`${base}?${params.toString()}`));
   if (!res.ok) {
     const detail = await readErrorDetail(res);
+    const err = new Error(detail || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+async function requestSonarrSeasons(seriesId, instanceId) {
+  if (!seriesId) {
+    throw new Error("series_id is required.");
+  }
+  const params = new URLSearchParams();
+  if (instanceId) {
+    params.set("instance_id", instanceId);
+  }
+  params.set("include_specials", "1");
+  const url = `/api/sonarr/series/${encodeURIComponent(seriesId)}/seasons?${params.toString()}`;
+  const res = await fetch(apiUrl(url));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    throw new Error(detail || res.statusText);
+  }
+  return res.json();
+}
+
+async function requestSonarrEpisodes(seriesId, seasonNumber, instanceId) {
+  if (!seriesId) {
+    throw new Error("series_id is required.");
+  }
+  if (seasonNumber == null || Number.isNaN(Number(seasonNumber))) {
+    throw new Error("season_number is required.");
+  }
+  const params = new URLSearchParams();
+  if (instanceId) {
+    params.set("instance_id", instanceId);
+  }
+  const url = `/api/sonarr/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonNumber)}/episodes?${params.toString()}`;
+  const res = await fetch(apiUrl(url));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
     throw new Error(detail || res.statusText);
   }
   return res.json();
@@ -1528,7 +2607,7 @@ async function requestTautulliItemRefresh(row, app) {
   if (sectionId) payload.section_id = sectionId;
   const res = await fetch(apiUrl("/api/tautulli/refresh_item"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
@@ -1678,6 +2757,58 @@ function applyArrItemUpdate(app, updatedRow, options = {}) {
   if (!replaced) {
     rows.push(updatedRow);
   }
+  if (app === "sonarr") {
+    const seriesKey = getSonarrSeriesKeyFromRow(updatedRow);
+    if (seriesKey) {
+      clearSonarrSeriesExpansion(seriesKey);
+    }
+  }
+  rowCacheByApp[app].clear();
+  dataVersionByApp[app] += 1;
+  sortCacheByApp[app] = null;
+  assignRowKeys(rows, app);
+  applyTitleWidth(app, rows);
+  lastUpdatedByApp[app] = Date.now();
+  if (app === activeApp) {
+    if (!options.skipRender) {
+      render(rows, { allowBatch: true });
+      updateLastUpdatedDisplay();
+    }
+  }
+  return true;
+}
+
+function removeArrItem(app, row, rowKey, options = {}) {
+  if (!row) return false;
+  const rows = dataByApp[app] || [];
+  const idKey = app === "sonarr" ? "SeriesId" : "MovieId";
+  const altIdKey = app === "sonarr" ? "seriesId" : "movieId";
+  const targetId = row[idKey] ?? row[altIdKey];
+  const targetInstanceId = String(row.InstanceId ?? row.instanceId ?? "");
+  let removed = false;
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    const existing = rows[i];
+    const existingId = existing[idKey] ?? existing[altIdKey];
+    const existingInstanceId = String(existing.InstanceId ?? existing.instanceId ?? "");
+    const existingKey = existing.__sortarrKey ?? "";
+    if (
+      (targetId != null
+        && String(existingId) === String(targetId)
+        && existingInstanceId === targetInstanceId)
+      || (rowKey && existingKey === rowKey)
+    ) {
+      rows.splice(i, 1);
+      removed = true;
+      break;
+    }
+  }
+  if (!removed) return false;
+  if (app === "sonarr") {
+    const seriesKey = getSonarrSeriesKeyFromRow(row);
+    if (seriesKey) {
+      clearSonarrSeriesExpansion(seriesKey);
+    }
+  }
   rowCacheByApp[app].clear();
   dataVersionByApp[app] += 1;
   sortCacheByApp[app] = null;
@@ -1713,12 +2844,17 @@ async function handleRowRefreshClick(btn) {
   }
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
   const rowTitle = formatRowTitle(row, app);
+  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const tautulliConfigured = Boolean(statusState.tautulli?.configured);
   setRowRefreshPending(rowEl, true);
   btn.disabled = true;
-  setStatus(`Refreshing ${app === "sonarr" ? "series" : "movie"}...`);
+  const initialParts = [`${appLabel} refresh queued.`];
+  if (tautulliConfigured) {
+    initialParts.push("Tautulli refresh queued.");
+  }
+  setRowRefreshNotice(statusToken, `Refreshing ${rowTitle} - ${initialParts.join(" ")}`);
   try {
     const arrPromise = requestArrRefresh(app, { itemId, instanceId });
-    const tautulliConfigured = Boolean(statusState.tautulli?.configured);
     const tautulliPromise = tautulliConfigured
       ? requestTautulliItemRefresh(row, app)
       : null;
@@ -1733,7 +2869,6 @@ async function handleRowRefreshClick(btn) {
     });
     const [arrResult, tautulliResult] = await Promise.all([arrResultPromise, tautulliResultPromise]);
     const parts = [];
-    const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
     const arrOk = arrResult.status === "fulfilled";
     if (arrOk) {
       parts.push(`${appLabel} refresh queued.`);
@@ -1801,12 +2936,23 @@ async function handleRowRefreshClick(btn) {
           const followup = refreshOutcome === "partial"
             ? `${rowTitle} Updated - Partial refresh (${arrLabel}, ${tautulliLabel})`
             : `${rowTitle} Updated - ${arrLabel}${showTautulliLabel ? `, ${tautulliLabel}` : ""}`;
-          scheduleRowRefreshFollowup(statusToken, `${followup}${filterNote}`);
+          showRowRefreshFollowupNow(statusToken, `${followup}${filterNote}`);
           const refreshedRow = findRowElement(app, rowKey) || rowEl;
           setRowRefreshPending(refreshedRow, false);
           flashRowRefresh(refreshedRow, refreshOutcome);
         }
       } catch (err) {
+        if (err && err.status === 404) {
+          const removed = removeArrItem(app, row, rowKey);
+          if (removed) {
+            const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+            scheduleRowRefreshFollowup(
+              statusToken,
+              `${rowTitle} Removed - Not found in ${appLabel}.`
+            );
+            return;
+          }
+        }
         scheduleRowRefreshFollowup(
           statusToken,
           `${rowTitle} Refresh failed - Row reload failed: ${err.message}`
@@ -1835,10 +2981,1667 @@ async function handleRowRefreshClick(btn) {
   }
 }
 
+function formatSeasonLabel(seasonNumber) {
+  return `Season ${seasonNumber}`;
+}
+
+function formatEpisodeCode(seasonNumber, episodeNumber) {
+  const season = String(Math.max(0, Number(seasonNumber || 0))).padStart(2, "0");
+  const episode = String(Math.max(0, Number(episodeNumber || 0))).padStart(2, "0");
+  return `S${season}E${episode}`;
+}
+
+function formatGiBValue(value) {
+  if (value == null || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  return `${num.toFixed(2)} GiB`;
+}
+
+function formatEpisodeSizeValue(value) {
+  if (value == null || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  if (num < 1) {
+    return `${Math.max(0, Math.round(num * 1000))}MB`;
+  }
+  return `${num.toFixed(2)} GiB`;
+}
+
+function formatEpisodeRuntimeMinutes(value) {
+  if (value == null || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  const totalMinutes = Math.max(0, Math.round(num));
+  if (totalMinutes === 0) return "";
+  if (totalMinutes < 60) return `${totalMinutes}m`;
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  return `${hours}h ${minutes}m`;
+}
+
+function summarizeListValues(value, limit = 3) {
+  const items = [];
+  if (Array.isArray(value)) {
+    value.forEach(entry => {
+      if (entry == null) return;
+      if (typeof entry === "string") {
+        items.push(entry);
+        return;
+      }
+      if (typeof entry === "object") {
+        const name = entry.name || entry.format || entry.id;
+        if (name != null) items.push(String(name));
+        return;
+      }
+      items.push(String(entry));
+    });
+  } else if (typeof value === "string") {
+    value.split(",").forEach(entry => {
+      const trimmed = entry.trim();
+      if (trimmed) items.push(trimmed);
+    });
+  } else if (value != null && value !== "") {
+    items.push(String(value));
+  }
+  const cleaned = [];
+  const seen = new Set();
+  items.forEach(item => {
+    const trimmed = String(item).trim();
+    if (!trimmed || seen.has(trimmed)) return;
+    seen.add(trimmed);
+    cleaned.push(trimmed);
+  });
+  if (!cleaned.length) return { display: "", full: "", truncated: false };
+  const full = cleaned.join(", ");
+  if (cleaned.length <= limit) return { display: full, full, truncated: false };
+  const display = `${cleaned.slice(0, limit).join(", ")}, +${cleaned.length - limit} more`;
+  return { display, full, truncated: true };
+}
+
+const INLINE_LIST_TOGGLE_CHARS = 24;
+
+function truncateInlineText(text, maxChars) {
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  const clipped = text.slice(0, Math.max(0, maxChars - 3)).trim();
+  return clipped ? `${clipped}...` : text.slice(0, maxChars);
+}
+
+function formatToggleListCell({ display, full, mixed = false, allowToggle = false } = {}) {
+  const safeDisplay = escapeHtml(display ?? "");
+  const safeFull = escapeHtml(full ?? "");
+  if (!safeDisplay && !safeFull && !mixed) return "";
+  const shortText = safeDisplay || safeFull;
+  const fullText = safeFull || shortText;
+  const showToggle = allowToggle && fullText && fullText !== shortText;
+  const classes = showToggle ? "lang-cell lang-cell-truncated" : "lang-cell";
+  const titleAttr = fullText && fullText !== shortText ? ` title="${fullText}"` : "";
+  const list = `<span class="lang-list" data-lang-full="${fullText}" data-lang-short="${shortText}" data-lang-state="short"${titleAttr}>${shortText}</span>`;
+  const toggle = showToggle
+    ? '<button class="lang-toggle" type="button" aria-expanded="false">Show all</button>'
+    : "";
+  const badge = mixed ? '<span class="mixed-badge mixed-badge-inline">Mixed</span>' : "";
+  return `<span class="${classes}">${list}${toggle}${badge}</span>`;
+}
+
+function formatEpisodeLanguageSummary(value) {
+  const summary = summarizeLanguageValue(value);
+  if (!summary.display) return "";
+  const full = summary.full ? ` title="${escapeHtml(summary.full)}"` : "";
+  return `<span class="series-episode-language"${full}>${escapeHtml(summary.display)}</span>`;
+}
+
+function formatEpisodeCustomFormats(value) {
+  const summary = summarizeListValues(value, 3);
+  if (!summary.display) return "";
+  const full = summary.full ? ` title="${escapeHtml(summary.full)}"` : "";
+  return `<span class="series-episode-custom"${full}>${escapeHtml(summary.display)}</span>`;
+}
+
+function formatEpisodeBool(value) {
+  if (value === "" || value === null || value === undefined) return "";
+  return formatBoolValue(value);
+}
+
+function formatEpisodeAirDate(value) {
+  if (!value) return "";
+  const raw = String(value);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  return date.toLocaleDateString();
+}
+
+function formatEpisodeDateTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function formatEpisodeScore(value) {
+  if (value == null || value === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return String(value);
+  if (Number.isInteger(num)) return String(num);
+  return num.toFixed(1);
+}
+
+const EPISODE_NOT_REPORTED_HTML = '<span class="muted">Not Reported</span>';
+const NOT_REPORTED_HTML = '<span class="muted" title="Not reported by Arr">Not reported</span>';
+
+function notReportedIfEmpty(value) {
+  if (value === "" || value === null || value === undefined) return NOT_REPORTED_HTML;
+  return value;
+}
+
+function formatOptionalBool(value) {
+  if (value === "" || value === null || value === undefined) return NOT_REPORTED_HTML;
+  return formatBoolValue(value);
+}
+
+function formatOptionalNumeric(value, widths = null) {
+  if (value === "" || value === null || value === undefined) return NOT_REPORTED_HTML;
+  return formatNumericCell(value, widths);
+}
+
+function formatEpisodeTextCell(value) {
+  if (value === null || value === undefined) return EPISODE_NOT_REPORTED_HTML;
+  const text = String(value);
+  if (!text.trim()) return EPISODE_NOT_REPORTED_HTML;
+  return escapeHtml(text);
+}
+
+function formatEpisodeHtmlCell(value) {
+  if (value === null || value === undefined) return EPISODE_NOT_REPORTED_HTML;
+  const text = String(value);
+  if (!text.trim()) return EPISODE_NOT_REPORTED_HTML;
+  return text;
+}
+
+const EPISODE_GRID_MAIN_WIDTH = "minmax(120px, 18vw)";
+const EPISODE_GRID_COLUMNS = [
+  {
+    key: "runtime",
+    label: "Runtime",
+    className: "series-episode-runtime",
+    width: "80px",
+    extra: false,
+    render: episode => formatEpisodeTextCell(
+      formatEpisodeRuntimeMinutes(episode.runtimeMins ?? "")
+    ),
+  },
+  {
+    key: "size",
+    label: "Size",
+    className: "series-episode-size",
+    width: "100px",
+    extra: false,
+    render: episode => {
+      const sizeText = episode.hasFile === false
+        ? "Missing"
+        : formatEpisodeSizeValue(episode.fileSizeGiB);
+      return formatEpisodeTextCell(sizeText);
+    },
+  },
+  {
+    key: "quality",
+    label: "Video Quality",
+    className: "series-episode-quality",
+    width: "140px",
+    extra: false,
+    render: episode => formatEpisodeTextCell(episode.quality || ""),
+  },
+  {
+    key: "resolution",
+    label: "Resolution",
+    className: "series-episode-resolution",
+    width: "120px",
+    extra: false,
+    render: episode => formatEpisodeTextCell(episode.resolution || ""),
+  },
+  {
+    key: "videoCodec",
+    label: "Video Codec",
+    className: "series-episode-video-codec",
+    width: "120px",
+    extra: false,
+    render: episode => formatEpisodeTextCell(episode.videoCodec || ""),
+  },
+  {
+    key: "audioCodec",
+    label: "Audio Codec",
+    className: "series-episode-audio-codec",
+    width: "120px",
+    extra: false,
+    render: episode => formatEpisodeTextCell(episode.audioCodec || ""),
+  },
+  {
+    key: "audioChannels",
+    label: "Audio Channels",
+    className: "series-episode-audio-channels",
+    width: "110px",
+    extra: false,
+    render: episode => formatEpisodeHtmlCell(
+      formatAudioChannelsCell(escapeHtml(episode.audioChannels ?? ""))
+    ),
+  },
+  {
+    key: "audioLanguages",
+    label: "Languages",
+    className: "series-episode-audio-langs",
+    width: "150px",
+    extra: false,
+    render: episode => formatEpisodeHtmlCell(
+      formatEpisodeLanguageSummary(episode.audioLanguages ?? "")
+    ),
+  },
+  {
+    key: "subtitleLanguages",
+    label: "Subtitles",
+    className: "series-episode-subs",
+    width: "150px",
+    extra: true,
+    render: episode => formatEpisodeHtmlCell(
+      formatEpisodeLanguageSummary(episode.subtitleLanguages ?? "")
+    ),
+  },
+  {
+    key: "airDate",
+    label: "Air Date",
+    className: "series-episode-air-date",
+    width: "110px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(
+      formatEpisodeAirDate(episode.airDate ?? "")
+    ),
+  },
+  {
+    key: "cutoff",
+    label: "Cutoff",
+    className: "series-episode-cutoff",
+    width: "90px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(
+      formatEpisodeBool(episode.qualityCutoffNotMet)
+    ),
+  },
+  {
+    key: "monitored",
+    label: "Monitored",
+    className: "series-episode-monitored",
+    width: "90px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(formatEpisodeBool(episode.monitored)),
+  },
+  {
+    key: "releaseGroup",
+    label: "Release Group",
+    className: "series-episode-release-group",
+    width: "120px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(episode.releaseGroup ?? ""),
+  },
+  {
+    key: "lastSearch",
+    label: "Last Search",
+    className: "series-episode-last-search",
+    width: "150px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(
+      formatEpisodeDateTime(episode.lastSearchTime ?? "")
+    ),
+  },
+  {
+    key: "customFormats",
+    label: "Custom Formats",
+    className: "series-episode-custom-formats",
+    width: "180px",
+    extra: true,
+    render: episode => formatEpisodeHtmlCell(
+      formatEpisodeCustomFormats(episode.customFormats ?? "")
+    ),
+  },
+  {
+    key: "customScore",
+    label: "CF Score",
+    className: "series-episode-custom-score",
+    width: "90px",
+    extra: true,
+    render: episode => formatEpisodeTextCell(
+      formatEpisodeScore(episode.customFormatScore ?? "")
+    ),
+  },
+];
+
+function isEpisodeCellReported(cellHtml) {
+  return Boolean(cellHtml && cellHtml !== EPISODE_NOT_REPORTED_HTML);
+}
+
+function buildEpisodeGridTemplate(columns) {
+  const widths = (columns || []).map(col => col.width).filter(Boolean);
+  if (!widths.length) return EPISODE_GRID_MAIN_WIDTH;
+  return `${EPISODE_GRID_MAIN_WIDTH} ${widths.join(" ")}`;
+}
+
+function applyEpisodeGridTemplate(container, columns) {
+  if (!container) return;
+  const baseColumns = (columns || []).filter(col => !col.extra);
+  container.style.setProperty("--series-episode-grid-base", buildEpisodeGridTemplate(baseColumns));
+  container.style.setProperty("--series-episode-grid-extras", buildEpisodeGridTemplate(columns));
+}
+
+function getEpisodeGridColumns(episodes) {
+  const reportedByKey = new Map();
+  EPISODE_GRID_COLUMNS.forEach(col => reportedByKey.set(col.key, false));
+  if (Array.isArray(episodes)) {
+    episodes.forEach(episode => {
+      EPISODE_GRID_COLUMNS.forEach(col => {
+        if (reportedByKey.get(col.key)) return;
+        const cell = col.render(episode);
+        if (isEpisodeCellReported(cell)) {
+          reportedByKey.set(col.key, true);
+        }
+      });
+    });
+  }
+  const baseReported = [];
+  const extraReported = [];
+  const baseUnreported = [];
+  const extraUnreported = [];
+  EPISODE_GRID_COLUMNS.forEach(col => {
+    const reported = reportedByKey.get(col.key);
+    if (col.extra) {
+      (reported ? extraReported : extraUnreported).push(col);
+    } else {
+      (reported ? baseReported : baseUnreported).push(col);
+    }
+  });
+  return baseReported.concat(extraReported, baseUnreported, extraUnreported);
+}
+
+function formatSeriesType(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  return raw
+    .replace(/[_-]+/g, " ")
+    .split(" ")
+    .map(word => word ? word[0].toUpperCase() + word.slice(1).toLowerCase() : "")
+    .join(" ");
+}
+
+function formatSeriesLanguage(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  const isCode = /^[a-z]{2,3}([_-][a-z0-9]+)?$/i.test(raw);
+  const display = isCode ? languageCodeToName(raw) : raw;
+  return escapeHtml(display);
+}
+
+function formatSeriesGenres(value) {
+  const summary = summarizeListValues(value, 3);
+  if (!summary.display) return "";
+  const full = summary.full;
+  let display = summary.display;
+  let allowToggle = summary.truncated;
+  if (!allowToggle && full.length > INLINE_LIST_TOGGLE_CHARS) {
+    display = truncateInlineText(full, INLINE_LIST_TOGGLE_CHARS);
+    allowToggle = display !== full;
+  }
+  return formatToggleListCell({
+    display,
+    full,
+    allowToggle,
+  });
+}
+
+function formatCustomFormatsValue(value) {
+  const summary = summarizeListValues(value, 3);
+  if (!summary.display) return "";
+  const full = summary.full;
+  let display = summary.display;
+  let allowToggle = summary.truncated;
+  if (!allowToggle && full.length > INLINE_LIST_TOGGLE_CHARS) {
+    display = truncateInlineText(full, INLINE_LIST_TOGGLE_CHARS);
+    allowToggle = display !== full;
+  }
+  return formatToggleListCell({
+    display,
+    full,
+    allowToggle,
+  });
+}
+
+function formatLanguagesValue(value) {
+  if (!value) return "";
+  return formatLanguageValue(value, false, { allowToggle: true });
+}
+
+function formatSeriesDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  return escapeHtml(date.toLocaleDateString());
+}
+
+function formatDateTimeValue(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return escapeHtml(value);
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return escapeHtml(`${day}/${month}/${year} - ${hours}:${minutes}`);
+}
+
+function buildSeasonMetaText(season) {
+  const parts = [];
+  const epCount = season.episodeCount;
+  const fileCount = season.episodeFileCount;
+  if (epCount != null && epCount !== "") {
+    parts.push(`${epCount} eps`);
+  }
+  if (fileCount != null && fileCount !== "") {
+    parts.push(`${fileCount} files`);
+  }
+  const sizeText = formatGiBValue(season.sizeOnDiskGiB);
+  if (sizeText) parts.push(sizeText);
+  const avgText = formatGiBValue(season.avgEpisodeSizeGiB);
+  if (avgText) parts.push(`${avgText}/ep`);
+  if (season.monitored === false) parts.push("Unmonitored");
+  return parts.join(" | ");
+}
+
+function buildEpisodeMetaText(episode) {
+  const parts = [];
+  if (episode.hasFile === false) {
+    parts.push("Missing");
+  }
+  const sizeText = formatEpisodeSizeValue(episode.fileSizeGiB);
+  if (sizeText) parts.push(sizeText);
+  const quality = [episode.quality, episode.resolution].filter(Boolean).join(" ");
+  if (quality) parts.push(quality);
+  if (episode.audioCodec) parts.push(episode.audioCodec);
+  return parts.join(" | ");
+}
+
+function buildEpisodeGridHeader(columns) {
+  const row = document.createElement("div");
+  row.className = "series-episode-header";
+  const ordered = Array.isArray(columns) && columns.length
+    ? columns
+    : EPISODE_GRID_COLUMNS;
+  const cells = [
+    '<div class="series-episode-header-cell series-episode-header-title">Episode</div>',
+  ];
+  ordered.forEach(col => {
+    const classes = [
+      "series-episode-header-cell",
+      "series-episode-col",
+      col.className,
+    ];
+    if (col.extra) classes.push("series-episode-extra");
+    cells.push(`<div class="${classes.join(" ")}">${col.label}</div>`);
+  });
+  row.innerHTML = cells.join("");
+  return row;
+}
+
+function buildEpisodeGridRow(episode, columns, index) {
+  const row = document.createElement("div");
+  row.className = "series-episode-row";
+  if (episode.hasFile === false) {
+    row.classList.add("series-episode-row--missing");
+  }
+  if (Number.isFinite(index)) {
+    row.dataset.episodeIndex = String(index);
+  }
+  const code = formatEpisodeCode(episode.seasonNumber, episode.episodeNumber);
+  const overviewText = String(episode.overview ?? "").trim();
+  const overviewAttr = overviewText ? ` title="${escapeHtml(overviewText)}"` : "";
+  const ordered = Array.isArray(columns) && columns.length
+    ? columns
+    : EPISODE_GRID_COLUMNS;
+  const cells = [
+    `<div class="series-episode-main">
+      <span class="series-episode-code"${overviewAttr}>${escapeHtml(code)}</span>
+      <span class="series-episode-title"${overviewAttr}>${escapeHtml(episode.title || "Untitled")}</span>
+    </div>`,
+  ];
+  ordered.forEach(col => {
+    const classes = ["series-episode-cell", "series-episode-col", col.className];
+    if (col.extra) classes.push("series-episode-extra");
+    cells.push(`<div class="${classes.join(" ")}">${col.render(episode)}</div>`);
+  });
+  row.innerHTML = cells.join("");
+  return row;
+}
+
+function createVirtualList({ height, rowHeight, overscan, headerEl } = {}) {
+  const root = document.createElement("div");
+  root.className = "series-episode-scroll";
+  const spacer = document.createElement("div");
+  spacer.className = "series-episode-virtual-spacer";
+  const items = document.createElement("div");
+  items.className = "series-episode-virtual-items";
+  let headerOffset = 0;
+  if (headerEl) {
+    root.appendChild(headerEl);
+  }
+  root.append(spacer, items);
+
+  let data = [];
+  let renderRow = () => document.createElement("div");
+  const rowSize = rowHeight || SERIES_EXPANSION_ROW_HEIGHT;
+  const listHeight = height || SERIES_EXPANSION_MAX_HEIGHT;
+  const listOverscan = overscan || SERIES_EXPANSION_OVERSCAN;
+  root.style.maxHeight = `${listHeight}px`;
+
+  const updateHeaderOffset = () => {
+    headerOffset = headerEl ? headerEl.offsetHeight : 0;
+    items.style.top = `${headerOffset}px`;
+  };
+
+  function render() {
+    const viewport = root.clientHeight || listHeight;
+    const scrollTop = Math.max(0, root.scrollTop - headerOffset);
+    const start = Math.max(0, Math.floor(scrollTop / rowSize) - listOverscan);
+    const end = Math.min(data.length, start + Math.ceil(viewport / rowSize) + listOverscan * 2);
+    items.style.transform = `translateY(${start * rowSize}px)`;
+    items.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < end; i += 1) {
+      const row = renderRow(data[i], i);
+      row.classList.add("series-episode-row");
+      row.style.height = `${rowSize}px`;
+      frag.appendChild(row);
+    }
+    items.appendChild(frag);
+  }
+
+  function setData(next) {
+    data = Array.isArray(next) ? next : [];
+    spacer.style.height = `${data.length * rowSize}px`;
+    if (headerEl && root.isConnected) {
+      updateHeaderOffset();
+      render();
+      return;
+    }
+    requestAnimationFrame(() => {
+      updateHeaderOffset();
+      render();
+    });
+  }
+
+  function setRenderRow(fn) {
+    if (typeof fn === "function") {
+      renderRow = fn;
+      render();
+    }
+  }
+
+  let scrollFrame = null;
+  const scheduleRender = () => {
+    if (scrollFrame) return;
+    scrollFrame = requestAnimationFrame(() => {
+      scrollFrame = null;
+      render();
+    });
+  };
+  root.addEventListener("scroll", scheduleRender, { passive: true });
+  return { root, setData, setRenderRow, render };
+}
+
+function renderSeriesSkeleton(container, count) {
+  if (!container) return;
+  container.textContent = "";
+  const frag = document.createDocumentFragment();
+  const total = count || 4;
+  for (let i = 0; i < total; i += 1) {
+    const row = document.createElement("div");
+    row.className = "series-skeleton";
+    frag.appendChild(row);
+  }
+  container.appendChild(frag);
+}
+
+function renderSeriesError(container, message) {
+  if (!container) return;
+  container.textContent = "";
+  const error = document.createElement("div");
+  error.className = "series-expansion-error";
+  error.textContent = message || "Failed to load.";
+  container.appendChild(error);
+}
+
+function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
+  const template = document.getElementById("sonarrSeriesExpansionTemplate");
+  let shell = null;
+  if (template && template.content && template.content.firstElementChild) {
+    shell = template.content.firstElementChild.cloneNode(true);
+  }
+  if (!shell) {
+    shell = document.createElement("div");
+    shell.className = "series-expansion";
+    shell.innerHTML = `
+        <div class="series-expansion-header">
+          <div class="series-expansion-title">Seasons</div>
+          <div class="series-expansion-actions">
+            <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
+          </div>
+        </div>
+        <div class="series-expansion-body" data-role="series-expansion-body"></div>
+    `;
+  }
+  shell.dataset.seriesKey = seriesKey;
+  if (seriesId != null) {
+    shell.dataset.seriesId = String(seriesId);
+  }
+  if (instanceId != null) {
+    shell.dataset.instanceId = String(instanceId);
+  }
+  const body = shell.querySelector('[data-role="series-expansion-body"]') || shell;
+  const statusEl = shell.querySelector('[data-role="series-expansion-status"]');
+  return { shell, body, statusEl };
+}
+
+function setSeasonExtrasState(block, enabled) {
+  if (!block) return;
+  const seriesKey = block.dataset.seriesKey || "";
+  const season = block.dataset.season || "";
+  const seasonKey = seriesKey && season ? `${seriesKey}::${season}` : "";
+  const episodesWrap = block.querySelector(".series-season-episodes");
+  const toggle = block.querySelector('[data-role="episode-extras-toggle"]');
+  if (episodesWrap) {
+    episodesWrap.classList.toggle("series-episode-extras", enabled);
+  }
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+    toggle.classList.toggle("is-active", enabled);
+  }
+  if (!seasonKey) return;
+  if (enabled) {
+    sonarrExpansionState.extrasBySeason.add(seasonKey);
+  } else {
+    sonarrExpansionState.extrasBySeason.delete(seasonKey);
+  }
+}
+
+function updateSeriesExpansionStatus(statusEl, text, options = {}) {
+  if (!statusEl) return;
+  statusEl.textContent = text || "";
+  statusEl.classList.toggle("series-expansion-status--warn", Boolean(options.warn));
+}
+
+function ensureSeriesChildRow(rowEl, seriesKey) {
+  const existing = rowEl?.nextElementSibling;
+  if (existing && existing.classList.contains("series-child-row")) {
+    if (existing.__collapseTimer) {
+      clearTimeout(existing.__collapseTimer);
+      existing.__collapseTimer = null;
+    }
+    requestAnimationFrame(() => {
+      existing.classList.add("series-child-row--open");
+    });
+    return existing;
+  }
+  const tr = document.createElement("tr");
+  tr.className = "series-child-row";
+  tr.dataset.seriesKey = seriesKey;
+  const td = document.createElement("td");
+  const colCount = tableEl ? tableEl.querySelectorAll("thead th").length : 1;
+  td.colSpan = colCount || 1;
+  tr.appendChild(td);
+  rowEl.insertAdjacentElement("afterend", tr);
+  requestAnimationFrame(() => {
+    tr.classList.add("series-child-row--open");
+  });
+  return tr;
+}
+
+function collapseSeriesExpansion(rowEl, btn, seriesKey) {
+  sonarrExpansionState.expandedSeries.delete(seriesKey);
+  Array.from(sonarrExpansionState.expandedSeasons).forEach(key => {
+    if (key.startsWith(`${seriesKey}::`)) {
+      sonarrExpansionState.expandedSeasons.delete(key);
+    }
+  });
+  Array.from(sonarrExpansionState.extrasBySeason).forEach(key => {
+    if (key.startsWith(`${seriesKey}::`)) {
+      sonarrExpansionState.extrasBySeason.delete(key);
+    }
+  });
+  if (btn) {
+    btn.setAttribute("aria-expanded", "false");
+    const icon = btn.querySelector("span");
+    if (icon) icon.textContent = "+";
+  }
+  if (rowEl) rowEl.classList.remove("series-expanded");
+  if (tbody) {
+    const safeKey = window.CSS && CSS.escape ? CSS.escape(seriesKey) : seriesKey.replace(/["\\]/g, "\\$&");
+    tbody.querySelectorAll(`tr.series-child-row[data-series-key="${safeKey}"]`).forEach(row => {
+      row.classList.remove("series-child-row--open");
+      if (row.__collapseTimer) {
+        clearTimeout(row.__collapseTimer);
+      }
+      row.__collapseTimer = window.setTimeout(() => {
+        if (row.isConnected) {
+          row.remove();
+        }
+        row.__collapseTimer = null;
+      }, SERIES_EXPANSION_ANIM_MS);
+    });
+  }
+}
+
+async function loadSeriesSeasons(row, seriesKey, expansion) {
+  const cached = sonarrExpansionState.seasonsBySeries.get(seriesKey);
+  if (cached) {
+    renderSeasonList(expansion.body, seriesKey, cached);
+    const fastMode = sonarrExpansionState.fastModeBySeries.get(seriesKey) === true;
+    updateSeriesExpansionStatus(
+      expansion.statusEl,
+      fastMode ? "Fast mode: file details limited." : ""
+    );
+    return;
+  }
+  const requestKey = `seasons::${seriesKey}`;
+  let request = sonarrExpansionState.inflight.get(requestKey);
+  if (!request) {
+    const seriesId = row.SeriesId ?? row.seriesId ?? "";
+    const instanceId = row.InstanceId ?? row.instanceId ?? "";
+    request = requestSonarrSeasons(seriesId, instanceId);
+    sonarrExpansionState.inflight.set(requestKey, request);
+  }
+  try {
+    const payload = await request;
+    const seasons = Array.isArray(payload?.seasons) ? payload.seasons : [];
+    sonarrExpansionState.seasonsBySeries.set(seriesKey, seasons);
+    sonarrExpansionState.fastModeBySeries.set(seriesKey, payload?.fast_mode === true);
+    if (!expansion.body || !expansion.body.isConnected) return;
+    renderSeasonList(expansion.body, seriesKey, seasons);
+    updateSeriesExpansionStatus(
+      expansion.statusEl,
+      payload?.fast_mode ? "Fast mode: file details limited." : ""
+    );
+  } catch (err) {
+    renderSeriesError(expansion.body, err.message || "Failed to load seasons.");
+    updateSeriesExpansionStatus(expansion.statusEl, "Failed to load seasons.", { warn: true });
+  } finally {
+    sonarrExpansionState.inflight.delete(requestKey);
+  }
+}
+
+function renderSeasonList(container, seriesKey, seasons) {
+  if (!container) return;
+  container.textContent = "";
+  const expansion = container.closest(".series-expansion");
+  const seriesId = expansion?.dataset?.seriesId || "";
+  const instanceId = expansion?.dataset?.instanceId || "";
+  const visible = Array.isArray(seasons)
+    ? seasons.filter(season => {
+      const seasonNumber = Number(season.seasonNumber || 0);
+      if (seasonNumber !== 0) return true;
+      const fileCount = season.episodeFileCount;
+      const episodeCount = season.episodeCount;
+      if (fileCount != null && fileCount !== "") {
+        return Number(fileCount) > 0;
+      }
+      if (episodeCount != null && episodeCount !== "") {
+        return Number(episodeCount) > 0;
+      }
+      return false;
+    })
+    : [];
+  if (!visible.length) {
+    const empty = document.createElement("div");
+    empty.className = "series-expansion-empty";
+    empty.textContent = "No seasons available.";
+    container.appendChild(empty);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  visible.forEach(season => {
+    const seasonNumber = Number(season.seasonNumber || 0);
+    const seasonKey = `${seriesKey}::${seasonNumber}`;
+    const block = document.createElement("div");
+    block.className = "series-season-block";
+    block.dataset.seriesKey = seriesKey;
+    block.dataset.season = String(seasonNumber);
+
+    const row = document.createElement("div");
+    row.className = "series-season-row";
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "series-season-toggle";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "+";
+    toggle.dataset.seriesKey = seriesKey;
+    toggle.dataset.season = String(seasonNumber);
+
+    const label = document.createElement("div");
+    label.className = "series-season-title";
+    label.textContent = formatSeasonLabel(seasonNumber);
+
+    const meta = document.createElement("div");
+    meta.className = "series-season-meta";
+    meta.textContent = buildSeasonMetaText(season);
+
+    const headerWrap = document.createElement("div");
+    headerWrap.className = "series-season-header";
+
+    const metaWrap = document.createElement("div");
+    metaWrap.className = "series-season-main";
+    const extrasToggle = document.createElement("button");
+    extrasToggle.type = "button";
+    extrasToggle.className = "series-expansion-toggle series-season-extras";
+    extrasToggle.setAttribute("aria-pressed", "false");
+    extrasToggle.setAttribute("data-role", "episode-extras-toggle");
+    extrasToggle.textContent = "Extras";
+
+    headerWrap.append(label, extrasToggle);
+    metaWrap.append(headerWrap, meta);
+
+    row.append(toggle, metaWrap);
+
+    const episodesWrap = document.createElement("div");
+    episodesWrap.className = "series-season-episodes";
+    episodesWrap.dataset.seriesKey = seriesKey;
+    episodesWrap.dataset.season = String(seasonNumber);
+    episodesWrap.setAttribute("aria-hidden", "true");
+    const extrasEnabled = sonarrExpansionState.extrasBySeason.has(seasonKey);
+    if (extrasEnabled) {
+      episodesWrap.classList.add("series-episode-extras");
+      extrasToggle.setAttribute("aria-pressed", "true");
+      extrasToggle.classList.add("is-active");
+    }
+
+    if (sonarrExpansionState.expandedSeasons.has(seasonKey)) {
+      toggle.setAttribute("aria-expanded", "true");
+      toggle.textContent = "-";
+      episodesWrap.classList.add("is-open");
+      episodesWrap.setAttribute("aria-hidden", "false");
+      const cachedEpisodes = sonarrExpansionState.episodesBySeason.get(seasonKey);
+      if (cachedEpisodes) {
+        renderEpisodeList(episodesWrap, cachedEpisodes);
+      } else {
+        renderSeriesSkeleton(episodesWrap, 3);
+        if (seriesId) {
+          void loadSeasonEpisodes(seriesId, seasonNumber, instanceId, episodesWrap, seriesKey);
+        }
+      }
+    }
+
+    block.append(row, episodesWrap);
+    frag.appendChild(block);
+  });
+  container.appendChild(frag);
+}
+
+async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container, seriesKey) {
+  const cacheKey = `${seriesKey}::${seasonNumber}`;
+  const cached = sonarrExpansionState.episodesBySeason.get(cacheKey);
+  if (cached) {
+    renderEpisodeList(container, cached);
+    return;
+  }
+  const requestKey = `episodes::${cacheKey}`;
+  let request = sonarrExpansionState.inflight.get(requestKey);
+  if (!request) {
+    request = requestSonarrEpisodes(seriesId, seasonNumber, instanceId);
+    sonarrExpansionState.inflight.set(requestKey, request);
+  }
+  try {
+    const payload = await request;
+    const episodes = Array.isArray(payload?.episodes) ? payload.episodes : [];
+    sonarrExpansionState.episodesBySeason.set(cacheKey, episodes);
+    if (!sonarrExpansionState.expandedSeasons.has(cacheKey)) return;
+    if (!container || !container.isConnected) return;
+    renderEpisodeList(container, episodes);
+  } catch (err) {
+    renderSeriesError(container, err.message || "Failed to load episodes.");
+  } finally {
+    sonarrExpansionState.inflight.delete(requestKey);
+  }
+}
+
+function renderEpisodeList(container, episodes) {
+  if (!container) return;
+  container.textContent = "";
+  if (!episodes || !episodes.length) {
+    const empty = document.createElement("div");
+    empty.className = "series-expansion-empty";
+    empty.textContent = "No episodes available.";
+    container.appendChild(empty);
+    return;
+  }
+  const orderedColumns = getEpisodeGridColumns(episodes);
+  applyEpisodeGridTemplate(container, orderedColumns);
+  const header = buildEpisodeGridHeader(orderedColumns);
+  const renderEpisodeRow = (episode, index) => {
+    const row = buildEpisodeGridRow(episode, orderedColumns, index);
+    if (container.dataset.selectedEpisodeIndex === String(index)) {
+      row.classList.add("series-episode-row--selected");
+      selectedEpisodeRowEl = row;
+    }
+    return row;
+  };
+  if (episodes.length <= 40) {
+    const scroll = document.createElement("div");
+    scroll.className = "series-episode-scroll";
+    scroll.style.maxHeight = `${SERIES_EXPANSION_MAX_HEIGHT}px`;
+    scroll.appendChild(header);
+    const rows = document.createElement("div");
+    rows.className = "series-episode-rows";
+    episodes.forEach((episode, index) => {
+      rows.appendChild(renderEpisodeRow(episode, index));
+    });
+    scroll.appendChild(rows);
+    container.appendChild(scroll);
+    const selectedIndex = Number(container.dataset.selectedEpisodeIndex);
+    const seasonKey = container.dataset.seriesKey || "";
+    const seasonNumber = container.dataset.season || "";
+    if (Number.isFinite(selectedIndex) &&
+        keyboardNavState.level === "episodes" &&
+        seasonKey &&
+        seasonKey === keyboardNavState.seriesKey &&
+        seasonNumber === String(keyboardNavState.seasonNumber)) {
+      requestAnimationFrame(() => {
+        applyEpisodeSelection(container, selectedIndex, { scroll: true });
+      });
+    }
+    return;
+  }
+  const vlist = createVirtualList({
+    height: SERIES_EXPANSION_MAX_HEIGHT,
+    rowHeight: SERIES_EXPANSION_ROW_HEIGHT,
+    overscan: SERIES_EXPANSION_OVERSCAN,
+    headerEl: header,
+  });
+  vlist.setRenderRow(renderEpisodeRow);
+  vlist.setData(episodes);
+  container.appendChild(vlist.root);
+  const selectedIndex = Number(container.dataset.selectedEpisodeIndex);
+  const seasonKey = container.dataset.seriesKey || "";
+  const seasonNumber = container.dataset.season || "";
+  if (Number.isFinite(selectedIndex) &&
+      keyboardNavState.level === "episodes" &&
+      seasonKey &&
+      seasonKey === keyboardNavState.seriesKey &&
+      seasonNumber === String(keyboardNavState.seasonNumber)) {
+    requestAnimationFrame(() => {
+      applyEpisodeSelection(container, selectedIndex, { scroll: true });
+    });
+  }
+}
+
+async function handleSeriesExpanderClick(btn) {
+  const rowEl = btn.closest("tr");
+  if (!rowEl) return;
+  const app = rowEl.dataset.app || activeApp;
+  if (app !== "sonarr") return;
+  const row = rowEl.__sortarrRow || findRowByKey(app, rowEl.dataset.rowKey || "");
+  if (!row) return;
+  const seriesId = row.SeriesId ?? row.seriesId ?? "";
+  if (!seriesId) return;
+  const instanceId = row.InstanceId ?? row.instanceId ?? "";
+  const seriesKey = getSonarrSeriesKey(seriesId, instanceId);
+  if (!seriesKey) return;
+  if (sonarrExpansionState.expandedSeries.has(seriesKey)) {
+    collapseSeriesExpansion(rowEl, btn, seriesKey);
+    return;
+  }
+  sonarrExpansionState.expandedSeries.add(seriesKey);
+  rowEl.classList.add("series-expanded");
+  rowEl.dataset.seriesKey = seriesKey;
+  btn.setAttribute("aria-expanded", "true");
+  const icon = btn.querySelector("span");
+  if (icon) icon.textContent = "-";
+
+  const childRow = ensureSeriesChildRow(rowEl, seriesKey);
+  const cell = childRow.querySelector("td");
+  cell.textContent = "";
+  const expansion = buildSeriesExpansionShell(seriesKey, seriesId, instanceId);
+  cell.appendChild(expansion.shell);
+  updateSeriesExpansionStatus(expansion.statusEl, "Loading seasons...");
+  renderSeriesSkeleton(expansion.body, 4);
+  await loadSeriesSeasons(row, seriesKey, expansion);
+}
+
+async function handleSeriesSeasonToggle(btn) {
+  const block = btn.closest(".series-season-block");
+  if (!block) return;
+  const seriesKey = block.dataset.seriesKey || "";
+  const seasonNumber = Number(block.dataset.season || 0);
+  if (!seriesKey) return;
+  const expansion = block.closest(".series-expansion");
+  const seriesId = expansion?.dataset?.seriesId || "";
+  const instanceId = expansion?.dataset?.instanceId || "";
+  const seasonKey = `${seriesKey}::${seasonNumber}`;
+  const episodesWrap = block.querySelector(".series-season-episodes");
+  if (!episodesWrap) return;
+
+  if (sonarrExpansionState.expandedSeasons.has(seasonKey)) {
+    sonarrExpansionState.expandedSeasons.delete(seasonKey);
+    btn.setAttribute("aria-expanded", "false");
+    btn.textContent = "+";
+    episodesWrap.classList.remove("is-open");
+    episodesWrap.setAttribute("aria-hidden", "true");
+    if (selectedEpisodeRowEl && episodesWrap.contains(selectedEpisodeRowEl)) {
+      delete episodesWrap.dataset.selectedEpisodeIndex;
+      selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
+      selectedEpisodeRowEl = null;
+    }
+    return;
+  }
+
+  sonarrExpansionState.expandedSeasons.add(seasonKey);
+  btn.setAttribute("aria-expanded", "true");
+  btn.textContent = "-";
+  episodesWrap.classList.add("is-open");
+  episodesWrap.setAttribute("aria-hidden", "false");
+  renderSeriesSkeleton(episodesWrap, 3);
+  if (!seriesId) {
+    renderSeriesError(episodesWrap, "Series id missing.");
+    return;
+  }
+  await loadSeasonEpisodes(seriesId, seasonNumber, instanceId, episodesWrap, seriesKey);
+}
+
 function findRowElement(app, rowKey) {
   if (!tbody || !rowKey) return null;
   const safeKey = window.CSS && CSS.escape ? CSS.escape(rowKey) : rowKey.replace(/["\\]/g, "\\$&");
   return tbody.querySelector(`tr[data-app="${app}"][data-row-key="${safeKey}"]`);
+}
+
+function clearTableSelection() {
+  if (selectedRowEl) {
+    selectedRowEl.classList.remove("row-selected");
+    selectedRowEl = null;
+  }
+  if (selectedSeasonRowEl) {
+    selectedSeasonRowEl.classList.remove("series-season-row--selected");
+    selectedSeasonRowEl = null;
+  }
+  if (selectedEpisodeRowEl) {
+    const wrap = selectedEpisodeRowEl.closest(".series-season-episodes");
+    if (wrap) {
+      delete wrap.dataset.selectedEpisodeIndex;
+    }
+    selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
+    selectedEpisodeRowEl = null;
+  }
+  keyboardNavState.level = "rows";
+  keyboardNavState.rowIndex = -1;
+  keyboardNavState.seriesRowKey = "";
+  keyboardNavState.seriesKey = "";
+  keyboardNavState.seasonIndex = -1;
+  keyboardNavState.seasonNumber = "";
+  keyboardNavState.episodeIndex = -1;
+}
+
+function getMainRowElements() {
+  if (!tbody) return [];
+  return Array.from(
+    tbody.querySelectorAll(`tr[data-app="${activeApp}"]:not(.series-child-row)`)
+  );
+}
+
+function getRowIndex(rowEl) {
+  const rows = getMainRowElements();
+  return rows.indexOf(rowEl);
+}
+
+function getSeriesExpansionRow(rowEl) {
+  const next = rowEl?.nextElementSibling;
+  if (next && next.classList.contains("series-child-row")) {
+    return next;
+  }
+  return null;
+}
+
+function getSeasonRowsForRow(rowEl) {
+  const childRow = getSeriesExpansionRow(rowEl);
+  if (!childRow) return [];
+  return Array.from(childRow.querySelectorAll(".series-season-row"));
+}
+
+function getSeasonBlockInfo(rowEl, seasonIndex) {
+  const seasons = getSeasonRowsForRow(rowEl);
+  if (!seasons.length) return null;
+  const index = Math.max(0, Math.min(seasonIndex, seasons.length - 1));
+  const seasonRow = seasons[index];
+  const block = seasonRow?.closest(".series-season-block");
+  if (!block) return null;
+  return { seasons, index, seasonRow, block };
+}
+
+function getSeasonKeyFromBlock(block) {
+  if (!block) return "";
+  const seriesKey = block.dataset.seriesKey || "";
+  const season = block.dataset.season || "";
+  return seriesKey && season ? `${seriesKey}::${season}` : "";
+}
+
+function findLastExpandedEpisodeInfo(rowEl) {
+  const seasons = getSeasonRowsForRow(rowEl);
+  if (!seasons.length) return null;
+  for (let i = seasons.length - 1; i >= 0; i -= 1) {
+    const seasonRow = seasons[i];
+    const block = seasonRow?.closest(".series-season-block");
+    const seasonKey = getSeasonKeyFromBlock(block);
+    if (!seasonKey || !sonarrExpansionState.expandedSeasons.has(seasonKey)) continue;
+    const episodes = sonarrExpansionState.episodesBySeason.get(seasonKey);
+    if (episodes && episodes.length) {
+      return { seasonIndex: i, episodeIndex: episodes.length - 1 };
+    }
+  }
+  return null;
+}
+
+function findSeriesRowByKey(seriesKey) {
+  if (!tbody || !seriesKey) return null;
+  const safeKey = window.CSS && CSS.escape ? CSS.escape(seriesKey) : seriesKey.replace(/["\\]/g, "\\$&");
+  return tbody.querySelector(`tr.series-expanded[data-series-key="${safeKey}"]`);
+}
+
+function setRowSelection(rowEl, options = {}) {
+  if (!rowEl) return;
+  if (selectedSeasonRowEl) {
+    selectedSeasonRowEl.classList.remove("series-season-row--selected");
+    selectedSeasonRowEl = null;
+  }
+  if (selectedEpisodeRowEl) {
+    const wrap = selectedEpisodeRowEl.closest(".series-season-episodes");
+    if (wrap) {
+      delete wrap.dataset.selectedEpisodeIndex;
+    }
+    selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
+    selectedEpisodeRowEl = null;
+  }
+  if (selectedRowEl && selectedRowEl !== rowEl) {
+    selectedRowEl.classList.remove("row-selected");
+  }
+  selectedRowEl = rowEl;
+  selectedRowEl.classList.add("row-selected");
+  keyboardNavState.level = "rows";
+  keyboardNavState.seriesRowKey = "";
+  keyboardNavState.seriesKey = rowEl.dataset.seriesKey || "";
+  keyboardNavState.seasonIndex = -1;
+  keyboardNavState.seasonNumber = "";
+  keyboardNavState.episodeIndex = -1;
+  keyboardNavState.rowIndex = getRowIndex(rowEl);
+  if (options.scroll !== false) {
+    if (!scrollElementIntoTableView(rowEl)) {
+      rowEl.scrollIntoView({ block: "nearest" });
+    }
+  }
+}
+
+function setSeasonSelection(rowEl, seasonIndex, options = {}) {
+  const seasons = getSeasonRowsForRow(rowEl);
+  if (!seasons.length) return false;
+  const index = Math.max(0, Math.min(seasonIndex, seasons.length - 1));
+  const seasonRow = seasons[index];
+  if (selectedSeasonRowEl && selectedSeasonRowEl !== seasonRow) {
+    selectedSeasonRowEl.classList.remove("series-season-row--selected");
+  }
+  selectedSeasonRowEl = seasonRow;
+  selectedSeasonRowEl.classList.add("series-season-row--selected");
+  if (selectedEpisodeRowEl) {
+    const wrap = selectedEpisodeRowEl.closest(".series-season-episodes");
+    if (wrap) {
+      delete wrap.dataset.selectedEpisodeIndex;
+    }
+    selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
+    selectedEpisodeRowEl = null;
+  }
+  if (selectedRowEl) {
+    selectedRowEl.classList.remove("row-selected");
+  }
+  selectedRowEl = rowEl;
+  keyboardNavState.level = options.level === "episodes" ? "episodes" : "season";
+  keyboardNavState.seriesRowKey = rowEl.dataset.rowKey || "";
+  const seasonBlock = seasonRow.closest(".series-season-block");
+  keyboardNavState.seriesKey = seasonBlock?.dataset?.seriesKey || rowEl.dataset.seriesKey || "";
+  keyboardNavState.seasonIndex = index;
+  keyboardNavState.seasonNumber = seasonBlock?.dataset?.season || "";
+  keyboardNavState.episodeIndex = -1;
+  keyboardNavState.rowIndex = getRowIndex(rowEl);
+  if (options.scroll !== false) {
+    if (!scrollElementIntoTableView(seasonRow)) {
+      seasonRow.scrollIntoView({ block: "nearest" });
+    }
+  }
+  return true;
+}
+
+function applyEpisodeSelection(episodesWrap, episodeIndex, options = {}) {
+  if (!episodesWrap) return false;
+  const index = Number.isFinite(episodeIndex) ? episodeIndex : 0;
+  episodesWrap.querySelectorAll(".series-episode-row--selected")
+    .forEach(row => row.classList.remove("series-episode-row--selected"));
+  const selector = `.series-episode-row[data-episode-index="${index}"]`;
+  let target = episodesWrap.querySelector(selector);
+  if (target) {
+    target.classList.add("series-episode-row--selected");
+    selectedEpisodeRowEl = target;
+    if (options.scroll !== false) {
+      target.scrollIntoView({ block: "nearest" });
+    }
+    return true;
+  }
+  const scroll = episodesWrap.querySelector(".series-episode-scroll");
+  if (scroll && options.scroll !== false) {
+    const header = scroll.querySelector(".series-episode-header");
+    const headerOffset = header ? header.offsetHeight : 0;
+    scroll.scrollTop = headerOffset + index * SERIES_EXPANSION_ROW_HEIGHT;
+  }
+  let attempts = 0;
+  const retry = () => {
+    attempts += 1;
+    target = episodesWrap.querySelector(selector);
+    if (target) {
+      target.classList.add("series-episode-row--selected");
+      selectedEpisodeRowEl = target;
+      if (options.scroll !== false) {
+        target.scrollIntoView({ block: "nearest" });
+      }
+      return;
+    }
+    if (attempts < 4) {
+      requestAnimationFrame(retry);
+    }
+  };
+  requestAnimationFrame(retry);
+  return false;
+}
+
+function setEpisodeSelection(rowEl, seasonIndex, episodeIndex, options = {}) {
+  const info = getSeasonBlockInfo(rowEl, seasonIndex);
+  if (!info) return false;
+  const { block, index } = info;
+  const episodesWrap = block.querySelector(".series-season-episodes");
+  if (!episodesWrap || !episodesWrap.classList.contains("is-open")) return false;
+  if (selectedEpisodeRowEl) {
+    const prevWrap = selectedEpisodeRowEl.closest(".series-season-episodes");
+    if (prevWrap && prevWrap !== episodesWrap) {
+      delete prevWrap.dataset.selectedEpisodeIndex;
+    }
+    selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
+    selectedEpisodeRowEl = null;
+  }
+  const seriesKey = block.dataset.seriesKey || "";
+  const seasonNumber = block.dataset.season || "";
+  const episodeKey = seriesKey && seasonNumber ? `${seriesKey}::${seasonNumber}` : "";
+  const episodes = episodeKey ? sonarrExpansionState.episodesBySeason.get(episodeKey) : null;
+  const total = episodes ? episodes.length : null;
+  if (!total) {
+    keyboardNavState.level = "episodes";
+    keyboardNavState.seriesRowKey = rowEl.dataset.rowKey || "";
+    keyboardNavState.seriesKey = seriesKey;
+    keyboardNavState.seasonIndex = index;
+    keyboardNavState.seasonNumber = seasonNumber;
+    keyboardNavState.episodeIndex = Math.max(0, episodeIndex || 0);
+    keyboardNavState.rowIndex = getRowIndex(rowEl);
+    episodesWrap.dataset.selectedEpisodeIndex = String(keyboardNavState.episodeIndex);
+    if (selectedSeasonRowEl) {
+      selectedSeasonRowEl.classList.remove("series-season-row--selected");
+      selectedSeasonRowEl = null;
+    }
+    if (selectedRowEl) {
+      selectedRowEl.classList.remove("row-selected");
+    }
+    selectedRowEl = rowEl;
+    return false;
+  }
+  const clamped = Math.max(0, Math.min(episodeIndex, total - 1));
+  if (selectedSeasonRowEl) {
+    selectedSeasonRowEl.classList.remove("series-season-row--selected");
+    selectedSeasonRowEl = null;
+  }
+  if (selectedRowEl) {
+    selectedRowEl.classList.remove("row-selected");
+  }
+  selectedRowEl = rowEl;
+  keyboardNavState.level = "episodes";
+  keyboardNavState.seriesRowKey = rowEl.dataset.rowKey || "";
+  keyboardNavState.seriesKey = seriesKey;
+  keyboardNavState.seasonIndex = index;
+  keyboardNavState.seasonNumber = seasonNumber;
+  keyboardNavState.episodeIndex = clamped;
+  keyboardNavState.rowIndex = getRowIndex(rowEl);
+  episodesWrap.dataset.selectedEpisodeIndex = String(clamped);
+  applyEpisodeSelection(episodesWrap, clamped, options);
+  return true;
+}
+
+function ensureRowSelection(direction = "down") {
+  if (selectedRowEl && selectedRowEl.isConnected) {
+    return true;
+  }
+  const rows = getMainRowElements();
+  if (!rows.length) return false;
+  const index = direction === "up" ? rows.length - 1 : 0;
+  setRowSelection(rows[index]);
+  return true;
+}
+
+function isEditableElement(el) {
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  if (typeof el.closest !== "function") return false;
+  return Boolean(el.closest("input, textarea, select, [contenteditable]"));
+}
+
+function focusTableWrapIfAllowed() {
+  if (!tableWrapEl) return false;
+  const active = document.activeElement;
+  if (active && isEditableElement(active)) return false;
+  if (active === tableWrapEl) return true;
+  tableWrapEl.focus({ preventScroll: true });
+  return document.activeElement === tableWrapEl;
+}
+
+function updateSelectionFromPointer(target) {
+  if (!pointerSelectionEnabled) return false;
+  if (!target) return false;
+  const episodeRow = target.closest(".series-episode-row");
+  if (episodeRow) {
+    const block = episodeRow.closest(".series-season-block");
+    const seriesKey = block?.dataset?.seriesKey || "";
+    const rowEl = seriesKey ? findSeriesRowByKey(seriesKey) : null;
+    if (!rowEl) return false;
+    const seasonRow = block?.querySelector(".series-season-row");
+    const seasons = getSeasonRowsForRow(rowEl);
+    const seasonIndex = seasonRow ? seasons.indexOf(seasonRow) : -1;
+    const indexAttr = Number(episodeRow.dataset.episodeIndex);
+    const episodeIndex = Number.isFinite(indexAttr)
+      ? indexAttr
+      : Array.from(block?.querySelectorAll(".series-episode-row") || []).indexOf(episodeRow);
+    if (seasonIndex >= 0 && episodeIndex >= 0) {
+      setEpisodeSelection(rowEl, seasonIndex, episodeIndex, { scroll: false });
+      return true;
+    }
+  }
+  const seasonRow = target.closest(".series-season-row");
+  if (seasonRow) {
+    const block = seasonRow.closest(".series-season-block");
+    const seriesKey = block?.dataset?.seriesKey || "";
+    const rowEl = seriesKey ? findSeriesRowByKey(seriesKey) : null;
+    if (!rowEl) return false;
+    const seasons = getSeasonRowsForRow(rowEl);
+    const index = seasons.indexOf(seasonRow);
+    if (index >= 0) {
+      if (selectedSeasonRowEl === seasonRow) return true;
+      setSeasonSelection(rowEl, index, { scroll: false, level: "season" });
+      return true;
+    }
+  }
+  const rowEl = target.closest('tr[data-app]');
+  if (rowEl && !rowEl.classList.contains("series-child-row")) {
+    if (selectedRowEl === rowEl) return true;
+    setRowSelection(rowEl, { scroll: false });
+    return true;
+  }
+  return false;
+}
+
+function finalizeTableInteractionState(app) {
+  if (app !== activeApp) return;
+  const rows = getMainRowElements();
+  if (!rows.length) {
+    clearTableSelection();
+    focusTableWrapIfAllowed();
+    return;
+  }
+  if (!selectedRowEl || !selectedRowEl.isConnected) {
+    setRowSelection(rows[0], { scroll: false });
+  }
+  focusTableWrapIfAllowed();
+}
+
+async function handleSeriesExpandForRow(rowEl) {
+  if (!rowEl || activeApp !== "sonarr") return false;
+  const btn = rowEl.querySelector(".series-expander");
+  if (!btn) return false;
+  if (rowEl.classList.contains("series-expanded") || btn.getAttribute("aria-expanded") === "true") {
+    return false;
+  }
+  await handleSeriesExpanderClick(btn);
+  return true;
+}
+
+async function expandSeriesAndSelectSeason(rowEl, seasonIndex = 0) {
+  if (!rowEl || activeApp !== "sonarr") return false;
+  await handleSeriesExpandForRow(rowEl);
+  return setSeasonSelection(rowEl, seasonIndex, { level: "season" });
+}
+
+function collapseSeriesForRow(rowEl) {
+  if (!rowEl || activeApp !== "sonarr") return;
+  if (!rowEl.classList.contains("series-expanded")) return;
+  const btn = rowEl.querySelector(".series-expander");
+  if (btn) {
+    handleSeriesExpanderClick(btn);
+  }
+}
+
+async function ensureSeasonExpanded(rowEl, seasonIndex) {
+  const seasons = getSeasonRowsForRow(rowEl);
+  if (!seasons.length) return false;
+  const index = Math.max(0, Math.min(seasonIndex, seasons.length - 1));
+  const toggle = seasons[index].querySelector(".series-season-toggle");
+  if (!toggle) return false;
+  if (toggle.getAttribute("aria-expanded") !== "true") {
+    await handleSeriesSeasonToggle(toggle);
+  }
+  return true;
+}
+
+function toggleSeasonExtrasForRow(rowEl, seasonIndex) {
+  const info = getSeasonBlockInfo(rowEl, seasonIndex);
+  if (!info) return false;
+  const episodesWrap = info.block.querySelector(".series-season-episodes");
+  const enabled = episodesWrap?.classList.contains("series-episode-extras");
+  setSeasonExtrasState(info.block, !enabled);
+  return true;
+}
+
+function enableSeasonExtrasForRow(rowEl, seasonIndex) {
+  const info = getSeasonBlockInfo(rowEl, seasonIndex);
+  if (!info) return false;
+  const episodesWrap = info.block.querySelector(".series-season-episodes");
+  const enabled = episodesWrap?.classList.contains("series-episode-extras");
+  if (enabled) return true;
+  setSeasonExtrasState(info.block, true);
+  return true;
+}
+
+function triggerRowRefreshForRow(rowEl) {
+  if (!rowEl) return false;
+  const btn = rowEl.querySelector(".row-refresh-btn");
+  if (!btn || btn.disabled) return false;
+  handleRowRefreshClick(btn);
+  return true;
+}
+
+async function handleTableKeydown(e) {
+  if (!tableWrapEl || document.activeElement !== tableWrapEl || !tableHasFocus) return;
+  const key = e.key;
+  if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Enter"].includes(key)) return;
+  if (!ensureRowSelection(key === "ArrowUp" ? "up" : "down")) return;
+  pointerSelectionEnabled = false;
+  e.preventDefault();
+
+  const rows = getMainRowElements();
+  if (!rows.length) return;
+  const rowEl = selectedRowEl && selectedRowEl.isConnected ? selectedRowEl : rows[keyboardNavState.rowIndex] || rows[0];
+  if (!rowEl) return;
+  const rowIndex = getRowIndex(rowEl);
+  const expanded = rowEl.classList.contains("series-expanded");
+
+  if (key === "Enter") {
+    if (keyboardNavState.level === "rows") {
+      triggerRowRefreshForRow(rowEl);
+    } else if (keyboardNavState.level === "season") {
+      toggleSeasonExtrasForRow(rowEl, keyboardNavState.seasonIndex);
+    } else if (keyboardNavState.level === "episodes") {
+      enableSeasonExtrasForRow(rowEl, keyboardNavState.seasonIndex);
+    }
+    return;
+  }
+
+  if (keyboardNavState.level === "episodes") {
+    const info = getSeasonBlockInfo(rowEl, keyboardNavState.seasonIndex);
+    if (!info) {
+      setRowSelection(rowEl);
+      return;
+    }
+    const { block, index: seasonIndex } = info;
+    const episodesWrap = block.querySelector(".series-season-episodes");
+    if (!episodesWrap || !episodesWrap.classList.contains("is-open")) {
+      setSeasonSelection(rowEl, seasonIndex, { level: "season" });
+      return;
+    }
+    const seriesKey = block.dataset.seriesKey || "";
+    const seasonNumber = block.dataset.season || "";
+    const episodeKey = seriesKey && seasonNumber ? `${seriesKey}::${seasonNumber}` : "";
+    const episodes = episodeKey ? sonarrExpansionState.episodesBySeason.get(episodeKey) : null;
+    const total = episodes ? episodes.length : block.querySelectorAll(".series-episode-row").length;
+    if (key === "ArrowDown") {
+      if (total && keyboardNavState.episodeIndex < total - 1) {
+        setEpisodeSelection(rowEl, seasonIndex, keyboardNavState.episodeIndex + 1);
+        return;
+      }
+      if (seasonIndex < info.seasons.length - 1) {
+        setSeasonSelection(rowEl, seasonIndex + 1, { level: "season" });
+        return;
+      }
+      if (rowIndex < rows.length - 1) {
+        setRowSelection(rows[rowIndex + 1]);
+      }
+      return;
+    }
+    if (key === "ArrowUp") {
+      if (keyboardNavState.episodeIndex > 0) {
+        setEpisodeSelection(rowEl, seasonIndex, keyboardNavState.episodeIndex - 1);
+        return;
+      }
+      setSeasonSelection(rowEl, seasonIndex, { level: "season" });
+      return;
+    }
+    if (key === "ArrowLeft") {
+      const toggle = block.querySelector(".series-season-toggle");
+      if (toggle && toggle.getAttribute("aria-expanded") === "true") {
+        await handleSeriesSeasonToggle(toggle);
+      }
+      setSeasonSelection(rowEl, seasonIndex, { level: "season" });
+      return;
+    }
+    if (key === "ArrowRight") {
+      return;
+    }
+  }
+
+  if (keyboardNavState.level === "season") {
+    const seasons = getSeasonRowsForRow(rowEl);
+    if (!seasons.length) {
+      setRowSelection(rowEl);
+      return;
+    }
+    if (key === "ArrowDown") {
+      const info = getSeasonBlockInfo(rowEl, keyboardNavState.seasonIndex);
+      if (info) {
+        const episodesWrap = info.block.querySelector(".series-season-episodes");
+        if (episodesWrap && episodesWrap.classList.contains("is-open")) {
+          setEpisodeSelection(rowEl, info.index, 0);
+          return;
+        }
+      }
+      if (keyboardNavState.seasonIndex < seasons.length - 1) {
+        setSeasonSelection(rowEl, keyboardNavState.seasonIndex + 1, { level: "season" });
+        return;
+      }
+      if (rowIndex < rows.length - 1) {
+        setRowSelection(rows[rowIndex + 1]);
+      }
+      return;
+    }
+    if (key === "ArrowUp") {
+      if (keyboardNavState.seasonIndex > 0) {
+        setSeasonSelection(rowEl, keyboardNavState.seasonIndex - 1, { level: "season" });
+        return;
+      }
+      setRowSelection(rowEl);
+      return;
+    }
+    if (key === "ArrowRight") {
+      const ok = await ensureSeasonExpanded(rowEl, keyboardNavState.seasonIndex);
+      if (ok) {
+        setEpisodeSelection(rowEl, keyboardNavState.seasonIndex, 0);
+      }
+      return;
+    }
+    if (key === "ArrowLeft") {
+      const index = Math.max(0, Math.min(keyboardNavState.seasonIndex, seasons.length - 1));
+      const toggle = seasons[index]?.querySelector(".series-season-toggle");
+      const expandedSeason = toggle?.getAttribute("aria-expanded") === "true";
+      if (expandedSeason) {
+        await handleSeriesSeasonToggle(toggle);
+        return;
+      }
+      collapseSeriesForRow(rowEl);
+      setRowSelection(rowEl);
+      return;
+    }
+  }
+
+  if (key === "ArrowDown") {
+    if (expanded) {
+      const moved = setSeasonSelection(rowEl, 0, { level: "season" });
+      if (moved) return;
+      return;
+    }
+    if (rowIndex < rows.length - 1) {
+      setRowSelection(rows[rowIndex + 1]);
+    }
+    return;
+  }
+  if (key === "ArrowUp") {
+    if (rowIndex > 0) {
+      const prevRow = rows[rowIndex - 1];
+      if (prevRow.classList.contains("series-expanded")) {
+        const lastEpisode = findLastExpandedEpisodeInfo(prevRow);
+        if (lastEpisode) {
+          setEpisodeSelection(prevRow, lastEpisode.seasonIndex, lastEpisode.episodeIndex);
+          return;
+        }
+        const seasons = getSeasonRowsForRow(prevRow);
+        if (seasons.length) {
+          setSeasonSelection(prevRow, seasons.length - 1, { level: "season" });
+          return;
+        }
+      }
+      setRowSelection(prevRow);
+    }
+    return;
+  }
+  if (key === "ArrowRight") {
+    if (activeApp === "sonarr") {
+      await expandSeriesAndSelectSeason(rowEl, 0);
+    }
+    return;
+  }
+  if (key === "ArrowLeft") {
+    if (expanded) {
+      collapseSeriesForRow(rowEl);
+    }
+  }
 }
 
 function setRowRefreshPending(rowEl, active) {
@@ -1911,16 +4714,144 @@ function flashRowRefresh(rowEl, outcome) {
   rowRefreshTimers.set(rowEl, timer);
 }
 
-function formatMixedValue(value, mixed) {
-  const base = escapeHtml(value ?? "");
-  if (!mixed) return base;
-  if (!base) return '<span class="mixed-badge">Mixed</span>';
-  return `<span class="mixed-wrap">${base}<span class="mixed-badge">Mixed</span></span>`;
+function formatAudioCodecCell(value, mixed = false, fullValue = "") {
+  const raw = value ?? "";
+  const fullText = fullValue ?? "";
+  if (!raw && !mixed && !fullText) {
+    return NOT_REPORTED_HTML;
+  }
+  return formatLanguageValue(raw, mixed, {
+    allowToggle: true,
+    fullValue: fullText,
+  });
 }
 
-function formatAudioCodecCell(value) {
+function formatMixedValueCell(value, fullValue, mixed = false, wrapperClass = "") {
+  const text = String(value ?? "").trim();
+  const fullText = String(fullValue ?? "").trim();
+  if (!text && !fullText && !mixed) return "";
+  const cell = formatToggleListCell({
+    display: text || fullText,
+    full: fullText || text,
+    mixed,
+    allowToggle: true,
+  });
+  if (!wrapperClass) return cell;
+  return `<span class="${wrapperClass}">${cell}</span>`;
+}
+
+function formatAudioChannelsCell(value) {
   if (!value) return "";
-  return `<span class="audio-codec-cell">${value}</span>`;
+  return `<span class="audio-channels-cell">${value}</span>`;
+}
+
+const NUMERIC_DISPLAY_COLUMNS = {
+  sonarr: [
+    "EpisodesCounted",
+    "SeasonCount",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "AvgEpisodeSizeGB",
+    "PlayCount",
+    "DaysSinceWatched",
+    "UsersWatched",
+  ],
+  radarr: [
+    "RuntimeMins",
+    "FileSizeGB",
+    "GBPerHour",
+    "BitrateMbps",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "CustomFormatScore",
+    "PlayCount",
+    "DaysSinceWatched",
+    "UsersWatched",
+  ],
+};
+
+const numericWidthsByApp = { sonarr: {}, radarr: {} };
+const numericWidthsVersionByApp = { sonarr: 0, radarr: 0 };
+
+function computeNumericColumnWidths(rows, app) {
+  const columns = NUMERIC_DISPLAY_COLUMNS[app] || [];
+  const widths = {};
+  columns.forEach(col => {
+    widths[col] = { int: 1, frac: 0 };
+  });
+  if (!rows || !rows.length) return widths;
+  rows.forEach(row => {
+    columns.forEach(col => {
+      const rawValue = row?.[col];
+      if (rawValue == null || rawValue === "") return;
+      const rawText = typeof rawValue === "string" ? rawValue.trim() : String(rawValue);
+      if (!rawText || rawText.includes("<") || rawText.includes(":") || rawText.includes("/")) return;
+      const num = Number(rawText);
+      if (!Number.isFinite(num)) return;
+      let working = rawText;
+      let sign = "";
+      if (working.startsWith("-")) {
+        sign = "-";
+        working = working.slice(1);
+      }
+      const parts = working.split(".");
+      const intPart = parts[0] || "0";
+      const fracPart = parts[1] || "";
+      const current = widths[col];
+      const intLen = intPart.length + (sign ? 1 : 0);
+      if (intLen > current.int) current.int = intLen;
+      if (fracPart.length > current.frac) current.frac = fracPart.length;
+    });
+  });
+  return widths;
+}
+
+function ensureNumericColumnWidths(app, rows, dataVersion, isPrimary) {
+  if (!app) return;
+  const version = isPrimary ? dataVersion : dataVersionByApp[app];
+  if (numericWidthsVersionByApp[app] === version) return;
+  const sourceRows = isPrimary ? rows : dataByApp[app];
+  numericWidthsByApp[app] = computeNumericColumnWidths(sourceRows || [], app);
+  numericWidthsVersionByApp[app] = version;
+}
+
+function getNumericWidths(app, col) {
+  if (!app || !col) return null;
+  const map = numericWidthsByApp[app] || {};
+  return map[col] || null;
+}
+
+function formatNumericCell(value, widths = null) {
+  if (value == null || value === "") return "";
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return "";
+    if (trimmed.includes("<")) return trimmed;
+    if (trimmed.includes(":") || trimmed.includes("/")) return escapeHtml(trimmed);
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) return escapeHtml(trimmed);
+  } else if (!Number.isFinite(Number(value))) {
+    return escapeHtml(value);
+  }
+
+  const rawText = typeof value === "string" ? value.trim() : String(value);
+  let working = rawText;
+  let sign = "";
+  if (working.startsWith("-")) {
+    sign = "-";
+    working = working.slice(1);
+  }
+  const parts = working.split(".");
+  const intPart = parts[0] || "0";
+  const fracPart = parts[1] || "";
+  const noFrac = !fracPart;
+  const className = noFrac ? "num-cell no-frac" : "num-cell";
+  const style = widths
+    ? ` style="--num-int-width:${widths.int}ch; --num-frac-width:${widths.frac}ch; --num-dot-width:${widths.frac ? "0.4ch" : "0ch"};"`
+    : "";
+  return `<span class="${className}"${style}><span class="num-int">${escapeHtml(
+    `${sign}${intPart}`
+  )}</span><span class="num-dot">.</span><span class="num-frac">${escapeHtml(fracPart)}</span></span>`;
 }
 
 const LANGUAGE_NAME_MAP = {
@@ -2094,27 +5025,32 @@ function summarizeLanguageValue(value) {
 }
 
 function formatLanguageValue(value, mixed, options = {}) {
-  const { allowToggle = false } = options;
+  const { allowToggle = false, fullValue = "" } = options;
   const summary = summarizeLanguageValue(value);
-  const base = escapeHtml(summary.display);
-  if (!base && mixed) return '<span class="mixed-badge">Mixed</span>';
-  if (!base) return "";
-
-  const full = escapeHtml(summary.full);
-  const classes = summary.truncated ? "lang-cell lang-cell-truncated" : "lang-cell";
-  const list = `<span class="lang-list" data-lang-full="${full}" data-lang-short="${base}" data-lang-state="short"${full ? ` title="${full}"` : ""}>${base}</span>`;
-  const toggle = allowToggle && summary.truncated
-    ? '<button class="lang-toggle" type="button" aria-expanded="false">Show all</button>'
-    : "";
-  const badge = mixed ? '<span class="mixed-badge mixed-badge-inline">Mixed</span>' : "";
-  return `<span class="${classes}">${list}${toggle}${badge}</span>`;
+  const fullSummary = fullValue ? summarizeLanguageValue(fullValue) : summary;
+  let display = summary.display;
+  const full = fullSummary.full || fullSummary.display || "";
+  if (!display && full) {
+    display = full;
+  }
+  return formatToggleListCell({
+    display,
+    full,
+    mixed,
+    allowToggle,
+  });
 }
 
 function formatLastWatched(value) {
   if (!value) return '<span class="muted">Never</span>';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return escapeHtml(value);
-  return escapeHtml(date.toLocaleString());
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return escapeHtml(`${day}/${month}/${year} - ${hours}:${minutes}`);
 }
 
 function formatDateAdded(value) {
@@ -2124,14 +5060,16 @@ function formatDateAdded(value) {
   return escapeHtml(date.toLocaleDateString());
 }
 
-function formatDaysSince(value, lastWatched) {
+function formatDaysSince(value, lastWatched, widths = null) {
   if (!lastWatched) return '<span class="muted">Never</span>';
   const num = Number(value);
   if (!Number.isFinite(num)) return escapeHtml(value ?? "");
-  return escapeHtml(num);
+  return formatNumericCell(num, widths);
 }
 
 function formatHoursClock(value) {
+  if (value == null) return "";
+  if (typeof value === "string" && value.trim() === "") return "";
   const num = Number(value);
   if (!Number.isFinite(num)) return "";
   const totalMinutes = Math.round(num * 60);
@@ -2140,8 +5078,24 @@ function formatHoursClock(value) {
   return `${hours}:${minutes}`;
 }
 
+function formatMinutesClock(value) {
+  if (value == null) return "";
+  if (typeof value === "string" && value.trim() === "") return "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  const totalMinutes = Math.round(num);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = String(totalMinutes % 60).padStart(2, "0");
+  return `${hours}:${minutes}`;
+}
+
 function formatWatchTimeHours(value) {
   const text = formatHoursClock(value);
+  return text ? escapeHtml(text) : "";
+}
+
+function formatRuntimeMinutes(value) {
+  const text = formatMinutesClock(value);
   return text ? escapeHtml(text) : "";
 }
 
@@ -2157,48 +5111,80 @@ function formatWatchContentHours(watchHours, contentHours) {
 function formatBoolValue(value) {
   if (typeof value === "string") {
     const raw = value.trim().toLowerCase();
-    if (raw === "true") return "true";
-    if (raw === "false") return "false";
+    if (raw === "true") return "True";
+    if (raw === "false") return "False";
   }
-  return value ? "true" : "false";
+  return value ? "True" : "False";
 }
 
-function buildMatchBadge(row) {
+function formatStatusValue(value) {
+  if (!value) return "";
+  const raw = String(value).trim();
+  if (!raw) return "";
+  const key = raw.toLowerCase();
+  if (key === "ended") return "Ended";
+  if (key === "continuing") return "Continuing";
+  if (key === "deleted") return "Deleted";
+  return escapeHtml(raw);
+}
+
+function formatVideoHdrValue(value) {
+  if (value === "" || value === null || value === undefined) return "False";
+  if (typeof value === "boolean") return value ? "True" : "False";
+  const raw = String(value).trim();
+  if (!raw) return "False";
+  return "True";
+}
+
+function getMatchStatusMeta(row) {
   const status = row?.TautulliMatchStatus;
   const reason = row?.TautulliMatchReason;
   let label = "Unavailable";
-  let className = "match-pill match-pill--muted";
+  let variant = "muted";
 
   if (status === "matched") {
     label = "Matched";
-    className = "match-pill match-pill--ok";
+    variant = "ok";
   } else if (status === "unmatched") {
     label = "Potential mismatch";
-    className = "match-pill match-pill--warn";
+    variant = "warn";
   } else if (status === "skipped") {
     if (typeof reason === "string" && /future/i.test(reason)) {
       label = "Future release";
-      className = "match-pill match-pill--future";
+      variant = "future";
     } else if (typeof reason === "string" && /no (episodes|file) on disk/i.test(reason)) {
       label = "Not on disk";
-      className = "match-pill match-pill--nodisk";
+      variant = "nodisk";
     } else {
       label = "Not checked";
-      className = "match-pill match-pill--muted";
+      variant = "muted";
     }
   } else if (status === "unavailable") {
     label = "Unavailable";
-    className = "match-pill match-pill--muted";
+    variant = "muted";
   }
 
-  const title = reason ? ` title="${escapeHtml(reason)}"` : "";
-  return `<span class="${className}"${title}>${label}</span>`;
+  return { label, reason, variant };
 }
 
-function formatBitrateCell(row) {
+function buildMatchBadge(row) {
+  const meta = getMatchStatusMeta(row);
+  const title = meta.reason ? ` title="${escapeHtml(meta.reason)}"` : "";
+  return `<span class="match-pill match-pill--${meta.variant}"${title}>${meta.label}</span>`;
+}
+
+function buildMatchOrb(row) {
+  if (!tautulliEnabled) return "";
+  const meta = getMatchStatusMeta(row);
+  const titleText = meta.reason ? `${meta.label} - ${meta.reason}` : meta.label;
+  const titleAttr = titleText ? ` title="${escapeHtml(titleText)}"` : "";
+  return `<span class="match-orb match-orb--${meta.variant}"${titleAttr} role="img" aria-label="${escapeHtml(meta.label)}"></span>`;
+}
+
+function formatBitrateCell(row, app) {
   const raw = row?.BitrateMbps;
   if (raw === "" || raw === null || raw === undefined) return "";
-  const value = escapeHtml(raw);
+  const value = formatNumericCell(raw, getNumericWidths(app, "BitrateMbps"));
   if (row?.BitrateEstimated) {
     return `${value} <span class="bitrate-est" title="Estimated from file size and runtime">est</span>`;
   }
@@ -2212,14 +5198,31 @@ const FIELD_MAP = {
   dateadded: "DateAdded",
   added: "DateAdded",
   path: "Path",
+  status: "Status",
+  monitored: "Monitored",
+  qualityprofile: "QualityProfile",
+  profile: "QualityProfile",
+  tags: "Tags",
+  tag: "Tags",
+  releasegroup: "ReleaseGroup",
+  release: "ReleaseGroup",
+  studio: "Studio",
+  hasfile: "HasFile",
+  isavailable: "IsAvailable",
+  incinemas: "InCinemas",
+  lastsearchtime: "LastSearchTime",
+  edition: "Edition",
+  customformats: "CustomFormats",
+  customformat: "CustomFormats",
+  customformatscore: "CustomFormatScore",
+  qualitycutoffnotmet: "QualityCutoffNotMet",
+  languages: "Languages",
   videoquality: "VideoQuality",
   videocodec: "VideoCodec",
   videohdr: "VideoHDR",
   resolution: "Resolution",
   audiocodec: "AudioCodec",
-  audioprofile: "AudioProfile",
   audiocodecmixed: "AudioCodecMixed",
-  audioprofilemixed: "AudioProfileMixed",
   audiochannels: "AudioChannels",
   audiolanguages: "AudioLanguages",
   audiolang: "AudioLanguages",
@@ -2242,7 +5245,19 @@ const FIELD_MAP = {
   users: "UsersWatched",
   matchstatus: "TautulliMatchStatus",
   match: "TautulliMatchStatus",
+  seriestype: "SeriesType",
+  originallanguage: "OriginalLanguage",
+  genres: "Genres",
+  lastaired: "LastAired",
+  missing: "MissingCount",
+  cutoff: "CutoffUnmetCount",
+  cutoffunmet: "CutoffUnmetCount",
+  recentlygrabbed: "RecentlyGrabbed",
+  scene: "UseSceneNumbering",
+  airing: "Airing",
   episodes: "EpisodesCounted",
+  seasons: "SeasonCount",
+  season: "SeasonCount",
   totalsize: "TotalSizeGB",
   avgepisode: "AvgEpisodeSizeGB",
   runtime: "RuntimeMins",
@@ -2254,6 +5269,11 @@ const FIELD_MAP = {
 
 const NUMERIC_FIELDS = new Set([
   "episodes",
+  "seasons",
+  "season",
+  "missing",
+  "cutoff",
+  "cutoffunmet",
   "totalsize",
   "avgepisode",
   "runtime",
@@ -2272,6 +5292,7 @@ const NUMERIC_FIELDS = new Set([
   "watchvs",
   "userswatched",
   "users",
+  "customformatscore",
 ]);
 
 const BUCKET_FIELDS = new Set(["gbperhour", "totalsize"]);
@@ -2280,6 +5301,12 @@ function getFieldValue(row, field) {
   let key = FIELD_MAP[field] || field;
   if (field === "totalsize" && activeApp === "radarr") {
     key = "FileSizeGB";
+  }
+  if (field === "scene" && activeApp === "radarr") {
+    return row?.Scene ?? row?.SceneName ?? "";
+  }
+  if (field === "airing" && activeApp === "radarr") {
+    return row?.Airing ?? row?.IsAvailable ?? row?.InCinemas ?? "";
   }
   return row?.[key];
 }
@@ -2315,6 +5342,52 @@ function hasSubtitleLanguages(row) {
   if (!raw) return false;
   const parts = raw.split(",").map(part => part.trim()).filter(Boolean);
   return parts.length > 0;
+}
+
+function getMatchStatusFilterPredicate(rawValue) {
+  const value = String(rawValue ?? "").trim();
+  if (!value || /[*?]/.test(value)) return null;
+  const key = value.toLowerCase().replace(/[^a-z]/g, "");
+  if (!key) return null;
+
+  if (key === "matched") {
+    return row => String(row?.TautulliMatchStatus || "").toLowerCase() === "matched";
+  }
+  if (key === "unmatched" || key === "mismatch") {
+    return row => String(row?.TautulliMatchStatus || "").toLowerCase() === "unmatched";
+  }
+  if (key === "skipped") {
+    return row => String(row?.TautulliMatchStatus || "").toLowerCase() === "skipped";
+  }
+  if (key === "future" || key === "futurerelease") {
+    return row => {
+      const status = String(row?.TautulliMatchStatus || "").toLowerCase();
+      if (status !== "skipped") return false;
+      return /future/i.test(String(row?.TautulliMatchReason || ""));
+    };
+  }
+  if (key === "nodisk" || key === "notondisk") {
+    return row => {
+      const status = String(row?.TautulliMatchStatus || "").toLowerCase();
+      if (status !== "skipped") return false;
+      return /no (episodes|file) on disk/i.test(String(row?.TautulliMatchReason || ""));
+    };
+  }
+  if (key === "notchecked" || key === "unchecked") {
+    return row => {
+      const status = String(row?.TautulliMatchStatus || "").toLowerCase();
+      if (status !== "skipped") return false;
+      const reason = String(row?.TautulliMatchReason || "");
+      const isFuture = /future/i.test(reason);
+      const isNoDisk = /no (episodes|file) on disk/i.test(reason);
+      return !isFuture && !isNoDisk;
+    };
+  }
+  if (key === "unavailable" || key === "unknown") {
+    return row => String(row?.TautulliMatchStatus || "").toLowerCase() === "unavailable";
+  }
+
+  return null;
 }
 
 function parseAdvancedQuery(query) {
@@ -2376,11 +5449,33 @@ function parseAdvancedQuery(query) {
         });
         continue;
       }
+      if (field === "missing" || field === "cutoff" || field === "cutoffunmet") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(`Invalid value for '${field}' (use true/false).`);
+          preds.push(() => false);
+          continue;
+        }
+        preds.push(row => {
+          const raw = getFieldValue(row, field);
+          const count = Number(raw);
+          const hasCount = Number.isFinite(count) && count > 0;
+          return boolVal ? hasCount : !hasCount;
+        });
+        continue;
+      }
+      if (field === "recentlygrabbed" || field === "scene" || field === "airing") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(`Invalid value for '${field}' (use true/false).`);
+          preds.push(() => false);
+          continue;
+        }
+        preds.push(row => Boolean(getFieldValue(row, field)) === boolVal);
+        continue;
+      }
       if (field === "audio") {
-        preds.push(row => (
-          matchPattern(getFieldValue(row, "AudioCodec"), value) ||
-          matchPattern(getFieldValue(row, "AudioProfile"), value)
-        ));
+        preds.push(row => matchPattern(getFieldValue(row, "AudioCodec"), value));
         continue;
       }
       if (field === "neverwatched") {
@@ -2410,6 +5505,13 @@ function parseAdvancedQuery(query) {
         });
         continue;
       }
+      if (field === "matchstatus" || field === "match") {
+        const matchPred = getMatchStatusFilterPredicate(value);
+        if (matchPred) {
+          preds.push(matchPred);
+          continue;
+        }
+      }
       if (field === "instance") {
         preds.push(row => (
           matchPattern(row?.InstanceName ?? "", value) ||
@@ -2419,7 +5521,8 @@ function parseAdvancedQuery(query) {
       }
       if (field === "audiolanguages" || field === "audiolang" ||
           field === "subtitlelanguages" || field === "sublanguages" ||
-          field === "sublang" || field === "subtitles") {
+          field === "sublang" || field === "subtitles" ||
+          field === "languages") {
         const queryValue = normalizeLanguageQuery(value);
         preds.push(row => matchPattern(
           normalizeLanguageLabel(getFieldValue(row, field)),
@@ -2669,6 +5772,26 @@ function getMatchStatusSortKey(row) {
   return value;
 }
 
+function compareMatchStatusTie(a, b) {
+  const aKey = getMatchStatusSortKey(a);
+  const bKey = getMatchStatusSortKey(b);
+  if (aKey.rank !== bKey.rank) return aKey.rank - bKey.rank;
+  if (aKey.rank === MATCH_STATUS_SORT_ORDER.skipped &&
+      bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
+    if (aKey.reasonRank !== bKey.reasonRank) {
+      return aKey.reasonRank - bKey.reasonRank;
+    }
+  }
+  const hasMatchInfo = Boolean(
+    a?.TautulliMatchStatus || b?.TautulliMatchStatus ||
+    a?.TautulliMatchReason || b?.TautulliMatchReason
+  );
+  if (!hasMatchInfo) return 0;
+  if (aKey.title < bKey.title) return -1;
+  if (aKey.title > bKey.title) return 1;
+  return 0;
+}
+
 function getFieldSortKey(row, field) {
   const cache = getSortCache(row);
   if (cache[field]) return cache[field];
@@ -2703,9 +5826,17 @@ function sortData(arr) {
 
     const aKey = getFieldSortKey(a, sortKey);
     const bKey = getFieldSortKey(b, sortKey);
-    if (aKey.hasNum && bKey.hasNum) return (aKey.num - bKey.num) * dir;
+    if (aKey.hasNum && bKey.hasNum) {
+      const diff = aKey.num - bKey.num;
+      if (diff !== 0) return diff * dir;
+      const matchDiff = compareMatchStatusTie(a, b);
+      if (matchDiff !== 0) return matchDiff;
+      return 0;
+    }
     if (aKey.str < bKey.str) return -1 * dir;
     if (aKey.str > bKey.str) return 1 * dir;
+    const matchDiff = compareMatchStatusTie(a, b);
+    if (matchDiff !== 0) return matchDiff;
     return 0;
   });
 }
@@ -2713,14 +5844,34 @@ function sortData(arr) {
 const COLUMN_STORAGE_KEY = "Sortarr-columns";
 const DEFAULT_HIDDEN_COLUMNS = new Set([
   "Instance",
-  "AudioProfile",
+  "Status",
+  "Monitored",
+  "QualityProfile",
+  "Tags",
+  "ReleaseGroup",
+  "Studio",
+  "SeriesType",
+  "OriginalLanguage",
+  "Genres",
+  "LastAired",
+  "MissingCount",
+  "CutoffUnmetCount",
+  "HasFile",
+  "IsAvailable",
+  "InCinemas",
+  "LastSearchTime",
+  "Edition",
+  "CustomFormats",
+  "CustomFormatScore",
+  "QualityCutoffNotMet",
+  "Languages",
+  "SeasonCount",
   "AudioLanguages",
   "SubtitleLanguages",
   "TitleSlug",
   "TmdbId",
   "DateAdded",
   "AudioCodecMixed",
-  "AudioProfileMixed",
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
   "VideoHDR",
@@ -2736,17 +5887,57 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
 const REQUIRED_COLUMNS = new Set(["Title", "Path"]);
 const LAZY_COLUMNS = new Set(DEFAULT_HIDDEN_COLUMNS);
 const LAZY_COLUMNS_ARRAY = Array.from(LAZY_COLUMNS);
+const RADARR_VIRTUAL_EAGER_COLUMNS = new Set([
+  "DateAdded",
+  "Instance",
+  "RuntimeMins",
+  "FileSizeGB",
+  "GBPerHour",
+  "BitrateMbps",
+]);
+const RADARR_VIRTUAL_DEFER_COLUMNS = new Set(
+  LAZY_COLUMNS_ARRAY.filter(col => !RADARR_VIRTUAL_EAGER_COLUMNS.has(col))
+);
 const DISPLAY_CACHE_COLUMNS = {
   AudioCodec: { key: "audioCodec", compute: row => formatAudioCodecCell(
-    formatMixedValue(row.AudioCodec ?? "", row.AudioCodecMixed)
+    row.AudioCodec ?? "",
+    row.AudioCodecMixed,
+    row.AudioCodecAll ?? ""
   ) },
   ContentHours: { key: "contentHours", compute: row => formatWatchTimeHours(row.ContentHours ?? "") },
-  VideoQuality: { key: "videoQuality", compute: row => escapeHtml(row.VideoQuality ?? "") },
-  Resolution: { key: "resolution", compute: row => escapeHtml(row.Resolution ?? "") },
-  VideoCodec: { key: "videoCodec", compute: row => escapeHtml(row.VideoCodec ?? "") },
-  AudioChannels: { key: "audioChannels", compute: row => escapeHtml(row.AudioChannels ?? "") },
+  VideoQuality: { key: "videoQuality", compute: row => {
+    const full = row.VideoQualityAll ?? "";
+    const mixed = row.VideoQualityMixed;
+    const cell = (full || mixed)
+      ? formatMixedValueCell(row.VideoQuality ?? "", full, mixed)
+      : escapeHtml(row.VideoQuality ?? "");
+    return notReportedIfEmpty(cell);
+  } },
+  Resolution: { key: "resolution", compute: row => {
+    const full = row.ResolutionAll ?? "";
+    const mixed = row.ResolutionMixed;
+    const cell = (full || mixed)
+      ? formatMixedValueCell(row.Resolution ?? "", full, mixed)
+      : escapeHtml(row.Resolution ?? "");
+    return notReportedIfEmpty(cell);
+  } },
+  VideoCodec: { key: "videoCodec", compute: row => {
+    const full = row.VideoCodecAll ?? "";
+    const mixed = row.VideoCodecMixed;
+    const cell = (full || mixed)
+      ? formatMixedValueCell(row.VideoCodec ?? "", full, mixed)
+      : escapeHtml(row.VideoCodec ?? "");
+    return notReportedIfEmpty(cell);
+  } },
+  AudioChannels: { key: "audioChannels", compute: row => {
+    const full = row.AudioChannelsAll ?? "";
+    const mixed = row.AudioChannelsMixed;
+    const cell = (full || mixed)
+      ? formatMixedValueCell(row.AudioChannels ?? "", full, mixed, "audio-channels-cell")
+      : formatAudioChannelsCell(escapeHtml(row.AudioChannels ?? ""));
+    return notReportedIfEmpty(cell);
+  } },
   Path: { key: "path", compute: row => escapeHtml(row.Path ?? "") },
-  TautulliMatchStatus: { key: "matchBadge", compute: row => buildMatchBadge(row) },
 };
 const DISPLAY_CACHE_COLUMN_LIST = Object.keys(DISPLAY_CACHE_COLUMNS);
 let columnVisibilityVersion = 0;
@@ -2789,14 +5980,28 @@ function setCsvColumnsEnabled(enabled) {
   applyTitleWidth(activeApp);
 }
 
+function getColumnInputs(col) {
+  if (!columnsPanel || !col) return [];
+  return columnsPanel.querySelectorAll(`input[data-col="${CSS.escape(col)}"]`);
+}
+
+function getColumnCheckedState(col) {
+  const inputs = getColumnInputs(col);
+  if (!inputs.length) return false;
+  return Array.from(inputs).some(input => input.checked);
+}
+
+function syncColumnInputs(col, checked) {
+  getColumnInputs(col).forEach(input => {
+    input.checked = checked;
+  });
+}
+
 function setColumnGroup(group, checked) {
   if (!columnsPanel) return;
   const cols = COLUMN_GROUPS[group] || [];
   cols.forEach(col => {
-    const input = columnsPanel.querySelector(`input[data-col="${col}"]`);
-    if (input) {
-      input.checked = checked;
-    }
+    syncColumnInputs(col, checked);
   });
 }
 
@@ -2856,9 +6061,14 @@ function loadColumnPrefs() {
 function saveColumnPrefs() {
   if (!columnsPanel) return;
   const prefs = {};
+  const seen = new Set();
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     const col = input.getAttribute("data-col");
-    prefs[col] = input.checked;
+    if (seen.has(col)) return;
+    const checked = getColumnCheckedState(col);
+    prefs[col] = checked;
+    syncColumnInputs(col, checked);
+    seen.add(col);
   });
   localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(prefs));
 }
@@ -2866,11 +6076,15 @@ function saveColumnPrefs() {
 function getHiddenColumns() {
   const hidden = new Set();
   if (!columnsPanel) return hidden;
+  const seen = new Set();
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     const col = input.getAttribute("data-col");
-    if (!input.checked && !REQUIRED_COLUMNS.has(col)) {
+    if (seen.has(col)) return;
+    const checked = getColumnCheckedState(col);
+    if (!checked && !REQUIRED_COLUMNS.has(col)) {
       hidden.add(col);
     }
+    seen.add(col);
   });
   return hidden;
 }
@@ -2883,10 +6097,13 @@ function isColumnHidden(col, app, hiddenColumns) {
   return hideByCol || hideByTautulli || hideByCsv || hideByInstance;
 }
 
-function getDeferredColumns(app, hiddenColumns) {
+function getDeferredColumns(app, hiddenColumns, options = {}) {
   const deferred = new Set();
+  const virtualize = options.virtualize === true && app === "radarr";
   LAZY_COLUMNS.forEach(col => {
     if (isColumnHidden(col, app, hiddenColumns)) {
+      deferred.add(col);
+    } else if (virtualize && RADARR_VIRTUAL_DEFER_COLUMNS.has(col)) {
       deferred.add(col);
     }
   });
@@ -2895,6 +6112,10 @@ function getDeferredColumns(app, hiddenColumns) {
 
 function markColumnVisibilityDirty() {
   columnVisibilityVersion += 1;
+  columnWidthCacheByApp.sonarr.clear();
+  columnWidthCacheByApp.radarr.clear();
+  columnWidthCacheVersionByApp.sonarr = -1;
+  columnWidthCacheVersionByApp.radarr = -1;
 }
 
 function computeDisplayCacheValue(row, app, column, cache) {
@@ -3058,6 +6279,13 @@ function updateColumnVisibility(rootEl = document) {
   const hidden = getHiddenColumns();
   const scope = rootEl && rootEl.querySelectorAll ? rootEl : document;
   const isGlobal = scope === document;
+  const isFragment = scope && scope.nodeType === 11;
+  const includeHeader = !isFragment;
+  const csvDisabled = !csvColumnsEnabled();
+  const csvCols = csvDisabled ? CSV_COLUMNS_BY_APP[activeApp] : null;
+  const hideTautulli = !tautulliEnabled;
+  const hideInstance = getInstanceCount(activeApp) <= 1;
+  const checkPanel = isGlobal && columnsPanel;
   let newlyVisible = null;
   if (isGlobal) {
     const currentVisible = getVisibleDisplayColumns(activeApp, hidden);
@@ -3077,20 +6305,22 @@ function updateColumnVisibility(rootEl = document) {
     scopes.push(document);
   } else {
     scopes.push(scope);
-    const thead = document.querySelector("thead");
-    if (thead) scopes.push(thead);
+    if (includeHeader) {
+      const thead = document.querySelector("thead");
+      if (thead) scopes.push(thead);
+    }
   }
 
   scopes.forEach(scopeEl => {
     scopeEl.querySelectorAll("[data-col]").forEach(el => {
-      if (columnsPanel && columnsPanel.contains(el)) return;
+      if (checkPanel && columnsPanel.contains(el)) return;
       const col = el.getAttribute("data-col");
       const app = el.getAttribute("data-app");
       const hideByApp = app && app !== activeApp;
       const hideByCol = hidden.has(col);
-      const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
-      const hideByCsv = col && CSV_COLUMNS_BY_APP[activeApp]?.has(col) && !csvColumnsEnabled();
-      const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
+      const hideByTautulli = hideTautulli && col && TAUTULLI_COLUMNS.has(col);
+      const hideByCsv = csvCols && col && csvCols.has(col);
+      const hideByInstance = hideInstance && col === "Instance";
       el.classList.toggle(
         "col-hidden",
         hideByApp || hideByCol || hideByTautulli || hideByCsv || hideByInstance
@@ -3099,6 +6329,11 @@ function updateColumnVisibility(rootEl = document) {
   });
   if (isGlobal && newlyVisible && newlyVisible.length) {
     newlyVisible.forEach(col => hydrateLazyDisplayCells(col));
+  }
+  if (isGlobal) {
+    applyColumnHeaderCaps();
+    scheduleTitlePathWidthLock();
+    scheduleTruncationTooltipUpdate();
   }
 }
 
@@ -3161,6 +6396,21 @@ function setBatching(active) {
   tableEl.classList.toggle("is-batching", Boolean(active));
 }
 
+function getCellContentWidth(el) {
+  if (!el) return 0;
+  const rect = el.getBoundingClientRect();
+  if (!rect) return 0;
+  const style = window.getComputedStyle(el);
+  const padding = parseFloat(style.paddingLeft || 0) + parseFloat(style.paddingRight || 0);
+  const border = parseFloat(style.borderLeftWidth || 0) + parseFloat(style.borderRightWidth || 0);
+  const boxSizing = style.boxSizing || "content-box";
+  let width = rect.width || 0;
+  if (boxSizing !== "border-box") {
+    width -= padding + border;
+  }
+  return Math.max(0, Math.ceil(width));
+}
+
 function maybeStabilizeRender(app, options = {}) {
   if (!resolveRenderFlag("stabilize", app)) {
     pendingStabilizeByApp[app] = false;
@@ -3175,20 +6425,53 @@ function maybeStabilizeRender(app, options = {}) {
   });
 }
 
-function lockColumnWidths(token) {
+function cacheColumnWidths(app, options = {}) {
   if (!tableEl) return;
+  if (!options.force && hasActiveFilters()) return;
   const headers = tableEl.querySelectorAll("thead th[data-col]");
   if (!headers.length) return;
-  columnWidthLock.widths.clear();
+  const cache = columnWidthCacheByApp[app];
+  cache.clear();
   headers.forEach(th => {
     if (th.classList.contains("col-hidden")) return;
     const col = th.getAttribute("data-col");
     if (!col || col === "Title") return;
-    const width = Math.ceil(th.getBoundingClientRect().width);
+    const width = getCellContentWidth(th);
     if (width > 0) {
-      columnWidthLock.widths.set(col, width);
+      cache.set(col, width);
     }
   });
+  if (cache.size) {
+    columnWidthCacheVersionByApp[app] = columnVisibilityVersion;
+  }
+}
+
+function lockColumnWidths(token) {
+  if (!tableEl) return;
+  const app = activeApp;
+  const headers = tableEl.querySelectorAll("thead th[data-col]");
+  if (!headers.length) return;
+  columnWidthLock.widths.clear();
+  const useCache = columnWidthCacheVersionByApp[app] === columnVisibilityVersion &&
+    columnWidthCacheByApp[app].size > 0;
+  if (useCache) {
+    columnWidthCacheByApp[app].forEach((width, col) => {
+      if (!col || col === "Title") return;
+      if (width > 0) {
+        columnWidthLock.widths.set(col, width);
+      }
+    });
+  } else {
+    headers.forEach(th => {
+      if (th.classList.contains("col-hidden")) return;
+      const col = th.getAttribute("data-col");
+      if (!col || col === "Title") return;
+      const width = getCellContentWidth(th);
+      if (width > 0) {
+        columnWidthLock.widths.set(col, width);
+      }
+    });
+  }
   if (!columnWidthLock.widths.size) return;
   headers.forEach(th => {
     const col = th.getAttribute("data-col");
@@ -3199,6 +6482,17 @@ function lockColumnWidths(token) {
     th.style.minWidth = widthPx;
     th.style.maxWidth = widthPx;
   });
+  if (tbody && columnWidthLock.widths.size) {
+    columnWidthLock.widths.forEach((width, col) => {
+      if (!col || col === "Title") return;
+      const widthPx = `${width}px`;
+      tbody.querySelectorAll(`td[data-col="${col}"]`).forEach(td => {
+        td.style.width = widthPx;
+        td.style.minWidth = widthPx;
+        td.style.maxWidth = widthPx;
+      });
+    });
+  }
   columnWidthLock.active = true;
   columnWidthLock.token = token || 0;
 }
@@ -3214,124 +6508,148 @@ function unlockColumnWidths(token) {
     th.style.minWidth = "";
     th.style.maxWidth = "";
   });
+  if (tbody && columnWidthLock.widths.size) {
+    columnWidthLock.widths.forEach((_width, col) => {
+      if (!col || col === "Title") return;
+      tbody.querySelectorAll(`td[data-col="${col}"]`).forEach(td => {
+        td.style.width = "";
+        td.style.minWidth = "";
+        td.style.maxWidth = "";
+      });
+    });
+  }
   columnWidthLock.widths.clear();
   columnWidthLock.active = false;
   columnWidthLock.token = 0;
   applyTitleWidth(activeApp, null, { skipIfUnchanged: true });
 }
 
-function getTitleMeasureContext() {
-  if (titleMeasureCtx) return titleMeasureCtx;
-  const canvas = document.createElement("canvas");
-  titleMeasureCtx = canvas.getContext("2d");
-  return titleMeasureCtx;
-}
-
-function ensureTitleMeasureStyle() {
-  if (!tableEl) return false;
-  const header = tableEl.querySelector('th[data-col="Title"]');
-  if (!header) return false;
-  const style = getComputedStyle(header);
-  const fontSize = style.fontSize || "14px";
-  const fontFamily = style.fontFamily || "system-ui, sans-serif";
-  const font = `400 ${fontSize} ${fontFamily}`;
-  const ctx = getTitleMeasureContext();
-  if (!ctx) return false;
-  if (font !== titleMeasureFont) {
-    titleMeasureFont = font;
-    ctx.font = font;
+function measureHeaderCapWidth(th) {
+  if (!th || !document.body) return 0;
+  const col = th.getAttribute("data-col") || "";
+  const appKey = activeApp;
+  const labelKey = (th.textContent || "").trim();
+  const minText = HEADER_CAP_MIN_TEXT[col] || "";
+  if (!labelKey) return 0;
+  const style = window.getComputedStyle(th);
+  const fontKey = style?.font || `${style?.fontWeight || ""} ${style?.fontSize || ""} ${style?.fontFamily || ""}`;
+  const cacheKey = `${labelKey}||${minText}||${fontKey}||${style?.letterSpacing || ""}||${style?.textTransform || ""}`;
+  const cachedKey = headerCapKeyByApp[appKey].get(col);
+  if (cachedKey === cacheKey && headerCapCacheByApp[appKey].has(col)) {
+    return headerCapCacheByApp[appKey].get(col);
   }
-  const paddingLeft = parseFloat(style.paddingLeft) || 0;
-  const paddingRight = parseFloat(style.paddingRight) || 0;
-  titleMeasurePadding = paddingLeft + paddingRight;
-  return true;
+  if (!headerCapMeasureEl) {
+    headerCapMeasureEl = document.createElement("span");
+    headerCapMeasureEl.style.position = "absolute";
+    headerCapMeasureEl.style.visibility = "hidden";
+    headerCapMeasureEl.style.whiteSpace = "nowrap";
+    headerCapMeasureEl.style.pointerEvents = "none";
+    headerCapMeasureEl.style.left = "-9999px";
+    headerCapMeasureEl.style.top = "0";
+    document.body.appendChild(headerCapMeasureEl);
+  }
+  let text = labelKey;
+  let sampleText = minText;
+  const transform = style?.textTransform || "none";
+  if (transform === "uppercase") {
+    text = text.toUpperCase();
+    sampleText = sampleText.toUpperCase();
+  } else if (transform === "lowercase") {
+    text = text.toLowerCase();
+    sampleText = sampleText.toLowerCase();
+  } else if (transform === "capitalize") {
+    text = text.replace(/\b\w/g, c => c.toUpperCase());
+    sampleText = sampleText.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  headerCapMeasureEl.style.font = fontKey;
+  if (style?.letterSpacing) {
+    headerCapMeasureEl.style.letterSpacing = style.letterSpacing;
+  }
+  headerCapMeasureEl.textContent = text;
+  const labelWidth = Math.ceil(headerCapMeasureEl.getBoundingClientRect().width);
+  let minWidth = 0;
+  if (sampleText) {
+    headerCapMeasureEl.textContent = sampleText;
+    minWidth = Math.ceil(headerCapMeasureEl.getBoundingClientRect().width);
+  }
+  const width = Math.max(labelWidth, minWidth);
+  const capped = width ? width + HEADER_CAP_EXTRA_PX : 0;
+  headerCapCacheByApp[appKey].set(col, capped);
+  headerCapKeyByApp[appKey].set(col, cacheKey);
+  return capped;
 }
 
-function findLongestTitle(rows) {
-  if (!rows || !rows.length) return { title: "", signature: "" };
-  let maxLen = 0;
-  let longest = "";
-  rows.forEach(row => {
-    const raw = row?.Title ?? row?.title ?? "";
-    if (!raw) return;
-    const title = String(raw);
-    const len = title.length;
-    if (len > maxLen) {
-      maxLen = len;
-      longest = title;
+function applyColumnHeaderCaps() {
+  if (!tableEl) return;
+  const app = activeApp;
+  if (!headerCapCleanupDone) {
+    HEADER_WIDTH_CAP_COLUMNS.forEach(col => {
+      tableEl.querySelectorAll(`th[data-col="${col}"], td[data-col="${col}"]`).forEach(el => {
+        el.style.width = "";
+        el.style.minWidth = "";
+        el.style.maxWidth = "";
+      });
+    });
+    headerCapCleanupDone = true;
+  }
+  const headers = Array.from(tableEl.querySelectorAll("thead th[data-col]"));
+  let hasVisibleCap = false;
+  let missingCap = false;
+  headers.forEach(th => {
+    const col = th.getAttribute("data-col");
+    if (!col || !HEADER_WIDTH_CAP_COLUMNS.has(col)) return;
+    const appAttr = th.getAttribute("data-app");
+    if (appAttr && appAttr !== app) return;
+    if (th.classList.contains("col-hidden")) return;
+    hasVisibleCap = true;
+    if (!tableEl.style.getPropertyValue(`--cap-${col}`).trim()) {
+      missingCap = true;
     }
   });
-  const signature = longest ? `${rows.length}:${maxLen}:${longest}` : `${rows.length}:0`;
-  return { title: longest, signature };
+  if (!hasVisibleCap) {
+    headerCapAppliedVersionByApp[app] = columnVisibilityVersion;
+    return;
+  }
+  if (headerCapAppliedVersionByApp[app] === columnVisibilityVersion && !missingCap) return;
+  headers.forEach(th => {
+    const col = th.getAttribute("data-col");
+    if (!col || !HEADER_WIDTH_CAP_COLUMNS.has(col)) return;
+    const appAttr = th.getAttribute("data-app");
+    if (appAttr && appAttr !== app) return;
+    if (th.classList.contains("col-hidden")) return;
+    const width = measureHeaderCapWidth(th);
+    if (!width) return;
+    const widthPx = `${width}px`;
+    tableEl.style.setProperty(`--cap-${col}`, widthPx);
+  });
+  headerCapAppliedVersionByApp[app] = columnVisibilityVersion;
 }
 
-function updateTitleWidthCache(app, rows) {
-  if (!rows || !rows.length) {
-    titleWidthByApp[app] = 0;
-    titleWidthSigByApp[app] = "";
-    return;
-  }
-  const { title, signature } = findLongestTitle(rows);
-  if (signature === titleWidthSigByApp[app] && titleWidthByApp[app]) {
-    return;
-  }
-  titleWidthSigByApp[app] = signature;
-  if (!title) {
-    titleWidthByApp[app] = 0;
-    return;
-  }
-  if (!ensureTitleMeasureStyle()) {
-    titleWidthByApp[app] = 0;
-    return;
-  }
-  const ctx = getTitleMeasureContext();
-  if (!ctx) {
-    titleWidthByApp[app] = 0;
-    return;
-  }
-  titleWidthByApp[app] = Math.ceil(ctx.measureText(title).width + titleMeasurePadding);
-}
-
-function applyTitleWidth(app, rows = null, options = {}) {
-  if (rows) {
-    updateTitleWidthCache(app, rows);
-  }
+function applyTitleWidth(app, _rows = null, _options = {}) {
   if (!tableEl || app !== activeApp) return;
   const header = tableEl.querySelector('th[data-col="Title"]');
   if (!header) return;
-  const width = titleWidthByApp[app];
-  if (!width || header.classList.contains("col-hidden")) {
-    header.style.width = "";
-    header.style.minWidth = "";
-    header.style.maxWidth = "";
-    titleWidthAppliedSigByApp[app] = "";
-    return;
-  }
-  const widthPx = `${width}px`;
-  if (options.skipIfUnchanged &&
-      titleWidthAppliedSigByApp[app] === titleWidthSigByApp[app] &&
-      header.style.width === widthPx &&
-      header.style.minWidth === widthPx &&
-      header.style.maxWidth === widthPx) {
-    return;
-  }
-  header.style.width = widthPx;
-  header.style.minWidth = widthPx;
-  header.style.maxWidth = widthPx;
-  titleWidthAppliedSigByApp[app] = titleWidthSigByApp[app];
+  header.style.width = "";
+  header.style.minWidth = "";
+  header.style.maxWidth = "";
 }
 
 function setActiveTab(app) {
   if (activeApp === app) return;
 
   activeApp = app;
+  clearTableSelection();
   markColumnVisibilityDirty();
+  if (tableEl) {
+    tableEl.dataset.app = activeApp;
+  }
 
   tabSonarr.classList.toggle("active", activeApp === "sonarr");
   tabRadarr.classList.toggle("active", activeApp === "radarr");
   setLoading(false);
   setStatus("");
   setStatusNotice(noticeByApp[activeApp] || "");
+  updateFastModeBanner();
   updateBackgroundLoading();
   updateStatusPanel();
 
@@ -3350,6 +6668,7 @@ function setActiveTab(app) {
   updateSortIndicators();
   updateLastUpdatedDisplay();
   applyTitleWidth(activeApp, null, { skipIfUnchanged: true });
+  scheduleTitlePathWidthLock();
 
   // clear filter per-tab
   if (titleFilter) titleFilter.value = "";
@@ -3383,6 +6702,11 @@ function sonarrSlugFromTitle(title) {
 }
 
 function buildTitleLink(row, app) {
+  const rawTitle = formatRowTitle(row, app);
+  const display = escapeHtml(rawTitle);
+  const titleAttr = rawTitle ? ` title="${escapeHtml(rawTitle)}"` : "";
+  const fallback = `<span class="title-text"${titleAttr}>${display}</span>`;
+
   if (app === "sonarr") {
     const slug =
       row.TitleSlug ??
@@ -3393,27 +6717,39 @@ function buildTitleLink(row, app) {
 
     const instanceId = row.InstanceId ?? row.instanceId;
     const base = (instanceId && instanceBaseById.sonarr[instanceId]) || sonarrBase;
-    if (!base || !slug) return escapeHtml(row.Title);
+    if (!base || !slug) return fallback;
 
     const url = `${base.replace(/\/$/, "")}/series/${slug}`;
-    return `<a class="title-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.Title)}</a>`;
+    return `<a class="title-link title-text" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${display}</a>`;
   } else {
     // IMPORTANT: Radarr UI expects TMDB id for /movie/<id> in your setup
     const tmdbId = row.TmdbId ?? row.tmdbId;
     const instanceId = row.InstanceId ?? row.instanceId;
     const base = (instanceId && instanceBaseById.radarr[instanceId]) || radarrBase;
-    if (!base || !tmdbId) return escapeHtml(row.Title);
+    if (!base || !tmdbId) return fallback;
 
     const url = `${base.replace(/\/$/, "")}/movie/${tmdbId}`;
-    return `<a class="title-link" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(row.Title)}</a>`;
+    return `<a class="title-link title-text" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer"${titleAttr}>${display}</a>`;
   }
 }
 
 const ROW_REFRESH_ICON_HTML = '<span aria-hidden="true">↻</span>';
 const ROW_REFRESH_BUTTON_HTML =
   `<button class="row-refresh-btn row-refresh-btn--title" type="button" title="Refresh in Arr (and Tautulli if configured)" aria-label="Refresh item">${ROW_REFRESH_ICON_HTML}</button>`;
+const SERIES_EXPAND_ICON_HTML = '<span aria-hidden="true">+</span>';
 const DIAG_BUTTON_HTML =
   `<div class="diag-actions"><button class="match-diag-btn" type="button" title="Copy match diagnostics" aria-label="Copy match diagnostics">i</button></div>`;
+
+function buildSeriesExpanderButton(row) {
+  const seriesId = row.SeriesId ?? row.seriesId ?? "";
+  if (!seriesId) return "";
+  const instanceId = row.InstanceId ?? row.instanceId ?? "";
+  const seriesKey = getSonarrSeriesKey(seriesId, instanceId);
+  const keyAttr = seriesKey ? ` data-series-key="${escapeHtml(seriesKey)}"` : "";
+  const seriesAttr = seriesId ? ` data-series-id="${escapeHtml(seriesId)}"` : "";
+  const instanceAttr = instanceId ? ` data-instance-id="${escapeHtml(instanceId)}"` : "";
+  return `<button class="series-expander" type="button" title="Expand seasons" aria-label="Expand seasons" aria-expanded="false"${keyAttr}${seriesAttr}${instanceAttr}>${SERIES_EXPAND_ICON_HTML}</button>`;
+}
 
 function computeHeavyCellValues(row, app, columns) {
   if (!columns || !columns.length) return {};
@@ -3428,23 +6764,151 @@ function computeHeavyCellValues(row, app, columns) {
     values.Instance = cache.instanceCell;
   }
 
-  if (colSet.has("AudioProfile")) {
-    if (!Object.prototype.hasOwnProperty.call(cache, "audioProfileCell")) {
-      const rawAudioProfile = row.AudioProfile ?? "";
-      const audioProfileValue = formatMixedValue(rawAudioProfile, row.AudioProfileMixed);
-      cache.audioProfileCell = (rawAudioProfile || row.AudioProfileMixed)
-        ? audioProfileValue
-        : '<span class="muted">Not reported</span>';
+  if (colSet.has("Status")) {
+    if (!Object.prototype.hasOwnProperty.call(cache, "statusCell")) {
+      cache.statusCell = notReportedIfEmpty(formatStatusValue(row.Status ?? ""));
     }
-    values.AudioProfile = cache.audioProfileCell;
+    values.Status = cache.statusCell;
+  }
+
+  if (colSet.has("Monitored")) {
+    values.Monitored = formatOptionalBool(row.Monitored);
+  }
+
+  if (colSet.has("QualityProfile")) {
+    if (!Object.prototype.hasOwnProperty.call(cache, "qualityProfileCell")) {
+      cache.qualityProfileCell = notReportedIfEmpty(
+        escapeHtml(row.QualityProfile ?? "")
+      );
+    }
+    values.QualityProfile = cache.qualityProfileCell;
+  }
+
+  if (colSet.has("Tags")) {
+    if (!Object.prototype.hasOwnProperty.call(cache, "tagsCell")) {
+      cache.tagsCell = notReportedIfEmpty(escapeHtml(row.Tags ?? ""));
+    }
+    values.Tags = cache.tagsCell;
+  }
+
+  if (colSet.has("ReleaseGroup")) {
+    if (!Object.prototype.hasOwnProperty.call(cache, "releaseGroupCell")) {
+      cache.releaseGroupCell = notReportedIfEmpty(
+        escapeHtml(row.ReleaseGroup ?? "")
+      );
+    }
+    values.ReleaseGroup = cache.releaseGroupCell;
+  }
+
+  if (colSet.has("SeriesType")) {
+    values.SeriesType = notReportedIfEmpty(formatSeriesType(row.SeriesType ?? ""));
+  }
+
+  if (colSet.has("OriginalLanguage")) {
+    values.OriginalLanguage = notReportedIfEmpty(
+      formatSeriesLanguage(row.OriginalLanguage ?? "")
+    );
+  }
+
+  if (colSet.has("Genres")) {
+    values.Genres = notReportedIfEmpty(formatSeriesGenres(row.Genres ?? ""));
+  }
+
+  if (colSet.has("Studio")) {
+    values.Studio = notReportedIfEmpty(escapeHtml(row.Studio ?? ""));
+  }
+
+  if (colSet.has("HasFile")) {
+    values.HasFile = formatOptionalBool(row.HasFile);
+  }
+
+  if (colSet.has("IsAvailable")) {
+    values.IsAvailable = formatOptionalBool(row.IsAvailable);
+  }
+
+  if (colSet.has("InCinemas")) {
+    values.InCinemas = notReportedIfEmpty(formatSeriesDate(row.InCinemas ?? ""));
+  }
+
+  if (colSet.has("LastSearchTime")) {
+    values.LastSearchTime = notReportedIfEmpty(
+      formatDateTimeValue(row.LastSearchTime ?? "")
+    );
+  }
+
+  if (colSet.has("Edition")) {
+    values.Edition = notReportedIfEmpty(escapeHtml(row.Edition ?? ""));
+  }
+
+  if (colSet.has("CustomFormats")) {
+    values.CustomFormats = notReportedIfEmpty(
+      formatCustomFormatsValue(row.CustomFormats ?? "")
+    );
+  }
+
+  if (colSet.has("CustomFormatScore")) {
+    values.CustomFormatScore = formatOptionalNumeric(
+      row.CustomFormatScore ?? "",
+      getNumericWidths(app, "CustomFormatScore")
+    );
+  }
+
+  if (colSet.has("QualityCutoffNotMet")) {
+    values.QualityCutoffNotMet = formatOptionalBool(row.QualityCutoffNotMet);
+  }
+
+  if (colSet.has("Languages")) {
+    values.Languages = notReportedIfEmpty(formatLanguagesValue(row.Languages ?? ""));
+  }
+
+  if (colSet.has("LastAired")) {
+    values.LastAired = notReportedIfEmpty(formatSeriesDate(row.LastAired ?? ""));
+  }
+
+  if (colSet.has("MissingCount")) {
+    if (app === "radarr") {
+      const raw = row.MissingCount;
+      const boolValue = raw === "" || raw === null || raw === undefined
+        ? false
+        : Boolean(raw);
+      values.MissingCount = formatBoolValue(boolValue);
+    } else if (row.MissingCount === "" || row.MissingCount === null || row.MissingCount === undefined) {
+      values.MissingCount = NOT_REPORTED_HTML;
+    } else {
+      values.MissingCount = formatNumericCell(
+        row.MissingCount ?? "",
+        getNumericWidths(app, "MissingCount")
+      );
+    }
+  }
+
+  if (colSet.has("CutoffUnmetCount")) {
+    if (app === "radarr") {
+      const raw = row.CutoffUnmetCount;
+      const boolValue = raw === "" || raw === null || raw === undefined
+        ? false
+        : Boolean(raw);
+      values.CutoffUnmetCount = formatBoolValue(boolValue);
+    } else if (row.CutoffUnmetCount === "" || row.CutoffUnmetCount === null || row.CutoffUnmetCount === undefined) {
+      values.CutoffUnmetCount = NOT_REPORTED_HTML;
+    } else {
+      values.CutoffUnmetCount = formatNumericCell(
+        row.CutoffUnmetCount ?? "",
+        getNumericWidths(app, "CutoffUnmetCount")
+      );
+    }
   }
 
   if (colSet.has("AudioLanguages")) {
     if (!Object.prototype.hasOwnProperty.call(cache, "audioLanguagesCell")) {
       const rawAudioLanguages = row.AudioLanguages ?? "";
-      cache.audioLanguagesCell = (rawAudioLanguages || row.AudioLanguagesMixed)
-        ? formatLanguageValue(rawAudioLanguages, row.AudioLanguagesMixed, { allowToggle: true })
-        : '<span class="muted">Not reported</span>';
+      const fullAudioLanguages = row.AudioLanguagesAll ?? "";
+      cache.audioLanguagesCell = (rawAudioLanguages || row.AudioLanguagesMixed || fullAudioLanguages)
+        ? formatLanguageValue(rawAudioLanguages, row.AudioLanguagesMixed, {
+          allowToggle: true,
+          fullValue: fullAudioLanguages,
+        })
+        : NOT_REPORTED_HTML;
     }
     values.AudioLanguages = cache.audioLanguagesCell;
   }
@@ -3452,9 +6916,13 @@ function computeHeavyCellValues(row, app, columns) {
   if (colSet.has("SubtitleLanguages")) {
     if (!Object.prototype.hasOwnProperty.call(cache, "subtitleLanguagesCell")) {
       const rawSubtitleLanguages = row.SubtitleLanguages ?? "";
-      cache.subtitleLanguagesCell = (rawSubtitleLanguages || row.SubtitleLanguagesMixed)
-        ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, { allowToggle: true })
-        : '<span class="muted">Not reported</span>';
+      const fullSubtitleLanguages = row.SubtitleLanguagesAll ?? "";
+      cache.subtitleLanguagesCell = (rawSubtitleLanguages || row.SubtitleLanguagesMixed || fullSubtitleLanguages)
+        ? formatLanguageValue(rawSubtitleLanguages, row.SubtitleLanguagesMixed, {
+          allowToggle: true,
+          fullValue: fullSubtitleLanguages,
+        })
+        : NOT_REPORTED_HTML;
     }
     values.SubtitleLanguages = cache.subtitleLanguagesCell;
   }
@@ -3462,34 +6930,33 @@ function computeHeavyCellValues(row, app, columns) {
   if (colSet.has("TitleSlug")) {
     if (!Object.prototype.hasOwnProperty.call(cache, "titleSlugCell")) {
       const slug = row.TitleSlug ?? row.titleSlug ?? sonarrSlugFromTitle(row.Title);
-      cache.titleSlugCell = escapeHtml(slug ?? "");
+      cache.titleSlugCell = notReportedIfEmpty(escapeHtml(slug ?? ""));
     }
     values.TitleSlug = cache.titleSlugCell;
   }
 
   if (colSet.has("TmdbId")) {
     if (!Object.prototype.hasOwnProperty.call(cache, "tmdbIdCell")) {
-      cache.tmdbIdCell = escapeHtml(row.TmdbId ?? row.tmdbId ?? "");
+      cache.tmdbIdCell = notReportedIfEmpty(
+        escapeHtml(row.TmdbId ?? row.tmdbId ?? "")
+      );
     }
     values.TmdbId = cache.tmdbIdCell;
   }
 
   if (colSet.has("AudioCodecMixed")) {
-    values.AudioCodecMixed = formatBoolValue(row.AudioCodecMixed);
-  }
-  if (colSet.has("AudioProfileMixed")) {
-    values.AudioProfileMixed = formatBoolValue(row.AudioProfileMixed);
+    values.AudioCodecMixed = formatOptionalBool(row.AudioCodecMixed);
   }
   if (colSet.has("AudioLanguagesMixed")) {
-    values.AudioLanguagesMixed = formatBoolValue(row.AudioLanguagesMixed);
+    values.AudioLanguagesMixed = formatOptionalBool(row.AudioLanguagesMixed);
   }
   if (colSet.has("SubtitleLanguagesMixed")) {
-    values.SubtitleLanguagesMixed = formatBoolValue(row.SubtitleLanguagesMixed);
+    values.SubtitleLanguagesMixed = formatOptionalBool(row.SubtitleLanguagesMixed);
   }
 
   if (colSet.has("VideoHDR")) {
     if (!Object.prototype.hasOwnProperty.call(cache, "videoHdrCell")) {
-      cache.videoHdrCell = escapeHtml(row.VideoHDR ?? "");
+      cache.videoHdrCell = formatVideoHdrValue(row.VideoHDR);
     }
     values.VideoHDR = cache.videoHdrCell;
   }
@@ -3512,7 +6979,7 @@ function computeHeavyCellValues(row, app, columns) {
 
     if (colSet.has("PlayCount")) {
       values.PlayCount = tautulliMatched
-        ? escapeHtml(row.PlayCount ?? 0)
+        ? formatNumericCell(row.PlayCount ?? 0, getNumericWidths(app, "PlayCount"))
         : notReported;
     }
     if (colSet.has("LastWatched")) {
@@ -3522,7 +6989,7 @@ function computeHeavyCellValues(row, app, columns) {
     }
     if (colSet.has("DaysSinceWatched")) {
       values.DaysSinceWatched = tautulliMatched
-        ? formatDaysSince(row.DaysSinceWatched, row.LastWatched)
+        ? formatDaysSince(row.DaysSinceWatched, row.LastWatched, getNumericWidths(app, "DaysSinceWatched"))
         : notReported;
     }
     if (colSet.has("TotalWatchTimeHours")) {
@@ -3543,7 +7010,7 @@ function computeHeavyCellValues(row, app, columns) {
     }
     if (colSet.has("UsersWatched")) {
       values.UsersWatched = tautulliMatched
-        ? escapeHtml(row.UsersWatched ?? 0)
+        ? formatNumericCell(row.UsersWatched ?? 0, getNumericWidths(app, "UsersWatched"))
         : notReported;
     }
   }
@@ -3555,6 +7022,12 @@ function buildRow(row, app, options = {}) {
   const tr = document.createElement("tr");
   tr.dataset.rowKey = row.__sortarrKey || buildRowKey(row, app);
   tr.dataset.app = app;
+  if (app === "sonarr") {
+    const seriesKey = getSonarrSeriesKeyFromRow(row);
+    if (seriesKey) {
+      tr.dataset.seriesKey = seriesKey;
+    }
+  }
   tr.__sortarrRow = row;
   const displayCache = getDisplayCache(row);
   const isColumnVisible = options.isColumnVisible || (() => true);
@@ -3568,13 +7041,6 @@ function buildRow(row, app, options = {}) {
     "AudioCodec",
     displayCache,
     isColumnVisible("AudioCodec")
-  );
-  const matchBadgeState = resolveDisplayCacheValue(
-    row,
-    app,
-    "TautulliMatchStatus",
-    displayCache,
-    isColumnVisible("TautulliMatchStatus")
   );
   const contentHoursState = resolveDisplayCacheValue(
     row,
@@ -3619,19 +7085,19 @@ function buildRow(row, app, options = {}) {
     isColumnVisible("Path")
   );
   const audioCodec = audioCodecState.value;
-  const matchBadge = matchBadgeState.value;
   const contentHours = contentHoursState.value;
   const titleLink = displayCache.titleLink;
-  const titleCell = `${ROW_REFRESH_BUTTON_HTML}${titleLink}`;
+  const matchOrb = buildMatchOrb(row);
+  const seriesExpander = app === "sonarr" ? buildSeriesExpanderButton(row) : "";
+  const titleCell = `${seriesExpander}${ROW_REFRESH_BUTTON_HTML}<span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
   const dateAdded = formatDateAdded(row.DateAdded);
   const videoQuality = videoQualityState.value;
   const resolution = resolutionState.value;
   const videoCodec = videoCodecState.value;
   const audioChannels = audioChannelsState.value;
   const rowPath = pathState.value;
-  const bitrateCell = formatBitrateCell(row);
+  const bitrateCell = formatBitrateCell(row, app);
   const audioCodecAttr = audioCodecState.lazy ? ' data-lazy-value="1"' : "";
-  const matchBadgeAttr = matchBadgeState.lazy ? ' data-lazy-value="1"' : "";
   const contentHoursAttr = contentHoursState.lazy ? ' data-lazy-value="1"' : "";
   const videoQualityAttr = videoQualityState.lazy ? ' data-lazy-value="1"' : "";
   const resolutionAttr = resolutionState.lazy ? ' data-lazy-value="1"' : "";
@@ -3644,7 +7110,27 @@ function buildRow(row, app, options = {}) {
     ? computeHeavyCellValues(row, app, visibleHeavyColumns)
     : {};
   const instanceName = heavyValues.Instance ?? "";
-  const audioProfile = heavyValues.AudioProfile ?? "";
+  const status = heavyValues.Status ?? "";
+  const monitored = heavyValues.Monitored ?? "";
+  const qualityProfile = heavyValues.QualityProfile ?? "";
+  const tags = heavyValues.Tags ?? "";
+  const releaseGroup = heavyValues.ReleaseGroup ?? "";
+  const seriesType = heavyValues.SeriesType ?? "";
+  const originalLanguage = heavyValues.OriginalLanguage ?? "";
+  const genres = heavyValues.Genres ?? "";
+  const lastAired = heavyValues.LastAired ?? "";
+  const missingCount = heavyValues.MissingCount ?? "";
+  const cutoffUnmetCount = heavyValues.CutoffUnmetCount ?? "";
+  const studio = heavyValues.Studio ?? "";
+  const hasFile = heavyValues.HasFile ?? "";
+  const isAvailable = heavyValues.IsAvailable ?? "";
+  const inCinemas = heavyValues.InCinemas ?? "";
+  const lastSearchTime = heavyValues.LastSearchTime ?? "";
+  const edition = heavyValues.Edition ?? "";
+  const customFormats = heavyValues.CustomFormats ?? "";
+  const customFormatScore = heavyValues.CustomFormatScore ?? "";
+  const qualityCutoffNotMet = heavyValues.QualityCutoffNotMet ?? "";
+  const languages = heavyValues.Languages ?? "";
   const audioLanguages = heavyValues.AudioLanguages ?? "";
   const subtitleLanguages = heavyValues.SubtitleLanguages ?? "";
   const playCount = heavyValues.PlayCount ?? "";
@@ -3656,11 +7142,39 @@ function buildRow(row, app, options = {}) {
   const titleSlug = heavyValues.TitleSlug ?? "";
   const tmdbId = heavyValues.TmdbId ?? "";
   const audioCodecMixed = heavyValues.AudioCodecMixed ?? "";
-  const audioProfileMixed = heavyValues.AudioProfileMixed ?? "";
   const audioLanguagesMixed = heavyValues.AudioLanguagesMixed ?? "";
   const subtitleLanguagesMixed = heavyValues.SubtitleLanguagesMixed ?? "";
   const diagButton = heavyValues.Diagnostics ?? "";
   const videoHdr = heavyValues.VideoHDR ?? "";
+  const episodesCounted = formatNumericCell(
+    row.EpisodesCounted ?? "",
+    getNumericWidths(app, "EpisodesCounted")
+  );
+  const seasonCount = formatNumericCell(
+    row.SeasonCount ?? "",
+    getNumericWidths(app, "SeasonCount")
+  );
+  const avgEpisodeSize = formatNumericCell(
+    row.AvgEpisodeSizeGB ?? "",
+    getNumericWidths(app, "AvgEpisodeSizeGB")
+  );
+  const totalSizeRaw = row.TotalSizeGB;
+  const totalSize = (() => {
+    if (totalSizeRaw == null || totalSizeRaw === "") return "";
+    const num = Number(totalSizeRaw);
+    const text = Number.isFinite(num) ? num.toFixed(2) : String(totalSizeRaw);
+    return escapeHtml(text);
+  })();
+  const runtimeMinsRaw = formatRuntimeMinutes(row.RuntimeMins);
+  const runtimeMins = runtimeMinsRaw || '<span class="muted" title="No runtime">n/a</span>';
+  const fileSize = formatNumericCell(
+    row.FileSizeGB ?? "",
+    getNumericWidths(app, "FileSizeGB")
+  );
+  const gbPerHour = formatNumericCell(
+    row.GBPerHour ?? "",
+    getNumericWidths(app, "GBPerHour")
+  );
 
   if (row.TautulliMatchStatus === "unmatched") {
     tr.classList.add("row-mismatch");
@@ -3675,20 +7189,30 @@ function buildRow(row, app, options = {}) {
       <td data-col="Title">${titleCell}</td>
       <td data-col="DateAdded">${dateAdded}</td>
       <td data-col="Instance">${instanceName}</td>
-        <td class="right" data-col="ContentHours" data-app="sonarr"${contentHoursAttr}>${contentHours}</td>
-      <td class="right" data-col="EpisodesCounted" data-app="sonarr">${row.EpisodesCounted ?? ""}</td>
-      <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${row.AvgEpisodeSizeGB ?? ""}</td>
-      <td class="right" data-col="TotalSizeGB" data-app="sonarr">${row.TotalSizeGB ?? ""}</td>
-        <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
-        <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
-        <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
+      <td data-col="SeriesType" data-app="sonarr">${seriesType}</td>
+      <td data-col="OriginalLanguage" data-app="sonarr">${originalLanguage}</td>
+      <td data-col="Genres" data-app="sonarr">${genres}</td>
+      <td data-col="LastAired" data-app="sonarr">${lastAired}</td>
+      <td class="right" data-col="MissingCount" data-app="sonarr">${missingCount}</td>
+      <td class="right" data-col="CutoffUnmetCount" data-app="sonarr">${cutoffUnmetCount}</td>
+      <td class="right" data-col="ContentHours" data-app="sonarr"${contentHoursAttr}>${contentHours}</td>
+      <td class="right" data-col="EpisodesCounted" data-app="sonarr">${episodesCounted}</td>
+      <td class="right" data-col="SeasonCount" data-app="sonarr">${seasonCount}</td>
+      <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${avgEpisodeSize}</td>
+      <td data-col="TotalSizeGB" data-app="sonarr">${totalSize}</td>
+      <td data-col="Status">${status}</td>
+      <td data-col="Monitored">${monitored}</td>
+      <td data-col="Tags">${tags}</td>
+      <td data-col="ReleaseGroup">${releaseGroup}</td>
+      <td data-col="QualityProfile">${qualityProfile}</td>
+      <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
+      <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
+      <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
       <td data-col="VideoHDR">${videoHdr}</td>
-        <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
-      <td data-col="AudioProfile">${audioProfile}</td>
-        <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
+      <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
+      <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-        <td data-col="TautulliMatchStatus"${matchBadgeAttr}>${matchBadge}</td>
       <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
@@ -3699,7 +7223,6 @@ function buildRow(row, app, options = {}) {
       <td data-col="TitleSlug" data-app="sonarr">${titleSlug}</td>
       <td data-col="TmdbId">${tmdbId}</td>
       <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
-      <td data-col="AudioProfileMixed">${audioProfileMixed}</td>
       <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
       <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
         <td data-col="Path"${pathAttr}>${rowPath}</td>
@@ -3709,20 +7232,37 @@ function buildRow(row, app, options = {}) {
       <td data-col="Title">${titleCell}</td>
       <td data-col="DateAdded">${dateAdded}</td>
       <td data-col="Instance">${instanceName}</td>
-      <td class="right" data-col="RuntimeMins" data-app="radarr">${row.RuntimeMins ?? ""}</td>
-      <td class="right" data-col="FileSizeGB" data-app="radarr">${row.FileSizeGB ?? ""}</td>
-      <td class="right" data-col="GBPerHour" data-app="radarr">${row.GBPerHour ?? ""}</td>
+      <td class="right" data-col="RuntimeMins" data-app="radarr">${runtimeMins}</td>
+      <td class="right" data-col="FileSizeGB" data-app="radarr">${fileSize}</td>
+      <td class="right" data-col="GBPerHour" data-app="radarr">${gbPerHour}</td>
       <td class="right" data-col="BitrateMbps" data-app="radarr">${bitrateCell}</td>
-        <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
-        <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
-        <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
+      <td data-col="Status">${status}</td>
+      <td data-col="Monitored">${monitored}</td>
+      <td data-col="Tags">${tags}</td>
+      <td data-col="ReleaseGroup">${releaseGroup}</td>
+      <td data-col="QualityProfile">${qualityProfile}</td>
+      <td data-col="Studio" data-app="radarr">${studio}</td>
+      <td data-col="OriginalLanguage" data-app="radarr">${originalLanguage}</td>
+      <td data-col="Genres" data-app="radarr">${genres}</td>
+      <td class="right" data-col="MissingCount" data-app="radarr">${missingCount}</td>
+      <td class="right" data-col="CutoffUnmetCount" data-app="radarr">${cutoffUnmetCount}</td>
+      <td data-col="HasFile" data-app="radarr">${hasFile}</td>
+      <td data-col="IsAvailable" data-app="radarr">${isAvailable}</td>
+      <td data-col="InCinemas" data-app="radarr">${inCinemas}</td>
+      <td data-col="LastSearchTime" data-app="radarr">${lastSearchTime}</td>
+      <td data-col="Edition" data-app="radarr">${edition}</td>
+      <td data-col="CustomFormats" data-app="radarr">${customFormats}</td>
+      <td class="right" data-col="CustomFormatScore" data-app="radarr">${customFormatScore}</td>
+      <td data-col="QualityCutoffNotMet" data-app="radarr">${qualityCutoffNotMet}</td>
+      <td data-col="Languages" data-app="radarr">${languages}</td>
+      <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
+      <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
+      <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
       <td data-col="VideoHDR">${videoHdr}</td>
-        <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
-      <td data-col="AudioProfile">${audioProfile}</td>
-        <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
+      <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
+      <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
       <td data-col="AudioLanguages">${audioLanguages}</td>
       <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-        <td data-col="TautulliMatchStatus"${matchBadgeAttr}>${matchBadge}</td>
       <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
       <td class="right" data-col="PlayCount">${playCount}</td>
       <td data-col="LastWatched">${lastWatched}</td>
@@ -3732,11 +7272,22 @@ function buildRow(row, app, options = {}) {
       <td class="right" data-col="UsersWatched">${usersWatched}</td>
       <td data-col="TmdbId">${tmdbId}</td>
       <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
-      <td data-col="AudioProfileMixed">${audioProfileMixed}</td>
       <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
       <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
         <td data-col="Path"${pathAttr}>${rowPath}</td>
     `;
+  }
+
+  if (columnWidthLock.active && columnWidthLock.widths.size) {
+    columnWidthLock.widths.forEach((width, col) => {
+      if (!col || col === "Title") return;
+      const cell = tr.querySelector(`td[data-col="${col}"]`);
+      if (!cell) return;
+      const widthPx = `${width}px`;
+      cell.style.width = widthPx;
+      cell.style.minWidth = widthPx;
+      cell.style.maxWidth = widthPx;
+    });
   }
 
   return tr;
@@ -3774,11 +7325,15 @@ function queueHydration(rows, token, perf = null) {
   }
   if (hydrationState.token !== token) {
     hydrationState.token = token;
+    hydrationState.app = rows[0]?.dataset?.app || activeApp;
     hydrationState.rows = rows.slice();
     hydrationState.index = 0;
     hydrationState.perf = perf;
   } else {
     hydrationState.rows = hydrationState.rows.concat(rows);
+    if (!hydrationState.app && rows[0]?.dataset?.app) {
+      hydrationState.app = rows[0].dataset.app;
+    }
   }
   if (hydrationState.scheduled) return;
   hydrationState.scheduled = true;
@@ -3789,6 +7344,7 @@ function runHydrationPass() {
   hydrationState.scheduled = false;
   if (hydrationState.token !== renderToken) {
     hydrationState.rows = [];
+    hydrationState.app = "";
     hydrationState.index = 0;
     hydrationState.perf = null;
     unlockColumnWidths(hydrationState.token);
@@ -3797,6 +7353,13 @@ function runHydrationPass() {
   if (hydrationState.index === 0) {
     noteHydrateStart(hydrationState.perf);
   }
+  const app = hydrationState.app || activeApp;
+  const batchSize = app === "radarr"
+    ? RADARR_LAZY_CELL_BATCH_SIZE
+    : LAZY_CELL_BATCH_SIZE;
+  const frameBudget = app === "radarr"
+    ? RADARR_HYDRATE_FRAME_BUDGET_MS
+    : HYDRATE_FRAME_BUDGET_MS;
   const start = perfNow();
   const total = hydrationState.rows.length;
   let processed = 0;
@@ -3807,7 +7370,7 @@ function runHydrationPass() {
     if (tr && tr.dataset.lazy === "1") {
       hydrateDeferredCells(tr);
     }
-    if (processed >= LAZY_CELL_BATCH_SIZE && (perfNow() - start) >= HYDRATE_FRAME_BUDGET_MS) {
+    if (processed >= batchSize && (perfNow() - start) >= frameBudget) {
       break;
     }
   }
@@ -3818,6 +7381,7 @@ function runHydrationPass() {
   }
   noteHydrateEnd(hydrationState.perf);
   hydrationState.rows = [];
+  hydrationState.app = "";
   hydrationState.index = 0;
   hydrationState.perf = null;
 }
@@ -3856,6 +7420,13 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     return;
   }
   const perf = options ? options.perf : null;
+  const holdWidthLock = options && options.holdWidthLock === true;
+  const frameCheckEvery = app === "radarr"
+    ? RADARR_RENDER_FRAME_CHECK_EVERY
+    : RENDER_FRAME_CHECK_EVERY;
+  const frameBudget = app === "radarr"
+    ? RADARR_RENDER_FRAME_BUDGET_MS
+    : RENDER_FRAME_BUDGET_MS;
   const frag = document.createDocumentFragment();
   const frameStart = perfNow();
   let index = start;
@@ -3864,8 +7435,8 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     frag.appendChild(getRowElement(rows[index], app, options));
     index += 1;
     processed += 1;
-    if (processed % RENDER_FRAME_CHECK_EVERY === 0 &&
-        (perfNow() - frameStart) >= RENDER_FRAME_BUDGET_MS) {
+    if (processed % frameCheckEvery === 0 &&
+        (perfNow() - frameStart) >= frameBudget) {
       break;
     }
   }
@@ -3895,21 +7466,38 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     perf.renderEnd = perfNow();
   }
   if (options && options.lazyRows && options.lazyRows.length) {
+    applyColumnHeaderCaps();
+    scheduleTitlePathWidthLock();
+    scheduleTruncationTooltipUpdate();
     queueHydration(options.lazyRows, token, perf);
     maybeStabilizeRender(app, options);
+    cacheColumnWidths(app);
+    finalizeTableInteractionState(app);
     return;
   }
   finalizeRenderPerf(perf);
-  unlockColumnWidths(token);
+  cacheColumnWidths(app);
+  if (!holdWidthLock) {
+    unlockColumnWidths(token);
+  }
+  applyColumnHeaderCaps();
+  scheduleTitlePathWidthLock();
+  scheduleTruncationTooltipUpdate();
   maybeStabilizeRender(app, options);
+  finalizeTableInteractionState(app);
 }
 
 function render(data, options = {}) {
   const app = activeApp;
+  if (app === "sonarr") {
+    resetSonarrExpansionDisplayState();
+  }
+  applyColumnHeaderCaps();
   const filtered = applyFilters(data || []);
   const filterSig = getFilterSignature();
   const isPrimaryData = data === dataByApp[app];
   const dataVersion = isPrimaryData ? dataVersionByApp[app] : 0;
+  ensureNumericColumnWidths(app, data, dataVersion, isPrimaryData);
   let sorted = null;
   const sortCache = isPrimaryData ? sortCacheByApp[app] : null;
   if (sortCache &&
@@ -3931,9 +7519,18 @@ function render(data, options = {}) {
     }
   }
   const allowBatch = options.allowBatch !== false;
+  const batchMin = getRenderBatchMin(app);
   const shouldBatch = allowBatch &&
     resolveRenderFlag("batch", app) &&
-    sorted.length > RENDER_BATCH_MIN;
+    sorted.length > batchMin;
+  const widthLockAllowed = tbody &&
+    resolveRenderFlag("widthLock", app) &&
+    (tbody.children.length || app === "radarr");
+  const hasWidthCache = columnWidthCacheVersionByApp[app] === columnVisibilityVersion &&
+    columnWidthCacheByApp[app].size > 0;
+  const shouldLock = widthLockAllowed &&
+    (shouldBatch || (app === "radarr" && hasWidthCache));
+  const holdWidthLock = shouldLock && app === "radarr";
   const batchSize = sorted.length >= RENDER_BATCH_LARGE_MIN
     ? RENDER_BATCH_SIZE_LARGE
     : RENDER_BATCH_SIZE;
@@ -3943,23 +7540,32 @@ function render(data, options = {}) {
     clearTable();
   }
   const token = ++renderToken;
-  if (columnWidthLock.active) {
+  const scrollAnchor = options.scrollAnchor || null;
+  if (scrollAnchor) {
+    scrollAnchor.renderToken = token;
+    scrollAnchor.attempts = 0;
+  }
+  if (columnWidthLock.active && !shouldLock) {
     unlockColumnWidths();
   }
-  if (shouldBatch &&
-      tbody &&
-      tbody.children.length &&
-      resolveRenderFlag("widthLock", app)) {
+  if (shouldLock) {
+    applyColumnHeaderCaps();
     lockColumnWidths(token);
   }
   const hiddenColumns = getHiddenColumns();
   const allowDeferred = resolveRenderFlag("deferHeavy", app);
+  // Radarr large lists: render light rows first, hydrate heavy cells after.
+  const virtualizeRadarr = app === "radarr" &&
+    resolveRenderFlag("virtualize", app) &&
+    sorted.length >= RADARR_VIRTUAL_MIN_ROWS;
   const deferredColumns = allowDeferred
-    ? getDeferredColumns(app, hiddenColumns)
+    ? getDeferredColumns(app, hiddenColumns, { virtualize: virtualizeRadarr })
     : new Set();
   const useDeferred = allowDeferred && deferredColumns.size > 0;
   const visibleHeavyColumns = allowDeferred
-    ? LAZY_COLUMNS_ARRAY.filter(col => !isColumnHidden(col, app, hiddenColumns))
+    ? LAZY_COLUMNS_ARRAY.filter(
+      col => !isColumnHidden(col, app, hiddenColumns) && !deferredColumns.has(col)
+    )
     : LAZY_COLUMNS_ARRAY;
   const isColumnVisible = col => !isColumnHidden(col, app, hiddenColumns);
   const columnVisibilityVersionAtStart = columnVisibilityVersion;
@@ -3978,6 +7584,7 @@ function render(data, options = {}) {
       columnVisibilityVersionAtStart,
       lazyRows: [],
       perf,
+      holdWidthLock,
     }
     : {
       visibleHeavyColumns,
@@ -3985,6 +7592,7 @@ function render(data, options = {}) {
       columnVisibilityVersionAtStart,
       lazyRows: [],
       perf,
+      holdWidthLock,
     };
   setBatching(shouldBatch);
 
@@ -3997,12 +7605,22 @@ function render(data, options = {}) {
     tableReadyByApp[app] = true;
     setChipsVisible(true);
     flushDeferredPrefetch();
+    if (scrollAnchor) {
+      scheduleScrollAnchorRestore(scrollAnchor, token);
+    }
     if (perf && !perf.renderEnd) {
       perf.renderEnd = perfNow();
     }
     finalizeRenderPerf(perf);
-    unlockColumnWidths(token);
+    cacheColumnWidths(app);
+    if (!holdWidthLock) {
+      unlockColumnWidths(token);
+    }
+    applyColumnHeaderCaps();
+    scheduleTitlePathWidthLock();
+    scheduleTruncationTooltipUpdate();
     maybeStabilizeRender(app, options);
+    finalizeTableInteractionState(app);
     return;
   }
 
@@ -4012,6 +7630,9 @@ function render(data, options = {}) {
       frag.appendChild(getRowElement(row, app, rowOptions));
     }
     tbody.replaceChildren(frag);
+    if (scrollAnchor) {
+      scheduleScrollAnchorRestore(scrollAnchor, token);
+    }
     updateColumnVisibility(tbody);
     normalizeSonarrRuntimeOrder(tbody);
     setBatching(false);
@@ -4023,17 +7644,32 @@ function render(data, options = {}) {
       perf.renderEnd = perfNow();
     }
     if (rowOptions.lazyRows && rowOptions.lazyRows.length) {
+      applyColumnHeaderCaps();
+      scheduleTitlePathWidthLock();
+      scheduleTruncationTooltipUpdate();
       queueHydration(rowOptions.lazyRows, token, perf);
       maybeStabilizeRender(app, options);
+      cacheColumnWidths(app);
+      finalizeTableInteractionState(app);
       return;
     }
     finalizeRenderPerf(perf);
-    unlockColumnWidths(token);
+    cacheColumnWidths(app);
+    if (!holdWidthLock) {
+      unlockColumnWidths(token);
+    }
+    applyColumnHeaderCaps();
+    scheduleTitlePathWidthLock();
+    scheduleTruncationTooltipUpdate();
     maybeStabilizeRender(app, options);
+    finalizeTableInteractionState(app);
     return;
   }
 
   clearTable();
+  if (scrollAnchor) {
+    scheduleScrollAnchorRestore(scrollAnchor, token);
+  }
   renderBatch(sorted, token, 0, sorted.length, data.length, app, batchSize, rowOptions);
 }
 
@@ -4041,6 +7677,10 @@ async function load(refresh, options = {}) {
   const app = activeApp;
   const myToken = ++loadTokens[app];
   const background = options.background === true;
+  const hydrate = options.hydrate === true;
+  if (hydrate) {
+    liteHydrateInFlightByApp[app] = true;
+  }
 
   try {
     const label = refresh
@@ -4067,7 +7707,14 @@ async function load(refresh, options = {}) {
     }
 
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
-    const url = refresh ? `${base}?refresh=1` : base;
+    const params = [];
+    if (refresh) params.push("refresh=1");
+    if (options.lite === true) {
+      params.push("lite=1");
+    } else if (options.lite === false) {
+      params.push("lite=0");
+    }
+    const url = params.length ? `${base}?${params.join("&")}` : base;
 
     const res = await fetch(apiUrl(url));
     if (!res.ok) {
@@ -4082,7 +7729,7 @@ async function load(refresh, options = {}) {
     if (myToken !== loadTokens[app]) return;
 
     const existing = dataByApp[app] || [];
-    if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
+    if (background && noticeState.flags.has("tautulli_refresh") && existing.length && !hydrate) {
       applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
       fetchStatus({ silent: true });
       if (res.body && typeof res.body.cancel === "function") {
@@ -4093,6 +7740,15 @@ async function load(refresh, options = {}) {
 
     const json = await res.json();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
+    if (app === activeApp) {
+      clearTableSelection();
+    }
+    if (app === "radarr" && noticeState.flags.has("radarr_lite")) {
+      if (!hydrate && !liteHydrateInFlightByApp.radarr) {
+        liteHydrateInFlightByApp.radarr = true;
+        load(false, { background: true, lite: false, hydrate: true });
+      }
+    }
     if (!background) {
       handlePrefetchGate(app, noticeState.flags);
     }
@@ -4101,6 +7757,9 @@ async function load(refresh, options = {}) {
     dataVersionByApp[app] += 1;
     sortCacheByApp[app] = null;
     assignRowKeys(dataByApp[app], app);
+    if (app === "sonarr") {
+      resetSonarrExpansionState();
+    }
     lastUpdatedByApp[app] = Date.now();
     applyTitleWidth(app, dataByApp[app]);
     if (refresh && !background && tautulliEnabled && !noticeState.flags.has("tautulli_refresh")) {
@@ -4113,7 +7772,8 @@ async function load(refresh, options = {}) {
         render(renderData, { allowBatch: true });
         updateLastUpdatedDisplay();
       };
-      if (renderData.length > RENDER_BATCH_MIN) {
+      const batchMin = getRenderBatchMin(app);
+      if (renderData.length > batchMin) {
         requestAnimationFrame(renderNow);
       } else {
         renderNow();
@@ -4128,6 +7788,9 @@ async function load(refresh, options = {}) {
     }
     console.error(e);
   } finally {
+    if (hydrate) {
+      liteHydrateInFlightByApp[app] = false;
+    }
     if (myToken === loadTokens[app] && app === activeApp && !background) {
       setLoading(false);
     }
@@ -4219,7 +7882,10 @@ if (refreshTautulliBtn) {
   refreshTautulliBtn.addEventListener("click", async () => {
     setStatus("Refreshing Tautulli...");
     try {
-      const res = await fetch(apiUrl("/api/tautulli/refresh"), { method: "POST" });
+      const res = await fetch(apiUrl("/api/tautulli/refresh"), {
+        method: "POST",
+        headers: withCsrfHeaders(),
+      });
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
@@ -4242,7 +7908,10 @@ if (deepRefreshTautulliBtn) {
   deepRefreshTautulliBtn.addEventListener("click", async () => {
     setStatus("Starting deep Tautulli refresh...");
     try {
-      const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), { method: "POST" });
+      const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
+        method: "POST",
+        headers: withCsrfHeaders(),
+      });
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
@@ -4268,7 +7937,10 @@ if (clearCachesBtn) {
     }
     setStatus("Clearing caches...");
     try {
-      const res = await fetch(apiUrl("/api/caches/clear"), { method: "POST" });
+      const res = await fetch(apiUrl("/api/caches/clear"), {
+        method: "POST",
+        headers: withCsrfHeaders(),
+      });
       if (!res.ok) {
         const txt = await res.text();
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
@@ -4281,6 +7953,7 @@ if (clearCachesBtn) {
       lastUpdatedByApp.radarr = null;
       noticeByApp.sonarr = "";
       noticeByApp.radarr = "";
+      resetSonarrExpansionState();
       clearTable();
       updateLastUpdatedDisplay();
       if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
@@ -4345,9 +8018,20 @@ async function prefetch(app, refresh, options = {}) {
 
   const token = ++prefetchTokens[app];
   const background = options.background === true;
+  const hydrate = options.hydrate === true;
+  if (hydrate) {
+    liteHydrateInFlightByApp[app] = true;
+  }
   try {
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
-    const url = refresh ? `${base}?refresh=1` : base;
+    const params = [];
+    if (refresh) params.push("refresh=1");
+    if (options.lite === true) {
+      params.push("lite=1");
+    } else if (options.lite === false) {
+      params.push("lite=0");
+    }
+    const url = params.length ? `${base}?${params.join("&")}` : base;
     const res = await fetch(apiUrl(url));
     if (!res.ok) {
       const txt = await res.text();
@@ -4357,7 +8041,7 @@ async function prefetch(app, refresh, options = {}) {
     const noticeState = parseNoticeState(res.headers);
     if (token !== prefetchTokens[app]) return;
     const existing = dataByApp[app] || [];
-    if (background && noticeState.flags.has("tautulli_refresh") && existing.length) {
+    if (background && noticeState.flags.has("tautulli_refresh") && existing.length && !hydrate) {
       applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
       fetchStatus({ silent: true });
       if (res.body && typeof res.body.cancel === "function") {
@@ -4367,11 +8051,23 @@ async function prefetch(app, refresh, options = {}) {
     }
     const json = await res.json();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
+    if (app === activeApp) {
+      clearTableSelection();
+    }
+    if (app === "radarr" && noticeState.flags.has("radarr_lite")) {
+      if (!hydrate && !liteHydrateInFlightByApp.radarr) {
+        liteHydrateInFlightByApp.radarr = true;
+        prefetch("radarr", false, { background: true, lite: false, hydrate: true, force: true });
+      }
+    }
     rowCacheByApp[app].clear();
     dataByApp[app] = json;
     dataVersionByApp[app] += 1;
     sortCacheByApp[app] = null;
     assignRowKeys(dataByApp[app], app);
+    if (app === "sonarr") {
+      resetSonarrExpansionState();
+    }
     lastUpdatedByApp[app] = Date.now();
     applyTitleWidth(app, dataByApp[app]);
     if (app === activeApp) {
@@ -4381,7 +8077,8 @@ async function prefetch(app, refresh, options = {}) {
         render(renderData, { allowBatch: true });
         updateLastUpdatedDisplay();
       };
-      if (renderData.length > RENDER_BATCH_MIN) {
+      const batchMin = getRenderBatchMin(app);
+      if (renderData.length > batchMin) {
         requestAnimationFrame(renderNow);
       } else {
         renderNow();
@@ -4391,6 +8088,10 @@ async function prefetch(app, refresh, options = {}) {
   } catch (e) {
     if (!background) {
       console.warn(`Prefetch ${app} failed`, e);
+    }
+  } finally {
+    if (hydrate) {
+      liteHydrateInFlightByApp[app] = false;
     }
   }
 }
@@ -4408,17 +8109,9 @@ function setTautulliEnabled(enabled) {
   }
 }
 
-if (titleFilter) {
-  titleFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
-}
-
-if (pathFilter) {
-  pathFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
-}
-
-if (advancedFilter) {
-  advancedFilter.addEventListener("input", () => render(dataByApp[activeApp] || []));
-}
+bindFilterInput(titleFilter);
+bindFilterInput(pathFilter);
+bindFilterInput(advancedFilter);
 
 if (advancedToggle) {
   advancedToggle.addEventListener("click", () => {
@@ -4437,7 +8130,57 @@ if (advancedHelpBtn) {
 bindChipButtons();
 
 if (tbody) {
+  tbody.addEventListener("mouseover", e => {
+    const updated = updateSelectionFromPointer(e.target);
+    if (updated) {
+      focusTableWrapIfAllowed();
+    }
+  });
+  document.addEventListener("mousemove", () => {
+    if (!pointerSelectionEnabled) {
+      pointerSelectionEnabled = true;
+    }
+  }, { passive: true });
   tbody.addEventListener("click", e => {
+    if (tableWrapEl && !e.target.closest("input, textarea, select, [contenteditable]")) {
+      tableWrapEl.focus({ preventScroll: true });
+    }
+    const seasonRow = e.target.closest(".series-season-row");
+    if (seasonRow) {
+      const block = seasonRow.closest(".series-season-block");
+      const seriesKey = block?.dataset?.seriesKey || "";
+      const rowEl = seriesKey ? findSeriesRowByKey(seriesKey) : null;
+      if (rowEl) {
+        const seasons = getSeasonRowsForRow(rowEl);
+        const index = seasons.indexOf(seasonRow);
+        if (index >= 0) {
+          setSeasonSelection(rowEl, index, { scroll: false });
+        }
+      }
+    } else {
+      const rowEl = e.target.closest('tr[data-app]');
+      if (rowEl && !rowEl.classList.contains("series-child-row")) {
+        setRowSelection(rowEl, { scroll: false });
+      }
+    }
+    const episodeExtrasToggle = e.target.closest('[data-role="episode-extras-toggle"]');
+    if (episodeExtrasToggle) {
+      const block = episodeExtrasToggle.closest(".series-season-block");
+      if (!block) return;
+      const enabled = episodeExtrasToggle.getAttribute("aria-pressed") !== "true";
+      setSeasonExtrasState(block, enabled);
+      return;
+    }
+    const expandBtn = e.target.closest(".series-expander");
+    if (expandBtn) {
+      handleSeriesExpanderClick(expandBtn);
+      return;
+    }
+    const seasonToggle = e.target.closest(".series-season-toggle");
+    if (seasonToggle) {
+      handleSeriesSeasonToggle(seasonToggle);
+      return;
+    }
     const diagBtn = e.target.closest(".match-diag-btn");
     if (diagBtn) {
       handleMatchDiagnosticsClick(diagBtn, e);
@@ -4518,6 +8261,10 @@ if (columnsBtn && columnsPanel) {
 
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     input.addEventListener("change", () => {
+      const col = input.getAttribute("data-col");
+      if (col) {
+        syncColumnInputs(col, input.checked);
+      }
       saveColumnPrefs();
       markColumnVisibilityDirty();
       updateColumnVisibility();
@@ -4585,6 +8332,7 @@ function setTheme(theme) {
 function updateRuntimeLabels() {
   const labelMap = {
     ContentHours: "Runtime (hh:mm)",
+    RuntimeMins: "Runtime (hh:mm)",
     WatchContentRatio: "Watch / Runtime (hh:mm)",
   };
 
@@ -4631,8 +8379,9 @@ function normalizeSonarrRuntimeOrder(scope = document) {
     const totalHeader = headerRow.querySelector('th[data-col="TotalSizeGB"][data-app="sonarr"]');
     const avgHeader = headerRow.querySelector('th[data-col="AvgEpisodeSizeGB"][data-app="sonarr"]');
     const episodesHeader = headerRow.querySelector('th[data-col="EpisodesCounted"][data-app="sonarr"]');
+    const seasonsHeader = headerRow.querySelector('th[data-col="SeasonCount"][data-app="sonarr"]');
     const radarrHeader = headerRow.querySelector('th[data-app="radarr"]');
-    const order = [runtimeHeader, episodesHeader, avgHeader, totalHeader].filter(Boolean);
+    const order = [runtimeHeader, episodesHeader, seasonsHeader, avgHeader, totalHeader].filter(Boolean);
     if (order.length && radarrHeader) {
       order.forEach(el => headerRow.insertBefore(el, radarrHeader));
       sonarrHeaderNormalized = true;
@@ -4647,6 +8396,16 @@ themeBtn.addEventListener("click", () => {
   const current = root.getAttribute("data-theme") || "dark";
   setTheme(current === "dark" ? "light" : "dark");
 });
+
+const savedFiltersCollapsed = localStorage.getItem(FILTERS_COLLAPSED_KEY) === "1";
+if (filtersEl) {
+  setFiltersCollapsed(savedFiltersCollapsed);
+}
+if (filtersToggleBtn) {
+  filtersToggleBtn.addEventListener("click", () => {
+    setFiltersCollapsed(!filtersCollapsed);
+  });
+}
 
 /* config load for link bases */
 async function loadConfig() {
@@ -4676,6 +8435,7 @@ async function loadConfig() {
 
     buildInstanceChips();
     setTautulliEnabled(cfg.tautulli_configured);
+    updateArrRefreshButtons();
   } catch (e) {
     console.warn("config load failed", e);
   }
@@ -4705,8 +8465,9 @@ async function loadConfig() {
   updateLastUpdatedDisplay();
   updateSortIndicators();
   setAdvancedMode(false);
+  scheduleTitlePathWidthLock();
   await loadConfig();
-  await fetchStatus({ silent: true });
+  fetchStatus({ silent: true, lite: true });
   startStatusTick();
   startStatusFetchPoll();
   setChipsVisible(false);

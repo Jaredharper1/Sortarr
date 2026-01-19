@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.6.10
+
+### UI and columns
+
+- Add Sonarr series expanders with richer episode grids and per-season extras.
+- Add new Sonarr/Radarr metadata and playback columns/chips with improved mixed-value handling and match-status display.
+- Improve table layout and readability (Title/Path caps, numeric alignment, width stabilization, scroll behavior).
+- Lock Radarr column widths during batched renders to prevent resize flashes.
+- Keep Genres and Last Search cells on a single line in the table.
+- Add keyboard navigation for table rows and Sonarr season lists (arrow keys + enter/expand).
+- Refine keyboard navigation so Enter refreshes rows and left/right control Sonarr expansions.
+- Sync keyboard selection with hover and auto-focus the table on load.
+- Add episode-level keyboard navigation, season-level extras toggle on Enter, and animated Sonarr season/episode expanders.
+- Clamp Radarr text columns and preserve scroll anchors on chip toggles to prevent row shifts.
+- Fix Radarr columns widening after rapid chip/sort interactions.
+- Keep Radarr column widths consistent when filters drop below batched-render thresholds.
+- Expose Arr/Tautulli timeouts and worker settings in setup advanced options.
+- Refine Sonarr keyboard navigation within expanded seasons and speed up expansion animations.
+- Enable season extras when pressing Enter on a selected episode.
+- Allow Radarr lite hydration to complete even while Tautulli background matching is active.
+- Fix Sonarr column toggles not enabling shared columns unless Show all is used.
+- Widen the Genres column cap so labels are less truncated.
+- Add Show all toggles for long single-line Genres/Custom Formats values.
+- Brighten the Tautulli match completion flash in the status panel.
+- Increase chip group divider contrast per theme (lighter in dark mode, darker in light mode).
+- Refine refresh/status UX (per-row refresh controls, status pills/notices, tooltips).
+- Updated UI and styling (more see-through glass panels, Columns panel transparency, filter collapse control, background glow tweaks).
+- Animate filter/chip panel collapse to mirror the restore animation.
+- Disable table scroll snapping at the bottom so the last row stays visible.
+- Hide chips immediately during filter panel collapse to avoid odd text fade.
+- Darken the filter/chip panel glass in dark mode for better readability.
+- Refresh text input focus styling with a glass-like inner glow and unclipped ring.
+
+### Performance and reliability
+
+- Add Sonarr episode-file modes, caching, and Arr backoff to reduce load.
+- Improve rendering performance (batched renders, deferred heavy columns for Sonarr, lighter column visibility work, debounced filter renders, throttled series expansion scroll, deferred header cap work, lite status polling).
+- Defer Sonarr/Radarr wanted/recent grabbed stats on cold start and backfill them in the background.
+- Add Radarr wanted fetch parallelism (`RADARR_WANTED_WORKERS`) and optional multi-instance fetch workers (`RADARR_INSTANCE_WORKERS`).
+- Reduce Radarr moviefile fetch overhead by batching movie file lookups.
+- Speed up Radarr table renders by batching earlier and accelerating deferred hydration.
+- Begin Radarr large-table render refactor with a lighter first pass and deferred hydration for heavy columns.
+- Serve lite Radarr payloads on cold start with background hydration (`SORTARR_RADARR_LITE_FIRST`).
+- Scope Arr circuit breakers by endpoint group so history timeouts do not block episode file calls.
+- Allow partial results on instance failures with optional strict mode.
+
+### Security
+
+- Add CSRF protection, CSV formula neutralization, and basic auth for /api/version and /health.
+
+### Refresh and cache workflow
+
+- Improve per-row refresh messaging, and remove rows when Arr reports missing items.
+
+### Tests and tooling
+
+- Capture selenium scenario failures in perf.json with attached failure artifacts and scenario scoping.
+
 ## 0.6.9
 
 ### Security
@@ -40,7 +98,7 @@
 - Parallelize Sonarr episodefile fetches with the `SONARR_EPISODEFILE_WORKERS` cap.
 - Stabilize row keys for duplicate titles and add optional render perf logging/reset hooks for UI baselines.
 - Allow batched rendering on large interactive updates (filters, chips, sorting) while keeping small tables synchronous.
-- Stabilize Title column width on large tables by measuring the longest title per load.
+- Stabilize Title column width on large tables to prevent widening as rows stream in.
 - Apply column visibility during batched renders so hidden columns don't inflate row height mid-load.
 - Skip redundant full-table column visibility passes after batched renders unless columns changed mid-render.
 - Time-slice batched rendering with a frame budget to reduce main-thread stalls on large tables.

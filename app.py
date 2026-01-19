@@ -9,17 +9,21 @@ import csv
 import io
 import json
 import logging
+import secrets
 import threading
 from urllib.parse import urlsplit, urlunsplit
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 
 import requests
-from flask import Flask, jsonify, render_template, request, Response, redirect, url_for
+from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.9"
+APP_VERSION = "0.6.10"
+CSRF_COOKIE_NAME = "sortarr_csrf"
+CSRF_HEADER_NAME = "X-CSRF-Token"
+CSRF_FORM_FIELD = "csrf_token"
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
 SAFE_TAUTULLI_REFRESH_BUCKETS = {
@@ -176,6 +180,20 @@ class CacheManager:
 _cache = CacheManager()
 _tautulli_match_progress = {"shows": None, "movies": None}
 _tautulli_match_progress_lock = threading.Lock()
+_sonarr_episodefile_cache: dict[str, dict[int, dict]] = {}
+_sonarr_episodefile_cache_lock = threading.Lock()
+_sonarr_season_cache: dict[str, dict[int, dict]] = {}
+_sonarr_season_cache_lock = threading.Lock()
+_sonarr_episode_cache: dict[str, dict[int, dict]] = {}
+_sonarr_episode_cache_lock = threading.Lock()
+_sonarr_wanted_cache: dict[str, dict] = {}
+_sonarr_wanted_cache_lock = threading.Lock()
+_radarr_wanted_cache: dict[str, dict] = {}
+_radarr_wanted_cache_lock = threading.Lock()
+_wanted_refresh_lock = threading.Lock()
+_wanted_refresh_in_progress: set[str] = set()
+_arr_circuit_state: dict[str, dict] = {}
+_arr_circuit_lock = threading.Lock()
 
 TAUTULLI_CSV_FIELDS = {
     "PlayCount",
@@ -186,6 +204,37 @@ TAUTULLI_CSV_FIELDS = {
     "UsersWatched",
     "TautulliMatchStatus",
     "TautulliMatchReason",
+}
+RADARR_LITE_FIELDS = {
+    "MovieId",
+    "TmdbId",
+    "ImdbId",
+    "Title",
+    "DateAdded",
+    "Year",
+    "Status",
+    "Monitored",
+    "QualityProfile",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "RecentlyGrabbed",
+    "HasFile",
+    "IsAvailable",
+    "InCinemas",
+    "LastSearchTime",
+    "RuntimeMins",
+    "FileSizeGB",
+    "GBPerHour",
+    "BitrateMbps",
+    "BitrateEstimated",
+    "Airing",
+    "Scene",
+    "Path",
+    "InstanceId",
+    "InstanceName",
+    "TautulliMatchStatus",
+    "TautulliMatchReason",
+    "TautulliMatched",
 }
 
 ENV_FILE_PATH = os.environ.get(
@@ -270,6 +319,15 @@ def _attach_timing_headers(resp, timing: dict | None) -> None:
     resp.headers["X-Sortarr-Timing"] = header
 
 
+def _append_warning(existing: str, warning: str) -> str:
+    warning = (warning or "").strip()
+    if not warning:
+        return existing or ""
+    if not existing:
+        return warning
+    return f"{existing} | {warning}"
+
+
 def _ensure_env_loaded():
     global _env_loaded, _env_mtime
     with _env_lock:
@@ -284,6 +342,37 @@ def _ensure_env_loaded():
         _load_env_file(ENV_FILE_PATH, override=True)
         _env_loaded = True
         _env_mtime = mtime
+
+
+@app.before_request
+def _csrf_protect():
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    origin = request.headers.get("Origin")
+    referer = request.headers.get("Referer")
+    if origin and not _origin_matches_request(origin):
+        return jsonify({"error": "CSRF origin mismatch."}), 403
+    if referer and not _origin_matches_request(referer):
+        return jsonify({"error": "CSRF referer mismatch."}), 403
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME) or ""
+    request_token = _read_csrf_token_from_request()
+    if not cookie_token or not request_token or request_token != cookie_token:
+        return jsonify({"error": "CSRF validation failed."}), 403
+    return None
+
+
+@app.after_request
+def _attach_csrf_cookie(resp: Response):
+    token = getattr(g, "csrf_token", None)
+    if token and getattr(g, "csrf_set_cookie", False):
+        resp.set_cookie(
+            CSRF_COOKIE_NAME,
+            token,
+            httponly=False,
+            samesite="Lax",
+            secure=request.is_secure,
+        )
+    return resp
 
 
 def _parse_env_value(value: str) -> str:
@@ -307,11 +396,754 @@ def _quote_env_value(value: str) -> str:
     return value
 
 
+def _csv_safe_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    if not text:
+        return ""
+    if text[0] in ("=", "+", "-", "@", "\t", "\r"):
+        return f"'{text}"
+    return text
+
+
 def _read_int_env(key: str, default: int) -> int:
     try:
         return int(os.environ.get(key, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def _read_float_env(key: str, default: float) -> float:
+    try:
+        return float(os.environ.get(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _read_bool_env(key: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(key, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _read_query_bool(*keys: str, default: bool = False) -> bool:
+    for key in keys:
+        raw = str(request.args.get(key) or "").strip().lower()
+        if not raw:
+            continue
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _read_sonarr_episodefile_mode() -> str:
+    raw = str(os.environ.get("SONARR_EPISODEFILE_MODE", "")).strip().lower()
+    if raw in {"bulk", "all"}:
+        return "bulk"
+    if raw in {"fast", "stats", "skip", "off", "none"}:
+        return "fast"
+    return "series"
+
+
+def _sonarr_series_stats_key(series: dict) -> tuple[int, int] | None:
+    stats = series.get("statistics") or {}
+    if not isinstance(stats, dict):
+        return None
+    file_count = _safe_int(stats.get("episodeFileCount"))
+    size_on_disk = _safe_int(stats.get("sizeOnDisk"))
+    return file_count, size_on_disk
+
+
+def _sonarr_series_episode_stats_key(series: dict) -> tuple[int, int, int] | None:
+    stats = series.get("statistics") or {}
+    if not isinstance(stats, dict):
+        return None
+    file_count = _safe_int(stats.get("episodeFileCount"))
+    size_on_disk = _safe_int(stats.get("sizeOnDisk"))
+    total_count = _safe_int(stats.get("totalEpisodeCount"))
+    return file_count, size_on_disk, total_count
+
+
+def _sonarr_episodefile_cache_key(instance_id, base_url: str) -> str:
+    ident = str(instance_id or "").strip() or _sanitize_url_for_log(base_url)
+    return f"{ident}:{base_url}"
+
+
+def _get_cached_episodefiles(
+    cache_key: str,
+    series_id: int,
+    stats_key: tuple[int, int] | None,
+    ttl_seconds: int,
+) -> list[dict] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _sonarr_episodefile_cache_lock:
+        instance_cache = _sonarr_episodefile_cache.get(cache_key)
+        if not instance_cache:
+            return None
+        entry = instance_cache.get(series_id)
+        if not entry:
+            return None
+        entry_ts = float(entry.get("ts") or 0)
+        if entry_ts and now - entry_ts > ttl_seconds:
+            instance_cache.pop(series_id, None)
+            return None
+        entry_stats = entry.get("stats_key")
+        if stats_key and entry_stats and stats_key != entry_stats:
+            instance_cache.pop(series_id, None)
+            return None
+        return entry.get("files") or []
+
+
+def _set_cached_episodefiles(
+    cache_key: str,
+    series_id: int,
+    files: list[dict],
+    stats_key: tuple[int, int] | None,
+) -> None:
+    with _sonarr_episodefile_cache_lock:
+        instance_cache = _sonarr_episodefile_cache.setdefault(cache_key, {})
+        instance_cache[series_id] = {
+            "files": files,
+            "stats_key": stats_key,
+            "ts": time.time(),
+        }
+
+
+def _get_cached_sonarr_seasons(
+    cache_key: str,
+    series_id: int,
+    stats_key: tuple[int, int, int] | None,
+    ttl_seconds: int,
+) -> list[dict] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _sonarr_season_cache_lock:
+        instance_cache = _sonarr_season_cache.get(cache_key)
+        if not instance_cache:
+            return None
+        entry = instance_cache.get(series_id)
+        if not entry:
+            return None
+        entry_ts = float(entry.get("ts") or 0)
+        if entry_ts and now - entry_ts > ttl_seconds:
+            instance_cache.pop(series_id, None)
+            return None
+        entry_stats = entry.get("stats_key")
+        if stats_key and entry_stats and stats_key != entry_stats:
+            instance_cache.pop(series_id, None)
+            return None
+        seasons = entry.get("seasons")
+        return seasons if isinstance(seasons, list) else []
+
+
+def _set_cached_sonarr_seasons(
+    cache_key: str,
+    series_id: int,
+    seasons: list[dict],
+    stats_key: tuple[int, int, int] | None,
+) -> None:
+    with _sonarr_season_cache_lock:
+        instance_cache = _sonarr_season_cache.setdefault(cache_key, {})
+        instance_cache[series_id] = {
+            "seasons": seasons,
+            "stats_key": stats_key,
+            "ts": time.time(),
+        }
+
+
+def _get_cached_sonarr_episodes(
+    cache_key: str,
+    series_id: int,
+    stats_key: tuple[int, int, int] | None,
+    ttl_seconds: int,
+) -> list[dict] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _sonarr_episode_cache_lock:
+        instance_cache = _sonarr_episode_cache.get(cache_key)
+        if not instance_cache:
+            return None
+        entry = instance_cache.get(series_id)
+        if not entry:
+            return None
+        entry_ts = float(entry.get("ts") or 0)
+        if entry_ts and now - entry_ts > ttl_seconds:
+            instance_cache.pop(series_id, None)
+            return None
+        entry_stats = entry.get("stats_key")
+        if stats_key and entry_stats and stats_key != entry_stats:
+            instance_cache.pop(series_id, None)
+            return None
+        episodes = entry.get("episodes")
+        return episodes if isinstance(episodes, list) else []
+
+
+def _set_cached_sonarr_episodes(
+    cache_key: str,
+    series_id: int,
+    episodes: list[dict],
+    stats_key: tuple[int, int, int] | None,
+) -> None:
+    with _sonarr_episode_cache_lock:
+        instance_cache = _sonarr_episode_cache.setdefault(cache_key, {})
+        instance_cache[series_id] = {
+            "episodes": episodes,
+            "stats_key": stats_key,
+            "ts": time.time(),
+        }
+
+
+def _get_cached_sonarr_wanted(
+    cache_key: str,
+    ttl_seconds: int,
+) -> tuple[dict[int, int], dict[int, int], set[int]] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _sonarr_wanted_cache_lock:
+        entry = _sonarr_wanted_cache.get(cache_key)
+        if not entry:
+            return None
+        entry_ts = float(entry.get("ts") or 0)
+        if entry_ts and now - entry_ts > ttl_seconds:
+            _sonarr_wanted_cache.pop(cache_key, None)
+            return None
+        missing_counts = entry.get("missing_counts") or {}
+        cutoff_counts = entry.get("cutoff_counts") or {}
+        recent = set(entry.get("recently_grabbed") or [])
+        return missing_counts, cutoff_counts, recent
+
+
+def _set_cached_sonarr_wanted(
+    cache_key: str,
+    missing_counts: dict[int, int],
+    cutoff_counts: dict[int, int],
+    recently_grabbed: set[int],
+) -> None:
+    with _sonarr_wanted_cache_lock:
+        _sonarr_wanted_cache[cache_key] = {
+            "missing_counts": missing_counts,
+            "cutoff_counts": cutoff_counts,
+            "recently_grabbed": sorted(recently_grabbed),
+            "ts": time.time(),
+        }
+
+
+def _radarr_wanted_cache_key(instance_id, base_url: str) -> str:
+    ident = str(instance_id or "").strip() or _sanitize_url_for_log(base_url)
+    return f"{ident}:{base_url}"
+
+
+def _get_cached_radarr_wanted(
+    cache_key: str,
+    ttl_seconds: int,
+) -> tuple[set[int], set[int], set[int]] | None:
+    if ttl_seconds <= 0:
+        return None
+    now = time.time()
+    with _radarr_wanted_cache_lock:
+        entry = _radarr_wanted_cache.get(cache_key)
+        if not entry:
+            return None
+        entry_ts = float(entry.get("ts") or 0)
+        if entry_ts and now - entry_ts > ttl_seconds:
+            _radarr_wanted_cache.pop(cache_key, None)
+            return None
+        missing_ids = set(entry.get("missing_ids") or [])
+        cutoff_ids = set(entry.get("cutoff_ids") or [])
+        recent = set(entry.get("recently_grabbed") or [])
+        return missing_ids, cutoff_ids, recent
+
+
+def _set_cached_radarr_wanted(
+    cache_key: str,
+    missing_ids: set[int],
+    cutoff_ids: set[int],
+    recently_grabbed: set[int],
+) -> None:
+    with _radarr_wanted_cache_lock:
+        _radarr_wanted_cache[cache_key] = {
+            "missing_ids": sorted(missing_ids),
+            "cutoff_ids": sorted(cutoff_ids),
+            "recently_grabbed": sorted(recently_grabbed),
+            "ts": time.time(),
+        }
+
+
+def _read_worker_cap(key: str, default: int, max_value: int) -> int:
+    workers = _read_int_env(key, default)
+    if workers <= 0:
+        return 1
+    if max_value and workers > max_value:
+        return max_value
+    return workers
+
+
+def _fetch_radarr_wanted_bundle(
+    base_url: str,
+    api_key: str,
+    workers: int,
+) -> tuple[set[int], set[int], set[int]]:
+    missing_ids: set[int] = set()
+    cutoff_ids: set[int] = set()
+    recently_grabbed: set[int] = set()
+    workers = max(1, int(workers or 1))
+    if workers == 1:
+        try:
+            missing_ids = _fetch_radarr_wanted_ids(
+                base_url,
+                api_key,
+                "/api/v3/wanted/missing",
+                monitored_only=True,
+            )
+        except Exception as exc:
+            logger.warning("Radarr wanted/missing fetch failed: %s", exc)
+            missing_ids = set()
+        try:
+            cutoff_ids = _fetch_radarr_wanted_ids(
+                base_url,
+                api_key,
+                "/api/v3/wanted/cutoff",
+                monitored_only=True,
+            )
+        except Exception as exc:
+            logger.warning("Radarr wanted/cutoff fetch failed: %s", exc)
+            cutoff_ids = set()
+        try:
+            recently_grabbed = _fetch_recently_grabbed_movie_ids(base_url, api_key, days=30)
+        except Exception as exc:
+            logger.warning("Radarr recent grabbed fetch failed: %s", exc)
+            recently_grabbed = set()
+        return missing_ids, cutoff_ids, recently_grabbed
+
+    tasks = {
+        "missing": lambda: _fetch_radarr_wanted_ids(
+            base_url,
+            api_key,
+            "/api/v3/wanted/missing",
+            monitored_only=True,
+        ),
+        "cutoff": lambda: _fetch_radarr_wanted_ids(
+            base_url,
+            api_key,
+            "/api/v3/wanted/cutoff",
+            monitored_only=True,
+        ),
+        "recent": lambda: _fetch_recently_grabbed_movie_ids(base_url, api_key, days=30),
+    }
+    max_workers = min(workers, len(tasks))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(func): name for name, func in tasks.items()}
+        for future in as_completed(futures):
+            name = futures[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                if name == "missing":
+                    logger.warning("Radarr wanted/missing fetch failed: %s", exc)
+                elif name == "cutoff":
+                    logger.warning("Radarr wanted/cutoff fetch failed: %s", exc)
+                else:
+                    logger.warning("Radarr recent grabbed fetch failed: %s", exc)
+                result = set()
+            if name == "missing":
+                missing_ids = set(result or [])
+            elif name == "cutoff":
+                cutoff_ids = set(result or [])
+            else:
+                recently_grabbed = set(result or [])
+    return missing_ids, cutoff_ids, recently_grabbed
+
+def _apply_sonarr_wanted_flags(
+    rows: list[dict],
+    missing_counts: dict[int, int],
+    cutoff_counts: dict[int, int],
+    recently_grabbed: set[int],
+) -> None:
+    if not rows:
+        return
+    for row in rows:
+        series_id = row.get("SeriesId")
+        if series_id is None:
+            continue
+        row["MissingCount"] = (missing_counts or {}).get(series_id, 0)
+        row["CutoffUnmetCount"] = (cutoff_counts or {}).get(series_id, 0)
+        row["RecentlyGrabbed"] = series_id in (recently_grabbed or set())
+
+
+def _apply_radarr_wanted_flags(
+    rows: list[dict],
+    missing_ids: set[int],
+    cutoff_ids: set[int],
+    recently_grabbed: set[int],
+) -> None:
+    if not rows:
+        return
+    for row in rows:
+        movie_id = row.get("MovieId")
+        if movie_id is None:
+            continue
+        row["MissingCount"] = movie_id in (missing_ids or set())
+        row["CutoffUnmetCount"] = movie_id in (cutoff_ids or set())
+        row["RecentlyGrabbed"] = movie_id in (recently_grabbed or set())
+
+
+def _wanted_refresh_key(app_name: str, cache_key: str) -> str:
+    return f"{app_name}:{cache_key}"
+
+
+def _start_wanted_background_refresh(
+    app_name: str,
+    instance: dict,
+    cache_path: str | None,
+    log_cold_start: bool = False,
+) -> bool:
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    if not base_url or not api_key:
+        return False
+    instance_id = instance.get("id")
+    if app_name == "sonarr":
+        cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+        cache_key = _sonarr_episodefile_cache_key(instance_id, base_url)
+    else:
+        cache_seconds = _read_int_env("CACHE_SECONDS", 300)
+        cache_key = _radarr_wanted_cache_key(instance_id, base_url)
+    if cache_seconds <= 0:
+        return False
+    refresh_key = _wanted_refresh_key(app_name, cache_key)
+    with _wanted_refresh_lock:
+        if refresh_key in _wanted_refresh_in_progress:
+            if log_cold_start:
+                logger.info(
+                    "%s wanted refresh already in progress; skipping.",
+                    app_name.title(),
+                )
+            return False
+        _wanted_refresh_in_progress.add(refresh_key)
+
+    if log_cold_start:
+        logger.info(
+            "Cold start %s wanted refresh queued (background).",
+            app_name,
+        )
+
+    def worker():
+        success = False
+        try:
+            if app_name == "sonarr":
+                try:
+                    missing_counts = _fetch_sonarr_wanted_counts(
+                        base_url,
+                        api_key,
+                        "/api/v3/wanted/missing",
+                        monitored_only=True,
+                    )
+                except Exception as exc:
+                    logger.warning("Sonarr wanted/missing fetch failed: %s", exc)
+                    missing_counts = {}
+                try:
+                    cutoff_counts = _fetch_sonarr_wanted_counts(
+                        base_url,
+                        api_key,
+                        "/api/v3/wanted/cutoff",
+                        monitored_only=True,
+                    )
+                except Exception as exc:
+                    logger.warning("Sonarr wanted/cutoff fetch failed: %s", exc)
+                    cutoff_counts = {}
+                try:
+                    recently_grabbed = _fetch_recently_grabbed_series_ids(base_url, api_key, days=30)
+                except Exception as exc:
+                    logger.warning("Sonarr recent grabbed fetch failed: %s", exc)
+                    recently_grabbed = set()
+                _set_cached_sonarr_wanted(
+                    cache_key,
+                    missing_counts,
+                    cutoff_counts,
+                    recently_grabbed,
+                )
+                apply_flags = lambda rows: _apply_sonarr_wanted_flags(
+                    rows,
+                    missing_counts,
+                    cutoff_counts,
+                    recently_grabbed,
+                )
+            else:
+                wanted_workers = _read_worker_cap("RADARR_WANTED_WORKERS", 2, 4)
+                missing_ids, cutoff_ids, recently_grabbed = _fetch_radarr_wanted_bundle(
+                    base_url,
+                    api_key,
+                    wanted_workers,
+                )
+                _set_cached_radarr_wanted(cache_key, missing_ids, cutoff_ids, recently_grabbed)
+                apply_flags = lambda rows: _apply_radarr_wanted_flags(
+                    rows,
+                    missing_ids,
+                    cutoff_ids,
+                    recently_grabbed,
+                )
+
+            instance_key = str(instance_id or "")
+            entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_key)
+            if entry_snapshot and entry_snapshot.get("data"):
+                rows = _clone_rows(entry_snapshot.get("data") or [])
+                apply_flags(rows)
+                _cache.update_app_entry(
+                    app_name,
+                    instance_key,
+                    data=rows,
+                    ts=entry_snapshot.get("ts") or 0,
+                    tautulli_index_ts=entry_snapshot.get("tautulli_index_ts") or 0,
+                )
+            if cache_path:
+                disk_cache = _load_arr_cache(cache_path)
+                disk_entry = disk_cache.get(instance_key)
+                if disk_entry and isinstance(disk_entry.get("data"), list):
+                    disk_rows = _clone_rows(disk_entry.get("data") or [])
+                    apply_flags(disk_rows)
+                    disk_entry["data"] = disk_rows
+                    disk_cache[instance_key] = disk_entry
+                    _queue_arr_cache_save(app_name, cache_path, disk_cache, "wanted_refresh")
+            success = True
+        except Exception as exc:
+            logger.warning("%s wanted refresh failed: %s", app_name.title(), exc)
+        finally:
+            with _wanted_refresh_lock:
+                _wanted_refresh_in_progress.discard(refresh_key)
+            if success and log_cold_start:
+                logger.info("%s wanted refresh completed.", app_name.title())
+
+    thread = threading.Thread(target=worker, name=f"sortarr-{app_name}-wanted", daemon=True)
+    thread.start()
+    return True
+
+
+def _fetch_radarr_wanted_ids(
+    base_url: str,
+    api_key: str,
+    path: str,
+    monitored_only: bool = True,
+) -> set[int]:
+    ids: set[int] = set()
+    page = 1
+    page_size = 1000
+    while True:
+        params = {
+            "page": page,
+            "pageSize": page_size,
+        }
+        if monitored_only:
+            params["monitored"] = "true"
+        payload = _arr_get(base_url, api_key, path, params=params, app_name="radarr")
+        if isinstance(payload, dict):
+            records = payload.get("records") or []
+            total_records = _safe_int(payload.get("totalRecords") or 0)
+        else:
+            records = payload or []
+            total_records = len(records)
+        for record in records:
+            movie_id = record.get("id") if isinstance(record, dict) else None
+            if movie_id is None and isinstance(record, dict):
+                movie_id = record.get("movieId")
+                if movie_id is None:
+                    movie = record.get("movie") or {}
+                    movie_id = movie.get("id")
+            if movie_id is None:
+                continue
+            try:
+                ids.add(int(movie_id))
+            except (TypeError, ValueError):
+                continue
+        if not isinstance(payload, dict) or total_records <= page * page_size or not records:
+            break
+        page += 1
+    return ids
+
+
+def _fetch_recently_grabbed_movie_ids(
+    base_url: str,
+    api_key: str,
+    days: int = 30,
+) -> set[int]:
+    since_date = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    ).isoformat()
+    params = {
+        "date": since_date,
+        "eventType": "grabbed",
+        "includeMovie": "false",
+    }
+    payload = _arr_get(
+        base_url,
+        api_key,
+        "/api/v3/history/since",
+        params=params,
+        app_name="radarr",
+        circuit_group="history",
+    )
+    records = payload if isinstance(payload, list) else (payload or [])
+    ids: set[int] = set()
+    for record in records:
+        movie_id = record.get("movieId")
+        if movie_id is None:
+            movie = record.get("movie") or {}
+            movie_id = movie.get("id")
+        if movie_id is None:
+            continue
+        try:
+            ids.add(int(movie_id))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _fetch_sonarr_wanted_counts(
+    base_url: str,
+    api_key: str,
+    path: str,
+    monitored_only: bool = True,
+) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    page = 1
+    page_size = 1000
+    while True:
+        params = {
+            "page": page,
+            "pageSize": page_size,
+            "includeSeries": "false",
+            "includeImages": "false",
+        }
+        if monitored_only:
+            params["monitored"] = "true"
+        payload = _arr_get(base_url, api_key, path, params=params, app_name="sonarr")
+        if isinstance(payload, dict):
+            records = payload.get("records") or []
+            total_records = _safe_int(payload.get("totalRecords") or 0)
+        else:
+            records = payload or []
+            total_records = len(records)
+        for record in records:
+            series_id = record.get("seriesId")
+            if series_id is None:
+                series = record.get("series") or {}
+                series_id = series.get("id")
+            if series_id is None:
+                continue
+            try:
+                series_key = int(series_id)
+            except (TypeError, ValueError):
+                continue
+            counts[series_key] = counts.get(series_key, 0) + 1
+        if not isinstance(payload, dict) or total_records <= page * page_size or not records:
+            break
+        page += 1
+    return counts
+
+
+def _fetch_recently_grabbed_series_ids(
+    base_url: str,
+    api_key: str,
+    days: int = 30,
+) -> set[int]:
+    since_date = (
+        datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days)
+    ).date().isoformat()
+    params = {
+        "date": since_date,
+        "eventType": "grabbed",
+        "includeSeries": "false",
+        "includeEpisode": "false",
+    }
+    payload = _arr_get(
+        base_url,
+        api_key,
+        "/api/v3/history/since",
+        params=params,
+        app_name="sonarr",
+        circuit_group="history",
+    )
+    records = payload if isinstance(payload, list) else (payload or [])
+    ids: set[int] = set()
+    for record in records:
+        series_id = record.get("seriesId")
+        if series_id is None:
+            series = record.get("series") or {}
+            series_id = series.get("id")
+        if series_id is None:
+            continue
+        try:
+            ids.add(int(series_id))
+        except (TypeError, ValueError):
+            continue
+    return ids
+
+
+def _clear_sonarr_series_cache(cache_key: str, series_id: int) -> None:
+    with _sonarr_episodefile_cache_lock:
+        instance_cache = _sonarr_episodefile_cache.get(cache_key)
+        if instance_cache:
+            instance_cache.pop(series_id, None)
+    with _sonarr_season_cache_lock:
+        instance_cache = _sonarr_season_cache.get(cache_key)
+        if instance_cache:
+            instance_cache.pop(series_id, None)
+    with _sonarr_episode_cache_lock:
+        instance_cache = _sonarr_episode_cache.get(cache_key)
+        if instance_cache:
+            instance_cache.pop(series_id, None)
+
+def _arr_circuit_key(app_name: str | None, base_url: str, group: str | None = None) -> str:
+    label = (app_name or "arr").strip().lower()
+    group_label = (group or "core").strip().lower()
+    return f"{label}:{group_label}:{base_url}"
+
+
+def _arr_circuit_is_open(key: str) -> bool:
+    now = time.time()
+    with _arr_circuit_lock:
+        state = _arr_circuit_state.get(key)
+        if not state:
+            return False
+        open_until = float(state.get("open_until") or 0)
+        if open_until and open_until > now:
+            return True
+        if open_until:
+            state["open_until"] = 0
+            state["fail_count"] = 0
+        return False
+
+
+def _arr_circuit_on_success(key: str) -> None:
+    with _arr_circuit_lock:
+        state = _arr_circuit_state.setdefault(key, {})
+        state["fail_count"] = 0
+        state["open_until"] = 0
+
+
+def _arr_circuit_on_failure(key: str) -> None:
+    threshold = max(_read_int_env("ARR_CIRCUIT_FAIL_THRESHOLD", 3), 1)
+    open_seconds = max(_read_int_env("ARR_CIRCUIT_OPEN_SECONDS", 30), 0)
+    now = time.time()
+    with _arr_circuit_lock:
+        state = _arr_circuit_state.setdefault(key, {"fail_count": 0, "open_until": 0})
+        state["fail_count"] = int(state.get("fail_count") or 0) + 1
+        if open_seconds > 0 and state["fail_count"] >= threshold:
+            state["open_until"] = max(float(state.get("open_until") or 0), now + open_seconds)
 
 
 def _read_arr_timeout_seconds(app_name: str) -> int:
@@ -370,6 +1202,41 @@ def _sanitize_url_for_log(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+def _origin_matches_request(origin: str) -> bool:
+    if not origin:
+        return True
+    try:
+        origin_parts = urlsplit(origin)
+        host_parts = urlsplit(request.host_url)
+    except Exception:
+        return False
+    return (
+        origin_parts.scheme == host_parts.scheme
+        and origin_parts.netloc == host_parts.netloc
+    )
+
+
+def _get_csrf_token() -> str:
+    token = request.cookies.get(CSRF_COOKIE_NAME)
+    if token:
+        g.csrf_token = token
+        return token
+    token = secrets.token_urlsafe(32)
+    g.csrf_token = token
+    g.csrf_set_cookie = True
+    return token
+
+
+def _read_csrf_token_from_request() -> str:
+    token = request.headers.get(CSRF_HEADER_NAME) or request.form.get(CSRF_FORM_FIELD)
+    if token:
+        return token
+    payload = request.get_json(silent=True)
+    if isinstance(payload, dict):
+        return str(payload.get(CSRF_FORM_FIELD) or "")
+    return ""
+
+
 def _load_env_file(path: str, override: bool = False):
     if not os.path.exists(path):
         return
@@ -420,6 +1287,20 @@ def _write_env_file(path: str, values: dict):
         "TAUTULLI_METADATA_LOOKUP_SECONDS",
         "TAUTULLI_TIMEOUT_SECONDS",
         "TAUTULLI_FETCH_SECONDS",
+        "TAUTULLI_METADATA_WORKERS",
+        "TAUTULLI_METADATA_SAVE_EVERY",
+        "TAUTULLI_REFRESH_STALE_SECONDS",
+        "SONARR_TIMEOUT_SECONDS",
+        "RADARR_TIMEOUT_SECONDS",
+        "SONARR_EPISODEFILE_WORKERS",
+        "SONARR_EPISODEFILE_DELAY_SECONDS",
+        "SONARR_EPISODEFILE_CACHE_SECONDS",
+        "RADARR_WANTED_WORKERS",
+        "RADARR_INSTANCE_WORKERS",
+        "ARR_BACKOFF_BASE_SECONDS",
+        "ARR_BACKOFF_MAX_RETRIES",
+        "ARR_CIRCUIT_FAIL_THRESHOLD",
+        "ARR_CIRCUIT_OPEN_SECONDS",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
         "CACHE_SECONDS",
@@ -719,6 +1600,17 @@ def _get_config():
         "tautulli_refresh_stale_seconds": _read_int_env("TAUTULLI_REFRESH_STALE_SECONDS", 3600),
         "tautulli_timeout_seconds": tautulli_timeout_seconds,
         "tautulli_fetch_seconds": tautulli_fetch_seconds,
+        "sonarr_timeout_seconds": _read_int_env("SONARR_TIMEOUT_SECONDS", 90),
+        "radarr_timeout_seconds": _read_int_env("RADARR_TIMEOUT_SECONDS", 90),
+        "sonarr_episodefile_workers": max(_read_int_env("SONARR_EPISODEFILE_WORKERS", 8), 1),
+        "sonarr_episodefile_delay_seconds": _read_float_env("SONARR_EPISODEFILE_DELAY_SECONDS", 0.0),
+        "sonarr_episodefile_cache_seconds": _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600),
+        "radarr_wanted_workers": _read_worker_cap("RADARR_WANTED_WORKERS", 2, 4),
+        "radarr_instance_workers": max(_read_int_env("RADARR_INSTANCE_WORKERS", 1), 1),
+        "arr_backoff_base_seconds": _read_float_env("ARR_BACKOFF_BASE_SECONDS", 0.5),
+        "arr_backoff_max_retries": _read_int_env("ARR_BACKOFF_MAX_RETRIES", 2),
+        "arr_circuit_fail_threshold": _read_int_env("ARR_CIRCUIT_FAIL_THRESHOLD", 3),
+        "arr_circuit_open_seconds": _read_int_env("ARR_CIRCUIT_OPEN_SECONDS", 30),
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
         "basic_auth_user": os.environ.get("BASIC_AUTH_USER", ""),
         "basic_auth_pass": os.environ.get("BASIC_AUTH_PASS", ""),
@@ -733,6 +1625,16 @@ def _config_complete(cfg: dict) -> bool:
 
 def _invalidate_cache():
     _cache.clear_all()
+    with _sonarr_episodefile_cache_lock:
+        _sonarr_episodefile_cache.clear()
+    with _sonarr_season_cache_lock:
+        _sonarr_season_cache.clear()
+    with _sonarr_episode_cache_lock:
+        _sonarr_episode_cache.clear()
+    with _sonarr_wanted_cache_lock:
+        _sonarr_wanted_cache.clear()
+    with _radarr_wanted_cache_lock:
+        _radarr_wanted_cache.clear()
     cfg = _get_config()
     for path in (cfg.get("sonarr_cache_path"), cfg.get("radarr_cache_path")):
         if not path:
@@ -873,6 +1775,8 @@ def _arr_get(
     timeout: int | float | None = None,
     session: requests.Session | None = None,
     app_name: str | None = None,
+    circuit_breaker: bool = True,
+    circuit_group: str | None = None,
 ):
     if not base_url:
         raise RuntimeError("Base URL is not set")
@@ -895,20 +1799,152 @@ def _arr_get(
         elif request_timeout < 0:
             request_timeout = 45
     http = session or _http
-    r = http.get(url, headers=headers, params=params, timeout=request_timeout)
-    r.raise_for_status()
+    circuit_key = _arr_circuit_key(app_name, base_url, circuit_group) if circuit_breaker else ""
+    if circuit_breaker and _arr_circuit_is_open(circuit_key):
+        raise RuntimeError(f"{(app_name or 'Arr').title()} temporarily unavailable (circuit open).")
+    backoff_base = _read_float_env("ARR_BACKOFF_BASE_SECONDS", 0.5)
+    max_retries = max(_read_int_env("ARR_BACKOFF_MAX_RETRIES", 2), 0)
+    for attempt in range(max_retries + 1):
+        try:
+            r = http.get(url, headers=headers, params=params, timeout=request_timeout)
+            status = r.status_code
+            if status == 429 or status >= 500:
+                raise requests.HTTPError(f"Arr request failed ({status})", response=r)
+            r.raise_for_status()
+            try:
+                payload = r.json()
+            except ValueError:
+                snippet = (r.text or "").strip().replace("\n", " ")[:500]
+                logger.warning(
+                    "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
+                    app_name or "unknown",
+                    r.status_code,
+                    _sanitize_url_for_log(url),
+                    snippet,
+                )
+                raise
+            if circuit_breaker:
+                _arr_circuit_on_success(circuit_key)
+            return payload
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            retriable = status == 429 or (status is not None and status >= 500)
+            if retriable:
+                if circuit_breaker:
+                    _arr_circuit_on_failure(circuit_key)
+                if attempt < max_retries and backoff_base > 0:
+                    time.sleep(backoff_base * (2 ** attempt))
+                    continue
+            raise
+        except requests.RequestException:
+            if circuit_breaker:
+                _arr_circuit_on_failure(circuit_key)
+            if attempt < max_retries and backoff_base > 0:
+                time.sleep(backoff_base * (2 ** attempt))
+                continue
+            raise
+
+
+def _fetch_arr_tag_map(base_url: str, api_key: str, app_name: str) -> dict[int, str]:
     try:
-        return r.json()
-    except ValueError:
-        snippet = (r.text or "").strip().replace("\n", " ")[:500]
-        logger.warning(
-            "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
-            app_name or "unknown",
-            r.status_code,
-            _sanitize_url_for_log(url),
-            snippet,
-        )
-        raise
+        tags = _arr_get(base_url, api_key, "/api/v3/tag", app_name=app_name)
+    except Exception as exc:
+        logger.warning("%s tag fetch failed: %s", app_name.title(), exc)
+        return {}
+    tag_map = {}
+    for tag in tags or []:
+        tag_id = tag.get("id")
+        label = (tag.get("label") or "").strip()
+        if tag_id is None or not label:
+            continue
+        tag_map[int(tag_id)] = label
+    return tag_map
+
+
+def _fetch_arr_quality_profile_map(
+    base_url: str,
+    api_key: str,
+    app_name: str,
+) -> dict[int, str]:
+    try:
+        profiles = _arr_get(base_url, api_key, "/api/v3/qualityprofile", app_name=app_name)
+    except Exception as exc:
+        logger.warning("%s quality profile fetch failed: %s", app_name.title(), exc)
+        return {}
+    profile_map = {}
+    for profile in profiles or []:
+        profile_id = profile.get("id")
+        name = (profile.get("name") or "").strip()
+        if profile_id is None or not name:
+            continue
+        profile_map[int(profile_id)] = name
+    return profile_map
+
+
+def _format_tag_labels(tag_ids, tag_map: dict[int, str]) -> str:
+    if not tag_ids:
+        return ""
+    labels = []
+    for tag_id in tag_ids:
+        if tag_id is None:
+            continue
+        try:
+            key = int(tag_id)
+        except (TypeError, ValueError):
+            labels.append(str(tag_id))
+            continue
+        label = tag_map.get(key) or str(tag_id)
+        labels.append(label)
+    return ", ".join(labels)
+
+
+def _format_genres(genres) -> str:
+    if not genres:
+        return ""
+    values = []
+    for item in genres:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text:
+            values.append(text)
+    if not values:
+        return ""
+    seen = set()
+    ordered = []
+    for val in values:
+        if val in seen:
+            continue
+        seen.add(val)
+        ordered.append(val)
+    return ", ".join(ordered)
+
+
+def _format_original_language(value) -> str:
+    if not value:
+        return ""
+    if isinstance(value, dict):
+        raw = value.get("name") or value.get("value") or value.get("id") or ""
+    else:
+        raw = value
+    return str(raw).strip()
+
+
+def _resolve_quality_profile_name(
+    profile_name: str | None,
+    profile_id,
+    profile_map: dict[int, str],
+) -> str:
+    name = (profile_name or "").strip()
+    if name:
+        return name
+    if profile_id is None:
+        return ""
+    try:
+        profile_key = int(profile_id)
+    except (TypeError, ValueError):
+        return ""
+    return profile_map.get(profile_key, "")
 
 
 def _arr_post(
@@ -3311,6 +4347,21 @@ def _most_common(values: list[str]) -> str:
     return max(counts.items(), key=lambda x: x[1])[0]
 
 
+def _format_unique_values(values: list[str]) -> str:
+    counts = {}
+    for v in values:
+        if not v:
+            continue
+        counts[v] = counts.get(v, 0) + 1
+    if not counts:
+        return ""
+    ordered = sorted(
+        counts.keys(),
+        key=lambda k: (-counts[k], str(k).lower()),
+    )
+    return ", ".join(ordered)
+
+
 def _is_mixed(values: list[str]) -> bool:
     uniq = {v for v in values if v}
     return len(uniq) > 1
@@ -3377,26 +4428,6 @@ def _audio_channels_from_file(f: dict):
     return (f.get("mediaInfo") or {}).get("audioChannels", "")
 
 
-def _audio_profile_from_file(f: dict) -> str:
-    media = f.get("mediaInfo") or {}
-    profile = media.get("audioProfile") or f.get("audioProfile") or ""
-    if profile:
-        return profile
-
-    features = media.get("audioAdditionalFeatures") or f.get("audioAdditionalFeatures") or ""
-    if isinstance(features, list):
-        return ", ".join([v for v in features if v])
-    if isinstance(features, str):
-        return features
-    if isinstance(features, tuple):
-        return ", ".join([v for v in features if v])
-
-    codec = media.get("audioCodec") or f.get("audioCodec") or ""
-    if isinstance(codec, str) and "atmos" in codec.lower():
-        return "Atmos"
-    return ""
-
-
 def _normalize_language_values(value) -> list[str]:
     if not value:
         return []
@@ -3416,7 +4447,9 @@ def _normalize_language_values(value) -> list[str]:
     for item in raw:
         if item is None:
             continue
-        text = str(item).strip().lower()
+        if isinstance(item, dict):
+            item = item.get("name") or item.get("value") or item.get("id")
+        text = str(item).strip()
         if text:
             out.append(text)
     return out
@@ -3436,14 +4469,57 @@ def _format_language_list(value) -> str:
     return ", ".join(ordered)
 
 
+def _merge_language_values(values) -> str:
+    if not values:
+        return ""
+    combined = []
+    seen = set()
+    for value in values:
+        parts = _normalize_language_values(value)
+        for part in parts:
+            if not part or part in seen:
+                continue
+            seen.add(part)
+            combined.append(part)
+    return ", ".join(combined)
+
+
 def _audio_languages_from_file(f: dict) -> str:
     media = f.get("mediaInfo") or {}
-    return _format_language_list(media.get("audioLanguages") or f.get("audioLanguages") or "")
+    return _format_language_list(
+        media.get("audioLanguages") or f.get("audioLanguages") or f.get("languages") or ""
+    )
 
 
 def _subtitle_languages_from_file(f: dict) -> str:
     media = f.get("mediaInfo") or {}
     return _format_language_list(media.get("subtitles") or f.get("subtitles") or "")
+
+
+def _format_custom_formats(value) -> list[str]:
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw = value
+    else:
+        raw = [value]
+    out = []
+    for item in raw:
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            item = item.get("name") or item.get("format") or item.get("id") or ""
+        text = str(item).strip()
+        if text:
+            out.append(text)
+    seen = set()
+    ordered = []
+    for val in out:
+        if val in seen:
+            continue
+        seen.add(val)
+        ordered.append(val)
+    return ordered
 
 
 def _video_codec_from_file(f: dict) -> str:
@@ -3479,7 +4555,16 @@ def _bitrate_mbps_from_file(f: dict) -> float:
     return round(total / 1_000_000, 2)
 
 
-def _build_sonarr_row(series: dict, files: list[dict], exclude_specials: bool = True) -> dict | None:
+def _build_sonarr_row(
+    series: dict,
+    files: list[dict] | None,
+    tag_map: dict[int, str] | None = None,
+    profile_map: dict[int, str] | None = None,
+    exclude_specials: bool = False,
+    missing_counts: dict[int, int] | None = None,
+    cutoff_counts: dict[int, int] | None = None,
+    recently_grabbed: set[int] | None = None,
+) -> dict | None:
     series_id = series.get("id")
     if series_id is None:
         return None
@@ -3492,46 +4577,99 @@ def _build_sonarr_row(series: dict, files: list[dict], exclude_specials: bool = 
     imdb_id = series.get("imdbId") or ""
     tmdb_id = series.get("tmdbId") or ""
     runtime_mins = _safe_int(series.get("runtime") or 0)
+    status = series.get("status") or ""
+    monitored = series.get("monitored")
+    profile_name = series.get("profileName") or ""
+    profile_id = series.get("qualityProfileId")
+    tags = series.get("tags") or []
+    tag_labels = _format_tag_labels(tags, tag_map or {})
+    series_type = series.get("seriesType") or ""
+    original_language = _format_original_language(series.get("originalLanguage"))
+    genres = _format_genres(series.get("genres") or [])
+    last_aired = series.get("lastAired") or ""
+    next_airing = series.get("nextAiring") or ""
+    use_scene_numbering = bool(series.get("useSceneNumbering"))
 
-    if exclude_specials:
-        files = [f for f in (files or []) if int(f.get("seasonNumber") or -1) != 0]
-    else:
-        files = files or []
-
-    count = len(files)
-    total_bytes = sum(int(f.get("size") or 0) for f in files)
-    content_hours = ""
-    if runtime_mins > 0 and count:
-        content_hours = round((runtime_mins * count) / 60.0, 2)
-
-    qualities = [_quality_from_file(f) for f in files]
-    resolutions = [_resolution_from_file(f) for f in files]
-    audio_formats = [_audio_format_from_file(f) for f in files]
-    audio_profiles = [_audio_profile_from_file(f) for f in files]
-    audio_channels = [
-        str(_audio_channels_from_file(f) or "") for f in files
+    fast_stats = files is None
+    all_files = [] if fast_stats else (files or [])
+    non_special_files = [
+        f for f in all_files if int(f.get("seasonNumber") or -1) != 0
     ]
-    audio_languages = [_audio_languages_from_file(f) for f in files]
-    subtitle_languages = [_subtitle_languages_from_file(f) for f in files]
-    video_codecs = [_video_codec_from_file(f) for f in files]
-    video_hdrs = [_video_hdr_from_file(f) for f in files]
+    metric_files = non_special_files if not fast_stats else []
+
+    if fast_stats:
+        stats = series.get("statistics") or {}
+        count = _safe_int(stats.get("episodeFileCount") or 0)
+        total_bytes_all = _safe_int(stats.get("sizeOnDisk") or 0)
+        total_bytes_regular = total_bytes_all
+    else:
+        count = len(non_special_files)
+        total_bytes_regular = sum(int(f.get("size") or 0) for f in non_special_files)
+        total_bytes_all = total_bytes_regular if exclude_specials else sum(
+            int(f.get("size") or 0) for f in all_files
+        )
+    content_hours = ""
+    content_count = count if fast_stats else len(non_special_files)
+    if runtime_mins > 0 and content_count:
+        content_hours = round((runtime_mins * content_count) / 60.0, 2)
+
+    season_count = 0
+    seasons = series.get("seasons") or []
+    for season in seasons:
+        season_number_raw = season.get("seasonNumber")
+        try:
+            season_number = int(season_number_raw)
+        except (TypeError, ValueError):
+            continue
+        if season_number <= 0:
+            continue
+        stats = season.get("statistics") or {}
+        episode_file_count = _safe_int(stats.get("episodeFileCount"))
+        if episode_file_count > 0:
+            season_count += 1
+
+    qualities = [_quality_from_file(f) for f in metric_files]
+    resolutions = [_resolution_from_file(f) for f in metric_files]
+    audio_formats = [_audio_format_from_file(f) for f in metric_files]
+    audio_channel_values = [
+        str(_audio_channels_from_file(f) or "") for f in metric_files
+    ]
+    audio_languages = [_audio_languages_from_file(f) for f in metric_files]
+    subtitle_languages = [_subtitle_languages_from_file(f) for f in metric_files]
+    video_codecs = [_video_codec_from_file(f) for f in metric_files]
+    video_hdrs = [_video_hdr_from_file(f) for f in metric_files]
+    release_groups = [str(f.get("releaseGroup") or "") for f in metric_files]
 
     video_quality = _most_common(qualities)
     resolution = _most_common(resolutions)
     audio_format = _most_common(audio_formats)
-    audio_profile = _most_common(audio_profiles)
-    audio_channels = _most_common(audio_channels)
+    audio_channels = _most_common(audio_channel_values)
     audio_codec_mixed = _is_mixed(audio_formats)
-    audio_profile_mixed = _is_mixed(audio_profiles)
+    audio_codecs_all = _format_unique_values(audio_formats)
+    video_quality_mixed = _is_mixed(qualities)
+    video_quality_all = _format_unique_values(qualities)
+    resolution_mixed = _is_mixed(resolutions)
+    resolution_all = _format_unique_values(resolutions)
     audio_languages_value = _most_common(audio_languages)
     subtitle_languages_value = _most_common(subtitle_languages)
+    audio_languages_all = _merge_language_values(audio_languages)
+    subtitle_languages_all = _merge_language_values(subtitle_languages)
     audio_languages_mixed = _languages_mixed(audio_languages)
     subtitle_languages_mixed = _languages_mixed(subtitle_languages)
     video_codec = _most_common(video_codecs)
+    video_codec_mixed = _is_mixed(video_codecs)
+    video_codec_all = _format_unique_values(video_codecs)
     video_hdr = _most_common(video_hdrs)
+    release_group = _most_common(release_groups)
+    quality_profile = _resolve_quality_profile_name(profile_name, profile_id, profile_map or {})
+    audio_channels_mixed = _is_mixed(audio_channel_values)
+    audio_channels_all = _format_unique_values(audio_channel_values)
 
-    total_gib = _bytes_to_gib(total_bytes)
-    avg_gib = round((total_bytes / count) / (1024 ** 3), 2) if count else 0.0
+    total_gib = _bytes_to_gib(total_bytes_all)
+    avg_gib = round((total_bytes_regular / count) / (1024 ** 3), 2) if count else 0.0
+    missing_count = (missing_counts or {}).get(series_id, 0)
+    cutoff_count = (cutoff_counts or {}).get(series_id, 0)
+    recently_grabbed_flag = series_id in (recently_grabbed or set())
 
     return {
         "SeriesId": series_id,
@@ -3542,45 +4680,275 @@ def _build_sonarr_row(series: dict, files: list[dict], exclude_specials: bool = 
         "TvdbId": tvdb_id,
         "ImdbId": imdb_id,
         "TmdbId": tmdb_id,
+        "Status": status,
+        "Monitored": monitored,
+        "QualityProfile": quality_profile,
+        "Tags": tag_labels,
+        "ReleaseGroup": release_group,
+        "SeriesType": series_type,
+        "OriginalLanguage": original_language,
+        "Genres": genres,
+        "LastAired": last_aired,
+        "MissingCount": missing_count,
+        "CutoffUnmetCount": cutoff_count,
+        "RecentlyGrabbed": recently_grabbed_flag,
+        "UseSceneNumbering": use_scene_numbering,
+        "Airing": bool(next_airing),
+        "SeasonCount": season_count,
         "EpisodesCounted": count,
         "TotalSizeGB": total_gib,
         "AvgEpisodeSizeGB": avg_gib,
         "ContentHours": content_hours,
         "VideoQuality": video_quality,
+        "VideoQualityMixed": video_quality_mixed,
+        "VideoQualityAll": video_quality_all,
         "Resolution": resolution,
+        "ResolutionMixed": resolution_mixed,
+        "ResolutionAll": resolution_all,
         "AudioCodec": audio_format,
-        "AudioProfile": audio_profile,
         "AudioChannels": audio_channels,
+        "AudioChannelsMixed": audio_channels_mixed,
+        "AudioChannelsAll": audio_channels_all,
         "AudioLanguages": audio_languages_value,
         "SubtitleLanguages": subtitle_languages_value,
         "AudioCodecMixed": audio_codec_mixed,
-        "AudioProfileMixed": audio_profile_mixed,
+        "AudioCodecAll": audio_codecs_all,
+        "AudioLanguagesAll": audio_languages_all,
+        "SubtitleLanguagesAll": subtitle_languages_all,
         "AudioLanguagesMixed": audio_languages_mixed,
         "SubtitleLanguagesMixed": subtitle_languages_mixed,
         "VideoCodec": video_codec,
+        "VideoCodecMixed": video_codec_mixed,
+        "VideoCodecAll": video_codec_all,
         "VideoHDR": video_hdr,
         "Path": path,
     }
 
 
-def _compute_sonarr(base_url: str, api_key: str, exclude_specials: bool = True):
+def _build_sonarr_season_summaries(series: dict) -> list[dict]:
+    seasons = series.get("seasons") or []
+    out: list[dict] = []
+    for season in seasons:
+        season_number_raw = season.get("seasonNumber")
+        try:
+            season_number = int(season_number_raw)
+        except (TypeError, ValueError):
+            continue
+        stats = season.get("statistics") or {}
+        episode_count = _safe_int(stats.get("totalEpisodeCount") or stats.get("episodeCount"))
+        episode_file_count = _safe_int(stats.get("episodeFileCount"))
+        size_on_disk = _safe_int(stats.get("sizeOnDisk"))
+        avg_size = 0.0
+        if episode_file_count:
+            avg_size = round((size_on_disk / episode_file_count) / (1024 ** 3), 2)
+        out.append(
+            {
+                "seasonNumber": season_number,
+                "episodeCount": episode_count,
+                "episodeFileCount": episode_file_count,
+                "sizeOnDiskGiB": _bytes_to_gib(size_on_disk),
+                "avgEpisodeSizeGiB": avg_size,
+                "monitored": season.get("monitored"),
+                "isSpecials": season_number == 0,
+            }
+        )
+    out.sort(key=lambda item: item.get("seasonNumber", 0))
+    return out
+
+
+def _build_sonarr_episode_payload(
+    episode: dict,
+    file_map: dict[int, dict] | None,
+    fast_mode: bool,
+) -> dict:
+    episode_id = episode.get("id")
+    file_id = episode.get("episodeFileId") or 0
+    file = file_map.get(file_id) if file_map and file_id else None
+    has_file = bool(episode.get("hasFile"))
+    custom_format_score = episode.get("customFormatScore")
+    if custom_format_score == "" or custom_format_score is None:
+        custom_format_score = ""
+    else:
+        custom_format_score = _safe_float(custom_format_score)
+    quality_cutoff = ""
+    if isinstance(episode, dict) and "qualityCutoffNotMet" in episode:
+        quality_cutoff = bool(episode.get("qualityCutoffNotMet"))
+    payload = {
+        "episodeId": episode_id or 0,
+        "seasonNumber": _safe_int(episode.get("seasonNumber")),
+        "episodeNumber": _safe_int(episode.get("episodeNumber")),
+        "title": episode.get("title") or "",
+        "overview": episode.get("overview") or "",
+        "airDate": episode.get("airDate") or "",
+        "airDateUtc": episode.get("airDateUtc") or "",
+        "runtimeMins": _safe_int(episode.get("runtime") or 0),
+        "lastSearchTime": episode.get("lastSearchTime") or "",
+        "monitored": episode.get("monitored"),
+        "hasFile": has_file,
+        "fileSizeGiB": "",
+        "quality": "",
+        "resolution": "",
+        "videoCodec": "",
+        "audioCodec": "",
+        "audioChannels": "",
+        "audioLanguages": "",
+        "subtitleLanguages": "",
+        "customFormats": _format_custom_formats(episode.get("customFormats") or []),
+        "customFormatScore": custom_format_score,
+        "qualityCutoffNotMet": quality_cutoff,
+        "releaseGroup": "",
+        "path": "",
+    }
+    if not fast_mode and file:
+        payload["fileSizeGiB"] = _bytes_to_gib(_safe_int(file.get("size")))
+        payload["quality"] = _quality_from_file(file)
+        payload["resolution"] = _resolution_from_file(file)
+        payload["videoCodec"] = _video_codec_from_file(file)
+        payload["audioCodec"] = _audio_format_from_file(file)
+        payload["audioChannels"] = str(_audio_channels_from_file(file) or "")
+        payload["audioLanguages"] = _audio_languages_from_file(file)
+        payload["subtitleLanguages"] = _subtitle_languages_from_file(file)
+        payload["customFormats"] = _format_custom_formats(
+            file.get("customFormats") or payload["customFormats"]
+        )
+        file_score = file.get("customFormatScore")
+        if file_score != "" and file_score is not None:
+            payload["customFormatScore"] = _safe_float(file_score)
+        if "qualityCutoffNotMet" in file:
+            payload["qualityCutoffNotMet"] = bool(file.get("qualityCutoffNotMet"))
+        payload["releaseGroup"] = file.get("releaseGroup") or ""
+        payload["path"] = file.get("path") or ""
+    return payload
+
+
+def _compute_sonarr(
+    base_url: str,
+    api_key: str,
+    exclude_specials: bool = False,
+    instance_id: str | int | None = None,
+    timing: dict | None = None,
+    defer_wanted: bool = False,
+):
+    total_start = time.perf_counter()
+    series_start = time.perf_counter()
     series = _arr_get(base_url, api_key, "/api/v3/series", app_name="sonarr")
-    files_by_series = None
+    _record_timing(timing, "sonarr_series_ms", series_start)
+    tag_start = time.perf_counter()
+    tag_map = _fetch_arr_tag_map(base_url, api_key, "sonarr")
+    _record_timing(timing, "sonarr_tag_map_ms", tag_start)
+    profile_start = time.perf_counter()
+    profile_map = _fetch_arr_quality_profile_map(base_url, api_key, "sonarr")
+    _record_timing(timing, "sonarr_quality_profile_ms", profile_start)
     series_ids = [s.get("id") for s in series if s.get("id") is not None]
+    mode = _read_sonarr_episodefile_mode()
+    delay_seconds = _read_float_env("SONARR_EPISODEFILE_DELAY_SECONDS", 0.0)
+    cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+    cache_key = _sonarr_episodefile_cache_key(instance_id, base_url)
+    files_by_series: dict[int, list[dict] | None] = {}
+    missing_series: list[tuple[int, tuple[int, int] | None]] = []
+    missing_counts: dict[int, int] = {}
+    cutoff_counts: dict[int, int] = {}
+    recently_grabbed: set[int] = set()
+
+    if series_ids:
+        cached_start = time.perf_counter()
+        cached_wanted = _get_cached_sonarr_wanted(cache_key, cache_seconds)
+        _record_timing(timing, "sonarr_wanted_cache_ms", cached_start)
+        if cached_wanted:
+            missing_counts, cutoff_counts, recently_grabbed = cached_wanted
+        elif not defer_wanted:
+            missing_start = time.perf_counter()
+            try:
+                missing_counts = _fetch_sonarr_wanted_counts(
+                    base_url,
+                    api_key,
+                    "/api/v3/wanted/missing",
+                    monitored_only=True,
+                )
+            except Exception as exc:
+                logger.warning("Sonarr wanted/missing fetch failed: %s", exc)
+                missing_counts = {}
+            _record_timing(timing, "sonarr_wanted_missing_ms", missing_start)
+            cutoff_start = time.perf_counter()
+            try:
+                cutoff_counts = _fetch_sonarr_wanted_counts(
+                    base_url,
+                    api_key,
+                    "/api/v3/wanted/cutoff",
+                    monitored_only=True,
+                )
+            except Exception as exc:
+                logger.warning("Sonarr wanted/cutoff fetch failed: %s", exc)
+                cutoff_counts = {}
+            _record_timing(timing, "sonarr_wanted_cutoff_ms", cutoff_start)
+            history_start = time.perf_counter()
+            try:
+                recently_grabbed = _fetch_recently_grabbed_series_ids(base_url, api_key, days=30)
+            except Exception as exc:
+                logger.warning("Sonarr recent grabbed fetch failed: %s", exc)
+                recently_grabbed = set()
+            _record_timing(timing, "sonarr_wanted_history_ms", history_start)
+            if cache_seconds > 0:
+                _set_cached_sonarr_wanted(
+                    cache_key,
+                    missing_counts,
+                    cutoff_counts,
+                    recently_grabbed,
+                )
+
+    episodefile_stage_start = time.perf_counter()
+    if mode != "fast":
+        for s in series:
+            series_id = s.get("id")
+            if series_id is None:
+                continue
+            stats_key = _sonarr_series_stats_key(s)
+            cached = _get_cached_episodefiles(cache_key, series_id, stats_key, cache_seconds)
+            if cached is not None:
+                files_by_series[series_id] = cached
+            else:
+                missing_series.append((series_id, stats_key))
+
+    if mode == "bulk" and series_ids:
+        if missing_series:
+            try:
+                bulk_files = _arr_get(base_url, api_key, "/api/v3/episodefile", app_name="sonarr")
+                bulk_files_by_series = {}
+                for file in bulk_files or []:
+                    series_id = file.get("seriesId")
+                    if series_id is None:
+                        continue
+                    bulk_files_by_series.setdefault(series_id, []).append(file)
+                for s in series:
+                    series_id = s.get("id")
+                    if series_id is None:
+                        continue
+                    stats_key = _sonarr_series_stats_key(s)
+                    files = bulk_files_by_series.get(series_id, [])
+                    bulk_files_by_series[series_id] = files
+                    if cache_seconds > 0:
+                        _set_cached_episodefiles(cache_key, series_id, files, stats_key)
+                files_by_series.update(bulk_files_by_series)
+                missing_series = []
+            except Exception as exc:
+                logger.warning("Bulk episode file fetch failed, falling back to per-series: %s", exc)
+                mode = "series"
+
     workers = _read_int_env("SONARR_EPISODEFILE_WORKERS", 8)
     if workers <= 0:
         workers = 1
-    max_workers = min(workers, len(series_ids)) if series_ids else 0
-    if max_workers > 1:
-        files_by_series = {}
+    if mode == "series" and missing_series:
+        max_workers = min(workers, len(missing_series)) if missing_series else 0
         thread_local = threading.local()
 
-        def fetch_files(series_id):
+        def fetch_files(series_id, stats_key):
             session = getattr(thread_local, "session", None)
             if session is None:
                 session = requests.Session()
                 thread_local.session = session
             try:
+                if delay_seconds > 0:
+                    time.sleep(delay_seconds)
                 files = _arr_get(
                     base_url,
                     api_key,
@@ -3592,16 +4960,30 @@ def _compute_sonarr(base_url: str, api_key: str, exclude_specials: bool = True):
             except Exception as exc:
                 logger.warning("Episode file fetch failed for seriesId=%s: %s", series_id, exc)
                 files = []
+            if cache_seconds > 0:
+                _set_cached_episodefiles(cache_key, series_id, files, stats_key)
             return series_id, files
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            for series_id, files in executor.map(fetch_files, series_ids):
-                files_by_series[series_id] = files
+        if max_workers > 1:
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for series_id, files in executor.map(lambda args: fetch_files(*args), missing_series):
+                    files_by_series[series_id] = files
+        else:
+            for series_id, stats_key in missing_series:
+                files_by_series[series_id] = fetch_files(series_id, stats_key)[1]
+    _record_timing(timing, "sonarr_episodefiles_stage_ms", episodefile_stage_start)
 
+    build_rows_start = time.perf_counter()
     results = []
     for s in series:
         series_id = s.get("id")
-        if files_by_series is None:
+        if mode == "fast":
+            files = None
+        elif mode == "series" and series_id in files_by_series:
+            files = files_by_series.get(series_id, [])
+        elif mode == "series":
+            if delay_seconds > 0:
+                time.sleep(delay_seconds)
             files = _arr_get(
                 base_url,
                 api_key,
@@ -3609,14 +4991,27 @@ def _compute_sonarr(base_url: str, api_key: str, exclude_specials: bool = True):
                 params={"seriesId": series_id},
                 app_name="sonarr",
             )
+            if cache_seconds > 0:
+                _set_cached_episodefiles(cache_key, series_id, files, _sonarr_series_stats_key(s))
         else:
             files = files_by_series.get(series_id, [])
 
-        row = _build_sonarr_row(s, files, exclude_specials=exclude_specials)
+        row = _build_sonarr_row(
+            s,
+            files,
+            tag_map=tag_map,
+            profile_map=profile_map,
+            exclude_specials=exclude_specials,
+            missing_counts=missing_counts,
+            cutoff_counts=cutoff_counts,
+            recently_grabbed=recently_grabbed,
+        )
         if row:
             results.append(row)
 
     results.sort(key=lambda x: x["AvgEpisodeSizeGB"], reverse=True)
+    _record_timing(timing, "sonarr_build_rows_ms", build_rows_start)
+    _record_timing(timing, "sonarr_total_ms", total_start)
     return results
 
 
@@ -3624,8 +5019,9 @@ def _compute_sonarr_item(
     base_url: str,
     api_key: str,
     series_id: int,
-    exclude_specials: bool = True,
+    exclude_specials: bool = False,
     timing: dict | None = None,
+    instance_id: str | int | None = None,
 ):
     start = time.perf_counter()
     series = _arr_get(
@@ -3635,16 +5031,152 @@ def _compute_sonarr_item(
         app_name="sonarr",
     )
     _record_timing(timing, "sonarr_series_ms", start)
+    mode = _read_sonarr_episodefile_mode()
+    delay_seconds = _read_float_env("SONARR_EPISODEFILE_DELAY_SECONDS", 0.0)
     start = time.perf_counter()
-    files = _arr_get(
-        base_url,
-        api_key,
-        "/api/v3/episodefile",
-        params={"seriesId": series_id},
-        app_name="sonarr",
-    )
+    if mode == "fast":
+        files = None
+    else:
+        if delay_seconds > 0:
+            time.sleep(delay_seconds)
+        files = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/episodefile",
+            params={"seriesId": series_id},
+            app_name="sonarr",
+        )
     _record_timing(timing, "sonarr_episodefiles_ms", start)
-    return _build_sonarr_row(series, files, exclude_specials=exclude_specials)
+    tag_map = _fetch_arr_tag_map(base_url, api_key, "sonarr")
+    profile_map = _fetch_arr_quality_profile_map(base_url, api_key, "sonarr")
+    cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+    cache_key = _sonarr_episodefile_cache_key(instance_id, base_url)
+    missing_counts: dict[int, int] = {}
+    cutoff_counts: dict[int, int] = {}
+    recently_grabbed: set[int] = set()
+    cached_wanted = _get_cached_sonarr_wanted(cache_key, cache_seconds)
+    if cached_wanted:
+        missing_counts, cutoff_counts, recently_grabbed = cached_wanted
+    else:
+        try:
+            missing_counts = _fetch_sonarr_wanted_counts(
+                base_url,
+                api_key,
+                "/api/v3/wanted/missing",
+                monitored_only=True,
+            )
+        except Exception as exc:
+            logger.warning("Sonarr wanted/missing fetch failed: %s", exc)
+            missing_counts = {}
+        try:
+            cutoff_counts = _fetch_sonarr_wanted_counts(
+                base_url,
+                api_key,
+                "/api/v3/wanted/cutoff",
+                monitored_only=True,
+            )
+        except Exception as exc:
+            logger.warning("Sonarr wanted/cutoff fetch failed: %s", exc)
+            cutoff_counts = {}
+        try:
+            recently_grabbed = _fetch_recently_grabbed_series_ids(base_url, api_key, days=30)
+        except Exception as exc:
+            logger.warning("Sonarr recent grabbed fetch failed: %s", exc)
+            recently_grabbed = set()
+        if cache_seconds > 0:
+            _set_cached_sonarr_wanted(cache_key, missing_counts, cutoff_counts, recently_grabbed)
+
+    return _build_sonarr_row(
+        series,
+        files,
+        tag_map=tag_map,
+        profile_map=profile_map,
+        exclude_specials=exclude_specials,
+        missing_counts=missing_counts,
+        cutoff_counts=cutoff_counts,
+        recently_grabbed=recently_grabbed,
+    )
+
+
+def _get_sonarr_season_payload(
+    instance: dict,
+    series_id: int,
+    include_specials: bool,
+) -> tuple[list[dict], bool]:
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+    cache_key = _sonarr_episodefile_cache_key(instance.get("id"), base_url)
+    cached = _get_cached_sonarr_seasons(cache_key, series_id, None, cache_seconds)
+    if cached is None:
+        series = _arr_get(
+            base_url,
+            api_key,
+            f"/api/v3/series/{series_id}",
+            app_name="sonarr",
+        )
+        seasons = _build_sonarr_season_summaries(series)
+        stats_key = _sonarr_series_episode_stats_key(series)
+        if cache_seconds > 0:
+            _set_cached_sonarr_seasons(cache_key, series_id, seasons, stats_key)
+    else:
+        seasons = cached
+    if not include_specials:
+        seasons = [season for season in seasons if not season.get("isSpecials")]
+    fast_mode = _read_sonarr_episodefile_mode() == "fast"
+    return seasons, fast_mode
+
+
+def _get_sonarr_episode_payload(
+    instance: dict,
+    series_id: int,
+    season_number: int,
+) -> tuple[list[dict], bool]:
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+    cache_key = _sonarr_episodefile_cache_key(instance.get("id"), base_url)
+    cached = _get_cached_sonarr_episodes(cache_key, series_id, None, cache_seconds)
+    if cached is None:
+        episodes = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/episode",
+            params={"seriesId": series_id},
+            app_name="sonarr",
+        )
+        if cache_seconds > 0:
+            _set_cached_sonarr_episodes(cache_key, series_id, episodes, None)
+    else:
+        episodes = cached
+    fast_mode = _read_sonarr_episodefile_mode() == "fast"
+    file_map = None
+    if not fast_mode:
+        files = _get_cached_episodefiles(cache_key, series_id, None, cache_seconds)
+        if files is None:
+            files = _arr_get(
+                base_url,
+                api_key,
+                "/api/v3/episodefile",
+                params={"seriesId": series_id},
+                app_name="sonarr",
+            )
+            if cache_seconds > 0:
+                _set_cached_episodefiles(cache_key, series_id, files, None)
+        file_map = {f.get("id"): f for f in files or [] if f.get("id") is not None}
+
+    season_episodes = []
+    for episode in episodes or []:
+        episode_season = episode.get("seasonNumber")
+        try:
+            episode_season = int(episode_season)
+        except (TypeError, ValueError):
+            continue
+        if episode_season != season_number:
+            continue
+        season_episodes.append(_build_sonarr_episode_payload(episode, file_map, fast_mode))
+    season_episodes.sort(key=lambda item: (item.get("episodeNumber", 0), item.get("episodeId", 0)))
+    return season_episodes, fast_mode
 
 
 def _radarr_movie_files(
@@ -3675,7 +5207,60 @@ def _radarr_movie_files(
     return []
 
 
-def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
+def _fetch_radarr_movie_files_bulk(
+    base_url: str,
+    api_key: str,
+    movie_file_ids: list[int],
+) -> list[dict]:
+    if not movie_file_ids:
+        return []
+    seen: set[int] = set()
+    unique_ids: list[int] = []
+    for movie_file_id in movie_file_ids:
+        try:
+            movie_file_id = int(movie_file_id)
+        except (TypeError, ValueError):
+            continue
+        if movie_file_id in seen:
+            continue
+        seen.add(movie_file_id)
+        unique_ids.append(movie_file_id)
+    if not unique_ids:
+        return []
+    chunk_size = 200
+    files: list[dict] = []
+    for idx in range(0, len(unique_ids), chunk_size):
+        chunk = unique_ids[idx:idx + chunk_size]
+        try:
+            batch = _arr_get(
+                base_url,
+                api_key,
+                "/api/v3/moviefile",
+                params={"movieFileIds": chunk},
+                app_name="radarr",
+                circuit_group="moviefile",
+            )
+        except Exception as exc:
+            logger.warning(
+                "Radarr moviefile bulk fetch failed (size=%s): %s",
+                len(chunk),
+                exc,
+            )
+            continue
+        if batch:
+            files.extend(batch)
+    return files
+
+
+def _build_radarr_row(
+    movie: dict,
+    files: list[dict],
+    tag_map: dict[int, str] | None = None,
+    profile_map: dict[int, str] | None = None,
+    missing_ids: set[int] | None = None,
+    cutoff_ids: set[int] | None = None,
+    recently_grabbed: set[int] | None = None,
+) -> dict | None:
     radarr_internal_id = movie.get("id")
     if radarr_internal_id is None:
         return None
@@ -3687,23 +5272,47 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
     runtime = int(movie.get("runtime") or 0)
     content_hours = round(runtime / 60.0, 2) if runtime > 0 else ""
     year = movie.get("year") or ""
+    status = movie.get("status") or ""
+    monitored = movie.get("monitored")
+    profile_id = movie.get("qualityProfileId")
+    tags = movie.get("tags") or []
+    tag_labels = _format_tag_labels(tags, tag_map or {})
+    studio = movie.get("studio") or ""
+    original_language = _format_original_language(movie.get("originalLanguage"))
+    genres = _format_genres(movie.get("genres") or [])
+    has_file = movie.get("hasFile")
+    is_available = movie.get("isAvailable")
+    in_cinemas = movie.get("inCinemas") or ""
+    last_search_time = movie.get("lastSearchTime") or ""
+    airing = bool(is_available) if is_available is not None else bool(in_cinemas)
+    missing_count = radarr_internal_id in (missing_ids or set())
+    cutoff_count = radarr_internal_id in (cutoff_ids or set())
+    recently_grabbed_flag = radarr_internal_id in (recently_grabbed or set())
 
     file_size_bytes = 0
     video_quality = ""
     resolution = ""
     audio_format = ""
-    audio_profile = ""
     audio_channels = ""
     audio_languages = ""
     subtitle_languages = ""
     video_codec = ""
     video_hdr = ""
     audio_codec_mixed = False
-    audio_profile_mixed = False
     audio_languages_mixed = False
     subtitle_languages_mixed = False
+    audio_codecs_all = ""
+    audio_languages_all = ""
+    subtitle_languages_all = ""
+    file_languages = ""
     bitrate_mbps = 0.0
     bitrate_estimated = False
+    release_group = ""
+    edition = ""
+    custom_formats = ""
+    custom_format_score = ""
+    quality_cutoff_not_met = ""
+    scene_name = ""
 
     primary = None
     for f in files or []:
@@ -3716,7 +5325,6 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
         video_quality = _quality_from_file(primary)
         resolution = _resolution_from_file(primary)
         audio_format = _audio_format_from_file(primary)
-        audio_profile = _audio_profile_from_file(primary)
         audio_channels = str(_audio_channels_from_file(primary) or "")
         audio_languages = _audio_languages_from_file(primary)
         subtitle_languages = _subtitle_languages_from_file(primary)
@@ -3725,6 +5333,19 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
         video_codec = _video_codec_from_file(primary)
         video_hdr = _video_hdr_from_file(primary)
         bitrate_mbps = _bitrate_mbps_from_file(primary)
+        release_group = str(primary.get("releaseGroup") or "")
+        edition = str(primary.get("edition") or "")
+        scene_name = str(primary.get("sceneName") or "")
+        file_languages = _format_language_list(primary.get("languages") or "")
+        custom_formats = ", ".join(_format_custom_formats(primary.get("customFormats") or []))
+        score = primary.get("customFormatScore")
+        if score != "" and score is not None:
+            custom_format_score = _safe_int(score)
+        if "qualityCutoffNotMet" in primary:
+            quality_cutoff_not_met = bool(primary.get("qualityCutoffNotMet"))
+        audio_codecs_all = audio_format
+        audio_languages_all = audio_languages
+        subtitle_languages_all = subtitle_languages
 
     size_gib = _bytes_to_gib(file_size_bytes)
 
@@ -3737,6 +5358,8 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
     if runtime > 0 and size_gib > 0:
         gb_per_hour = round(size_gib / (runtime / 60.0), 2)
 
+    quality_profile = _resolve_quality_profile_name("", profile_id, profile_map or {})
+
     return {
         # Keep internal id if you want it for debugging or future API calls
         "MovieId": radarr_internal_id,
@@ -3746,6 +5369,28 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
         "Title": title,
         "DateAdded": date_added,
         "Year": year,
+        "Status": status,
+        "Monitored": monitored,
+        "QualityProfile": quality_profile,
+        "Tags": tag_labels,
+        "ReleaseGroup": release_group,
+        "Studio": studio,
+        "OriginalLanguage": original_language,
+        "Genres": genres,
+        "MissingCount": missing_count,
+        "CutoffUnmetCount": cutoff_count,
+        "RecentlyGrabbed": recently_grabbed_flag,
+        "HasFile": has_file,
+        "IsAvailable": is_available,
+        "InCinemas": in_cinemas,
+        "LastSearchTime": last_search_time,
+        "Edition": edition,
+        "CustomFormats": custom_formats,
+        "CustomFormatScore": custom_format_score,
+        "QualityCutoffNotMet": quality_cutoff_not_met,
+        "Languages": file_languages,
+        "Scene": bool(scene_name),
+        "Airing": airing,
         "RuntimeMins": runtime if runtime else "",
         "ContentHours": content_hours,
         "FileSizeGB": size_gib if size_gib else "",
@@ -3755,12 +5400,13 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
         "VideoQuality": video_quality,
         "Resolution": resolution,
         "AudioCodec": audio_format,
-        "AudioProfile": audio_profile,
         "AudioChannels": audio_channels,
         "AudioLanguages": audio_languages,
         "SubtitleLanguages": subtitle_languages,
         "AudioCodecMixed": audio_codec_mixed,
-        "AudioProfileMixed": audio_profile_mixed,
+        "AudioCodecAll": audio_codecs_all,
+        "AudioLanguagesAll": audio_languages_all,
+        "SubtitleLanguagesAll": subtitle_languages_all,
         "AudioLanguagesMixed": audio_languages_mixed,
         "SubtitleLanguagesMixed": subtitle_languages_mixed,
         "VideoCodec": video_codec,
@@ -3769,13 +5415,93 @@ def _build_radarr_row(movie: dict, files: list[dict]) -> dict | None:
     }
 
 
-def _compute_radarr(base_url: str, api_key: str):
+def _radarr_lite_rows(rows: list[dict]) -> list[dict]:
+    if not rows:
+        return []
+    lite_rows = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        lite_rows.append({key: row.get(key) for key in RADARR_LITE_FIELDS if key in row})
+    return lite_rows
+
+
+def _compute_radarr(
+    base_url: str,
+    api_key: str,
+    instance_id: str | int | None = None,
+    defer_wanted: bool = False,
+):
     movies = _arr_get(base_url, api_key, "/api/v3/movie", app_name="radarr")
+    tag_map = _fetch_arr_tag_map(base_url, api_key, "radarr")
+    profile_map = _fetch_arr_quality_profile_map(base_url, api_key, "radarr")
+    cache_seconds = _read_int_env("CACHE_SECONDS", 300)
+    cache_key = _radarr_wanted_cache_key(instance_id, base_url)
+    missing_ids: set[int] = set()
+    cutoff_ids: set[int] = set()
+    recently_grabbed: set[int] = set()
+    files_by_movie_id: dict[int, list[dict]] = {}
+    movie_file_ids: list[int] = []
+    fallback_movie_ids: set[int] = set()
+
+    if movies:
+        for movie in movies:
+            movie_id = movie.get("id")
+            if movie_id is None:
+                continue
+            movie_file = movie.get("movieFile")
+            if movie_file:
+                if isinstance(movie_file, list):
+                    files_by_movie_id[movie_id] = movie_file
+                else:
+                    files_by_movie_id[movie_id] = [movie_file]
+                continue
+            if movie.get("hasFile"):
+                movie_file_id = movie.get("movieFileId")
+                if movie_file_id:
+                    movie_file_ids.append(movie_file_id)
+                else:
+                    fallback_movie_ids.add(movie_id)
+
+        if movie_file_ids:
+            bulk_files = _fetch_radarr_movie_files_bulk(base_url, api_key, movie_file_ids)
+            for file in bulk_files or []:
+                movie_id = file.get("movieId")
+                if movie_id is None:
+                    continue
+                files_by_movie_id.setdefault(movie_id, []).append(file)
+
+        cached_wanted = _get_cached_radarr_wanted(cache_key, cache_seconds)
+        if cached_wanted:
+            missing_ids, cutoff_ids, recently_grabbed = cached_wanted
+        elif not defer_wanted:
+            wanted_workers = _read_worker_cap("RADARR_WANTED_WORKERS", 2, 4)
+            missing_ids, cutoff_ids, recently_grabbed = _fetch_radarr_wanted_bundle(
+                base_url,
+                api_key,
+                wanted_workers,
+            )
+            if cache_seconds > 0:
+                _set_cached_radarr_wanted(cache_key, missing_ids, cutoff_ids, recently_grabbed)
 
     results = []
     for m in movies:
-        files = _radarr_movie_files(m, base_url, api_key)
-        row = _build_radarr_row(m, files)
+        movie_id = m.get("id")
+        files = files_by_movie_id.get(movie_id) if movie_id is not None else None
+        if files is None:
+            if movie_id in fallback_movie_ids:
+                files = _radarr_movie_files(m, base_url, api_key)
+            else:
+                files = []
+        row = _build_radarr_row(
+            m,
+            files,
+            tag_map=tag_map,
+            profile_map=profile_map,
+            missing_ids=missing_ids,
+            cutoff_ids=cutoff_ids,
+            recently_grabbed=recently_grabbed,
+        )
         if row:
             results.append(row)
 
@@ -3788,6 +5514,7 @@ def _compute_radarr_item(
     api_key: str,
     movie_id: int,
     timing: dict | None = None,
+    instance_id: str | int | None = None,
 ):
     start = time.perf_counter()
     movie = _arr_get(
@@ -3798,7 +5525,34 @@ def _compute_radarr_item(
     )
     _record_timing(timing, "radarr_movie_ms", start)
     files = _radarr_movie_files(movie, base_url, api_key, timing=timing)
-    return _build_radarr_row(movie, files)
+    tag_map = _fetch_arr_tag_map(base_url, api_key, "radarr")
+    profile_map = _fetch_arr_quality_profile_map(base_url, api_key, "radarr")
+    cache_seconds = _read_int_env("CACHE_SECONDS", 300)
+    cache_key = _radarr_wanted_cache_key(instance_id, base_url)
+    missing_ids: set[int] = set()
+    cutoff_ids: set[int] = set()
+    recently_grabbed: set[int] = set()
+    cached_wanted = _get_cached_radarr_wanted(cache_key, cache_seconds)
+    if cached_wanted:
+        missing_ids, cutoff_ids, recently_grabbed = cached_wanted
+    else:
+        wanted_workers = _read_worker_cap("RADARR_WANTED_WORKERS", 2, 4)
+        missing_ids, cutoff_ids, recently_grabbed = _fetch_radarr_wanted_bundle(
+            base_url,
+            api_key,
+            wanted_workers,
+        )
+        if cache_seconds > 0:
+            _set_cached_radarr_wanted(cache_key, missing_ids, cutoff_ids, recently_grabbed)
+    return _build_radarr_row(
+        movie,
+        files,
+        tag_map=tag_map,
+        profile_map=profile_map,
+        missing_ids=missing_ids,
+        cutoff_ids=cutoff_ids,
+        recently_grabbed=recently_grabbed,
+    )
 
 
 def _apply_instance_meta(rows: list[dict], instance: dict):
@@ -3873,6 +5627,7 @@ def _start_arr_background_refresh(
                     app_name,
                     instance,
                     disk_cache,
+                    cache_path,
                     force=True,
                     tautulli_index=cached_tautulli,
                     tautulli_index_ts=cached_tautulli_ts,
@@ -3912,6 +5667,7 @@ def _get_cached_instance(
     app_name: str,
     instance: dict,
     disk_cache: dict[str, dict],
+    cache_path: str | None,
     force: bool,
     tautulli_index: dict | None,
     tautulli_index_ts: int = 0,
@@ -3951,18 +5707,34 @@ def _get_cached_instance(
         _apply_instance_meta(rows, instance)
         return rows, False
 
+    defer_wanted = log_cold_start and _read_bool_env("SORTARR_DEFER_WANTED", True)
+    wanted_cached = None
+    if defer_wanted:
+        if app_name == "sonarr":
+            cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+            cache_key = _sonarr_episodefile_cache_key(instance_id, instance.get("url") or "")
+            wanted_cached = _get_cached_sonarr_wanted(cache_key, cache_seconds)
+        else:
+            cache_seconds = _read_int_env("CACHE_SECONDS", 300)
+            cache_key = _radarr_wanted_cache_key(instance_id, instance.get("url") or "")
+            wanted_cached = _get_cached_radarr_wanted(cache_key, cache_seconds)
+
     now = time.time()
     fetch_start = time.perf_counter()
     if app_name == "sonarr":
         data = _compute_sonarr(
             instance["url"],
             instance["api_key"],
-            exclude_specials=True,
+            exclude_specials=False,
+            instance_id=instance_id,
+            defer_wanted=defer_wanted,
         )
     else:
         data = _compute_radarr(
             instance["url"],
             instance["api_key"],
+            instance_id=instance_id,
+            defer_wanted=defer_wanted,
         )
     fetch_elapsed = time.perf_counter() - fetch_start
     if log_cold_start:
@@ -4006,6 +5778,8 @@ def _get_cached_instance(
         "tautulli_index_ts": _safe_int(temp_entry.get("tautulli_index_ts")),
         "data": temp_entry.get("data") or [],
     }
+    if defer_wanted and not wanted_cached:
+        _start_wanted_background_refresh(app_name, instance, cache_path, log_cold_start=log_cold_start)
     rows = _clone_rows(temp_entry.get("data") or [])
     if rows:
         _apply_instance_meta(rows, instance)
@@ -4046,15 +5820,25 @@ def _refresh_arr_item_cache(
             base_url,
             api_key,
             item_id,
-            exclude_specials=True,
+            exclude_specials=False,
             timing=timing,
+            instance_id=instance.get("id"),
         )
         media_type = "shows"
     else:
-        row = _compute_radarr_item(base_url, api_key, item_id, timing=timing)
+        row = _compute_radarr_item(
+            base_url,
+            api_key,
+            item_id,
+            timing=timing,
+            instance_id=instance.get("id"),
+        )
         media_type = "movies"
     if not row:
         return None
+    if app_name == "sonarr":
+        cache_key = _sonarr_episodefile_cache_key(instance.get("id"), base_url)
+        _clear_sonarr_series_cache(cache_key, item_id)
 
     cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
     if force_tautulli and cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
@@ -4125,6 +5909,8 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     cold_cache = False
     cache_seconds = _safe_int(cfg.get("cache_seconds"))
     missing_instances = []
+    instance_errors: list[dict] = []
+    strict_instance_errors = _read_bool_env("SORTARR_STRICT_INSTANCE_ERRORS", False)
     media_type = "shows" if app_name == "sonarr" else "movies"
     cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
     defer_tautulli_overlay = False
@@ -4179,23 +5965,122 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
         cold_cache = True
         defer_tautulli_overlay = bool(cached_tautulli and cached_tautulli_ts)
     if missing_instances:
-        for instance in missing_instances:
-            data, updated = _get_cached_instance(
-                app_name,
-                instance,
-                disk_cache,
-                force=True,
-                tautulli_index=cached_tautulli,
-                tautulli_index_ts=cached_tautulli_ts,
-                log_cold_start=cold_cache,
-                defer_tautulli_overlay=defer_tautulli_overlay,
-            )
-            results.extend(data)
-            disk_dirty = disk_dirty or updated
+        instance_workers = 1
+        if app_name == "radarr":
+            instance_workers = _read_int_env("RADARR_INSTANCE_WORKERS", 1)
+            if instance_workers <= 0:
+                instance_workers = 1
+        if instance_workers > 1 and len(missing_instances) > 1:
+            max_workers = min(instance_workers, len(missing_instances))
+
+            def fetch_instance(instance: dict):
+                local_cache: dict[str, dict] = {}
+                data, updated = _get_cached_instance(
+                    app_name,
+                    instance,
+                    local_cache,
+                    cache_path,
+                    force=True,
+                    tautulli_index=cached_tautulli,
+                    tautulli_index_ts=cached_tautulli_ts,
+                    log_cold_start=cold_cache,
+                    defer_tautulli_overlay=defer_tautulli_overlay,
+                )
+                instance_key = str(instance.get("id") or "")
+                entry = local_cache.get(instance_key) or local_cache.get(instance.get("id"))
+                return instance, data, updated, entry
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(fetch_instance, instance): instance
+                    for instance in missing_instances
+                }
+                for future in as_completed(futures):
+                    instance = futures[future]
+                    try:
+                        _, data, updated, entry = future.result()
+                        results.extend(data)
+                        if entry:
+                            disk_cache[str(instance.get("id") or "")] = entry
+                            disk_dirty = True
+                        disk_dirty = disk_dirty or updated
+                    except Exception as exc:
+                        instance_id = instance.get("id")
+                        instance_name = instance.get("name") or ""
+                        instance_errors.append(
+                            {
+                                "id": instance_id,
+                                "name": instance_name,
+                                "error": str(exc),
+                            }
+                        )
+                        logger.warning(
+                            "%s instance fetch failed (id=%s, name=%s): %s",
+                            app_name,
+                            instance_id,
+                            instance_name or "unknown",
+                            exc,
+                        )
+                        if strict_instance_errors:
+                            raise
+        else:
+            for instance in missing_instances:
+                try:
+                    data, updated = _get_cached_instance(
+                        app_name,
+                        instance,
+                        disk_cache,
+                        cache_path,
+                        force=True,
+                        tautulli_index=cached_tautulli,
+                        tautulli_index_ts=cached_tautulli_ts,
+                        log_cold_start=cold_cache,
+                        defer_tautulli_overlay=defer_tautulli_overlay,
+                    )
+                    results.extend(data)
+                    disk_dirty = disk_dirty or updated
+                except Exception as exc:
+                    instance_id = instance.get("id")
+                    instance_name = instance.get("name") or ""
+                    instance_errors.append(
+                        {
+                            "id": instance_id,
+                            "name": instance_name,
+                            "error": str(exc),
+                        }
+                    )
+                    logger.warning(
+                        "%s instance fetch failed (id=%s, name=%s): %s",
+                        app_name,
+                        instance_id,
+                        instance_name or "unknown",
+                        exc,
+                    )
+                    if strict_instance_errors:
+                        raise
 
     if disk_dirty:
         reason = "cold_cache" if cold_cache else "request_refresh"
         _queue_arr_cache_save(app_name, cache_path, disk_cache, reason)
+
+    if instance_errors:
+        labels = []
+        for err in instance_errors:
+            label = err.get("name") or err.get("id") or "unknown"
+            labels.append(f"{label}: {err.get('error')}")
+        instance_warning = (
+            f"{app_name} instance fetch failed for {len(instance_errors)} instance(s): "
+            + "; ".join(labels)
+        )
+        tautulli_warning = _append_warning(tautulli_warning, instance_warning)
+        if not results:
+            raise RuntimeError(instance_warning)
+
+    if app_name == "sonarr" and _read_sonarr_episodefile_mode() == "fast":
+        tautulli_warning = _append_warning(
+            tautulli_warning,
+            "Sonarr fast mode enabled (episode file detail metrics reduced).",
+        )
 
     if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
         apply_started = False
@@ -4218,7 +6103,13 @@ def index():
     cfg = _get_config()
     if not _config_complete(cfg):
         return redirect(url_for("setup"))
-    return render_template("index.html", app_name=APP_NAME, app_version=APP_VERSION)
+    csrf_token = _get_csrf_token()
+    return render_template(
+        "index.html",
+        app_name=APP_NAME,
+        app_version=APP_VERSION,
+        csrf_token=csrf_token,
+    )
 
 
 @app.route("/setup", methods=["GET", "POST"])
@@ -4247,10 +6138,18 @@ def setup():
             cache_seconds = None
         tautulli_timeout_raw = request.form.get("tautulli_timeout_seconds", "").strip()
         tautulli_fetch_raw = request.form.get("tautulli_fetch_seconds", "").strip()
+        sonarr_timeout_raw = request.form.get("sonarr_timeout_seconds", "").strip()
+        radarr_timeout_raw = request.form.get("radarr_timeout_seconds", "").strip()
+        sonarr_episodefile_workers_raw = request.form.get("sonarr_episodefile_workers", "").strip()
+        radarr_wanted_workers_raw = request.form.get("radarr_wanted_workers", "").strip()
+        radarr_instance_workers_raw = request.form.get("radarr_instance_workers", "").strip()
+        tautulli_metadata_workers_raw = request.form.get("tautulli_metadata_workers", "").strip()
 
         def parse_optional_int(
             raw: str,
             label: str,
+            min_value: int = 0,
+            max_value: int | None = None,
         ) -> tuple[str, str | None]:
             if not raw:
                 return "", None
@@ -4258,8 +6157,10 @@ def setup():
                 value = int(raw)
             except ValueError:
                 return "", f"{label} must be a whole number."
-            if value < 0:
-                return "", f"{label} must be 0 or greater."
+            if value < min_value:
+                return "", f"{label} must be {min_value} or greater."
+            if max_value is not None and value > max_value:
+                return "", f"{label} must be {max_value} or less."
             return str(value), None
 
         tautulli_timeout_seconds, timeout_error = parse_optional_int(
@@ -4269,6 +6170,35 @@ def setup():
         tautulli_fetch_seconds, fetch_error = parse_optional_int(
             tautulli_fetch_raw,
             "Tautulli fetch idle seconds",
+        )
+        sonarr_timeout_seconds, sonarr_timeout_error = parse_optional_int(
+            sonarr_timeout_raw,
+            "Sonarr timeout seconds",
+        )
+        radarr_timeout_seconds, radarr_timeout_error = parse_optional_int(
+            radarr_timeout_raw,
+            "Radarr timeout seconds",
+        )
+        sonarr_episodefile_workers, sonarr_episodefile_workers_error = parse_optional_int(
+            sonarr_episodefile_workers_raw,
+            "Sonarr episode file workers",
+            min_value=1,
+        )
+        radarr_wanted_workers, radarr_wanted_workers_error = parse_optional_int(
+            radarr_wanted_workers_raw,
+            "Radarr wanted workers",
+            min_value=1,
+            max_value=4,
+        )
+        radarr_instance_workers, radarr_instance_workers_error = parse_optional_int(
+            radarr_instance_workers_raw,
+            "Radarr instance workers",
+            min_value=1,
+        )
+        tautulli_metadata_workers, tautulli_metadata_workers_error = parse_optional_int(
+            tautulli_metadata_workers_raw,
+            "Tautulli metadata workers",
+            min_value=1,
         )
         tautulli_lookup_limit = str(REQUIRED_TAUTULLI_LOOKUP_LIMIT)
         tautulli_lookup_seconds = str(REQUIRED_TAUTULLI_LOOKUP_SECONDS)
@@ -4310,17 +6240,34 @@ def setup():
             "TAUTULLI_METADATA_LOOKUP_SECONDS": tautulli_lookup_seconds,
             "TAUTULLI_TIMEOUT_SECONDS": tautulli_timeout_seconds,
             "TAUTULLI_FETCH_SECONDS": tautulli_fetch_seconds,
+            "TAUTULLI_METADATA_WORKERS": tautulli_metadata_workers,
+            "SONARR_TIMEOUT_SECONDS": sonarr_timeout_seconds,
+            "RADARR_TIMEOUT_SECONDS": radarr_timeout_seconds,
+            "SONARR_EPISODEFILE_WORKERS": sonarr_episodefile_workers,
+            "RADARR_WANTED_WORKERS": radarr_wanted_workers,
+            "RADARR_INSTANCE_WORKERS": radarr_instance_workers,
             "BASIC_AUTH_USER": basic_auth_user,
             "BASIC_AUTH_PASS": basic_auth_pass,
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
 
+        config_error = (
+            timeout_error
+            or fetch_error
+            or sonarr_timeout_error
+            or radarr_timeout_error
+            or sonarr_episodefile_workers_error
+            or radarr_wanted_workers_error
+            or radarr_instance_workers_error
+            or tautulli_metadata_workers_error
+        )
+
         if cache_seconds is None:
             error = "Cache seconds must be a whole number."
         elif cache_seconds < 30:
             error = "Cache seconds must be at least 30."
-        elif timeout_error or fetch_error:
-            error = timeout_error or fetch_error or ""
+        elif config_error:
+            error = config_error or ""
         else:
             has_sonarr = any(
                 data.get(f"SONARR_URL{suffix}") and data.get(f"SONARR_API_KEY{suffix}")
@@ -4391,6 +6338,7 @@ def setup():
             except OSError:
                 error = "Failed to write config file."
 
+    csrf_token = _get_csrf_token()
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
@@ -4399,6 +6347,7 @@ def setup():
         values=cfg,
         app_name=APP_NAME,
         app_version=APP_VERSION,
+        csrf_token=csrf_token,
     )
 
 
@@ -4542,6 +6491,7 @@ def api_perf_render():
 
 
 @app.route("/api/version")
+@_auth_required
 def api_version():
     return jsonify({"app_name": APP_NAME, "app_version": APP_VERSION})
 
@@ -4696,6 +6646,90 @@ def api_sonarr_item():
         _attach_timing_headers(resp, timing)
         return resp
     return jsonify(row)
+
+
+@app.route("/api/sonarr/series/<int:series_id>/seasons")
+@_auth_required
+def api_sonarr_series_seasons(series_id: int):
+    cfg = _get_config()
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Sonarr is not configured."}), 503
+    if series_id <= 0:
+        return jsonify({"error": "series_id is required."}), 400
+    instance_id = request.args.get("instance_id") or request.args.get("instanceId")
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Sonarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+    include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
+    try:
+        seasons, fast_mode = _get_sonarr_season_payload(instance, series_id, include_specials)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 404:
+            return jsonify({"error": "Series not found."}), 404
+        logger.exception("Sonarr season request failed")
+        resp = jsonify({"error": "Sonarr season request failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    except Exception as exc:
+        logger.exception("Sonarr season request failed")
+        resp = jsonify({"error": "Sonarr season request failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    return jsonify(
+        {
+            "series_id": series_id,
+            "instance_id": instance.get("id") or "",
+            "fast_mode": fast_mode,
+            "seasons": seasons,
+        }
+    )
+
+
+@app.route("/api/sonarr/series/<int:series_id>/seasons/<int:season_number>/episodes")
+@_auth_required
+def api_sonarr_series_episodes(series_id: int, season_number: int):
+    cfg = _get_config()
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Sonarr is not configured."}), 503
+    if series_id <= 0:
+        return jsonify({"error": "series_id is required."}), 400
+    if season_number < 0:
+        return jsonify({"error": "season_number is required."}), 400
+    instance_id = request.args.get("instance_id") or request.args.get("instanceId")
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Sonarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+    try:
+        episodes, fast_mode = _get_sonarr_episode_payload(instance, series_id, season_number)
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        if status == 404:
+            return jsonify({"error": "Series not found."}), 404
+        logger.exception("Sonarr episode request failed")
+        resp = jsonify({"error": "Sonarr episode request failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    except Exception as exc:
+        logger.exception("Sonarr episode request failed")
+        resp = jsonify({"error": "Sonarr episode request failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    return jsonify(
+        {
+            "series_id": series_id,
+            "season_number": season_number,
+            "instance_id": instance.get("id") or "",
+            "fast_mode": fast_mode,
+            "episodes": episodes,
+        }
+    )
 
 
 @app.route("/api/radarr/refresh", methods=["POST"])
@@ -4986,7 +7020,11 @@ def api_tautulli_match_diagnostics():
         users_delta = taut_users - arr_users
 
     diag = {
-        "generated_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "generated_at": (
+            datetime.datetime.now(datetime.timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        ),
         "app_name": APP_NAME,
         "app_version": APP_VERSION,
         "app": app_name,
@@ -5099,6 +7137,8 @@ def api_shows():
         if tautulli_notice:
             notices.append(tautulli_notice)
             notice_flags.append("tautulli_refresh")
+        if _read_sonarr_episodefile_mode() == "fast":
+            notice_flags.append("sonarr_fast")
         if refresh_notice and not notices:
             notices.append(refresh_notice)
         if notice_flags:
@@ -5150,6 +7190,21 @@ def api_movies():
                 cfg,
                 force=False,
             )
+        lite_raw = str(request.args.get("lite") or "").strip().lower()
+        lite_requested = lite_raw in {"1", "true", "yes", "on"}
+        lite_explicit_off = lite_raw in {"0", "false", "no", "off"}
+        lite_enabled = False
+        if lite_requested:
+            lite_enabled = True
+        elif (
+            not lite_explicit_off
+            and not force
+            and cold_cache
+            and _read_bool_env("SORTARR_RADARR_LITE_FIRST", True)
+        ):
+            lite_enabled = True
+        if lite_enabled:
+            data = _radarr_lite_rows(data)
         resp = jsonify(data)
         if tautulli_warning:
             resp.headers["X-Sortarr-Warn"] = tautulli_warning
@@ -5163,6 +7218,8 @@ def api_movies():
         if tautulli_notice:
             notices.append(tautulli_notice)
             notice_flags.append("tautulli_refresh")
+        if lite_enabled:
+            notice_flags.append("radarr_lite")
         if refresh_notice and not notices:
             notices.append(refresh_notice)
         if notice_flags:
@@ -5204,6 +7261,21 @@ def shows_csv():
             "DateAdded",
             "TitleSlug",
             "TmdbId",
+            "Status",
+            "Monitored",
+            "QualityProfile",
+            "Tags",
+            "ReleaseGroup",
+            "SeriesType",
+            "OriginalLanguage",
+            "Genres",
+            "LastAired",
+            "MissingCount",
+            "CutoffUnmetCount",
+            "RecentlyGrabbed",
+            "UseSceneNumbering",
+            "Airing",
+            "SeasonCount",
             "EpisodesCounted",
             "TotalSizeGB",
             "AvgEpisodeSizeGB",
@@ -5212,12 +7284,10 @@ def shows_csv():
             "VideoCodec",
             "VideoHDR",
             "AudioCodec",
-            "AudioProfile",
             "AudioChannels",
             "AudioLanguages",
             "SubtitleLanguages",
             "AudioCodecMixed",
-            "AudioProfileMixed",
             "AudioLanguagesMixed",
             "SubtitleLanguagesMixed",
             "PlayCount",
@@ -5240,9 +7310,9 @@ def shows_csv():
     w = csv.DictWriter(out, fieldnames=fieldnames)
     w.writeheader()
     for r in data:
-        row = {k: r.get(k, "") for k in fieldnames}
+        row = {k: _csv_safe_value(r.get(k, "")) for k in fieldnames}
         if include_instance:
-            row["Instance"] = r.get("InstanceName", "")
+            row["Instance"] = _csv_safe_value(r.get("InstanceName", ""))
         w.writerow(row)
 
     return Response(
@@ -5278,6 +7348,26 @@ def movies_csv():
             "Title",
             "DateAdded",
             "TmdbId",
+            "Status",
+            "Monitored",
+            "QualityProfile",
+            "Tags",
+            "ReleaseGroup",
+            "Studio",
+            "OriginalLanguage",
+            "Genres",
+            "MissingCount",
+            "CutoffUnmetCount",
+            "RecentlyGrabbed",
+            "HasFile",
+            "IsAvailable",
+            "InCinemas",
+            "LastSearchTime",
+            "Edition",
+            "CustomFormats",
+            "CustomFormatScore",
+            "QualityCutoffNotMet",
+            "Languages",
             "RuntimeMins",
             "FileSizeGB",
             "GBPerHour",
@@ -5287,12 +7377,10 @@ def movies_csv():
             "VideoCodec",
             "VideoHDR",
             "AudioCodec",
-            "AudioProfile",
             "AudioChannels",
             "AudioLanguages",
             "SubtitleLanguages",
             "AudioCodecMixed",
-            "AudioProfileMixed",
             "AudioLanguagesMixed",
             "SubtitleLanguagesMixed",
             "PlayCount",
@@ -5315,9 +7403,9 @@ def movies_csv():
     w = csv.DictWriter(out, fieldnames=fieldnames)
     w.writeheader()
     for r in data:
-        row = {k: r.get(k, "") for k in fieldnames}
+        row = {k: _csv_safe_value(r.get(k, "")) for k in fieldnames}
         if include_instance:
-            row["Instance"] = r.get("InstanceName", "")
+            row["Instance"] = _csv_safe_value(r.get("InstanceName", ""))
         w.writerow(row)
 
     return Response(
@@ -5328,7 +7416,7 @@ def movies_csv():
 
 
 @app.route("/health")
-
+@_auth_required
 def health():
     return "ok", 200
 

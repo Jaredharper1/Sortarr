@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="csrf-token" content="{{ csrf_token }}" />
     <title>{{ app_name }} Setup</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
@@ -24,6 +25,7 @@
         {% endif %}
 
         <form method="post" class="setup-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           <div class="setup-section-title">Sonarr Instance 1</div>
           <label>
             Instance name
@@ -261,7 +263,30 @@
           <details class="setup-advanced">
             <summary>Advanced settings</summary>
             <div class="setup-advanced-body">
-              <div class="setup-section-title">Performance</div>
+              <div class="setup-section-title">Arr performance</div>
+              <label>
+                Sonarr timeout seconds
+                <input name="sonarr_timeout_seconds" type="number" min="0" step="1" value="{{ values.sonarr_timeout_seconds }}" />
+              </label>
+              <label>
+                Sonarr episode file workers
+                <input name="sonarr_episodefile_workers" type="number" min="1" step="1" value="{{ values.sonarr_episodefile_workers }}" />
+              </label>
+              <label>
+                Radarr timeout seconds
+                <input name="radarr_timeout_seconds" type="number" min="0" step="1" value="{{ values.radarr_timeout_seconds }}" />
+              </label>
+              <label>
+                Radarr wanted workers
+                <input name="radarr_wanted_workers" type="number" min="1" max="4" step="1" value="{{ values.radarr_wanted_workers }}" />
+              </label>
+              <label>
+                Radarr instance workers
+                <input name="radarr_instance_workers" type="number" min="1" step="1" value="{{ values.radarr_instance_workers }}" />
+              </label>
+              <div class="setup-hint">Leave fields blank for defaults. Timeout seconds accept 0 to disable. Radarr wanted workers are capped at 4.</div>
+
+              <div class="setup-section-title">Tautulli performance</div>
               <label>
                 Tautulli timeout seconds
                 <input name="tautulli_timeout_seconds" type="number" min="0" step="1" value="{{ values.tautulli_timeout_seconds }}" />
@@ -269,6 +294,10 @@
               <label>
                 Tautulli fetch seconds
                 <input name="tautulli_fetch_seconds" type="number" min="0" step="1" value="{{ values.tautulli_fetch_seconds }}" />
+              </label>
+              <label>
+                Tautulli metadata workers
+                <input name="tautulli_metadata_workers" type="number" min="1" step="1" value="{{ values.tautulli_metadata_workers }}" />
               </label>
               <div class="setup-hint">Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for defaults; seconds fields accept 0 for no time limit.</div>
             </div>

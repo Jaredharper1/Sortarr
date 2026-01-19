@@ -8,6 +8,8 @@
     ? `${window.location.protocol}//${window.location.host}`
     : "";
 
+  const CSRF_COOKIE_NAME = "sortarr_csrf";
+
   function apiUrl(path) {
     if (/^https?:\/\//i.test(path)) return path;
     let normalized = path;
@@ -15,6 +17,26 @@
       normalized = `/${normalized}`;
     }
     return apiOrigin ? `${apiOrigin}${normalized}` : normalized;
+  }
+
+  function readCookie(name) {
+    const value = `; ${document.cookie || ""}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length < 2) return "";
+    return parts.pop().split(";").shift() || "";
+  }
+
+  function getCsrfToken() {
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    const metaToken = meta && meta.getAttribute("content");
+    if (metaToken) return metaToken;
+    return readCookie(CSRF_COOKIE_NAME);
+  }
+
+  function withCsrfHeaders(headers = {}) {
+    const token = getCsrfToken();
+    if (!token) return headers;
+    return { ...headers, "X-CSRF-Token": token };
   }
 
   function delay(ms) {
@@ -91,7 +113,7 @@
     try {
       const res = await fetch(apiUrl("/api/setup/test"), {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: withCsrfHeaders({ "Content-Type": "application/json" }),
         credentials: "same-origin",
         body: JSON.stringify({ kind, url, api_key: apiKey }),
       });
