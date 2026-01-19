@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.12
+
+### Maintenance
+
+- Release version bump to 0.6.12.
+
 ## 0.6.11
 
 ### Security

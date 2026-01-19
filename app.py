@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.11"
+APP_VERSION = "0.6.12"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -4980,12 +4980,8 @@ def _compute_sonarr(
                     app_name="sonarr",
                 )
             except Exception as exc:
-                safe_error = _safe_exception_message(exc)
-                logger.warning(
-                    "Episode file fetch failed for seriesId=%s: %s",
-                    series_id,
-                    safe_error,
-                )
+                error_kind = type(exc).__name__
+                logger.warning("Episode file fetch failed (%s).", error_kind)
                 files = []
             if cache_seconds > 0:
                 _set_cached_episodefiles(cache_key, series_id, files, stats_key)
@@ -6034,21 +6030,14 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     except Exception as exc:
                         instance_id = instance.get("id")
                         instance_name = instance.get("name") or ""
-                        safe_error = _safe_exception_message(exc)
+                        error_kind = type(exc).__name__
                         instance_errors.append(
                             {
                                 "id": instance_id,
                                 "name": instance_name,
-                                "error": safe_error,
                             }
                         )
-                        logger.warning(
-                            "%s instance fetch failed (id=%s, name=%s): %s",
-                            app_name,
-                            instance_id,
-                            instance_name or "unknown",
-                            safe_error,
-                        )
+                        logger.warning("%s instance fetch failed (%s).", app_name, error_kind)
                         if strict_instance_errors:
                             raise
         else:
@@ -6070,21 +6059,14 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 except Exception as exc:
                     instance_id = instance.get("id")
                     instance_name = instance.get("name") or ""
-                    safe_error = _safe_exception_message(exc)
+                    error_kind = type(exc).__name__
                     instance_errors.append(
                         {
                             "id": instance_id,
                             "name": instance_name,
-                            "error": safe_error,
                         }
                     )
-                    logger.warning(
-                        "%s instance fetch failed (id=%s, name=%s): %s",
-                        app_name,
-                        instance_id,
-                        instance_name or "unknown",
-                        safe_error,
-                    )
+                    logger.warning("%s instance fetch failed (%s).", app_name, error_kind)
                     if strict_instance_errors:
                         raise
 
