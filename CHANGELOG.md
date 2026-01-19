@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.11
+
+### Security
+
+- Resolve CodeQL findings for clear-text logging and exception exposure in Arr diagnostics and instance warnings.
+
 ## 0.6.10
 
 ### UI and columns

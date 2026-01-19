@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.10"
+APP_VERSION = "0.6.11"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -1202,6 +1202,28 @@ def _sanitize_url_for_log(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+_URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\]\"'<>]+")
+_SECRET_PAIR_RE = re.compile(r"(?i)(api[_-]?key|token|password)=([^&\s]+)")
+
+
+def _sanitize_error_text(text: str) -> str:
+    if not text:
+        return ""
+    redacted = _SECRET_PAIR_RE.sub(r"\1=<redacted>", text)
+
+    def _replace_url(match: re.Match) -> str:
+        return _sanitize_url_for_log(match.group(0)) or "<redacted>"
+
+    return _URL_RE.sub(_replace_url, redacted)
+
+
+def _safe_exception_message(exc: Exception | None) -> str:
+    if not exc:
+        return ""
+    safe_text = _sanitize_error_text(str(exc))
+    return safe_text or type(exc).__name__
+
+
 def _origin_matches_request(origin: str) -> bool:
     if not origin:
         return True
@@ -1814,13 +1836,13 @@ def _arr_get(
             try:
                 payload = r.json()
             except ValueError:
-                snippet = (r.text or "").strip().replace("\n", " ")[:500]
+                body_len = len(r.text or "")
                 logger.warning(
-                    "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
+                    "Arr response JSON decode failed (app=%s status=%s url=%s body_len=%s).",
                     app_name or "unknown",
                     r.status_code,
                     _sanitize_url_for_log(url),
-                    snippet,
+                    body_len,
                 )
                 raise
             if circuit_breaker:
@@ -1982,13 +2004,13 @@ def _arr_post(
     try:
         return r.json()
     except ValueError:
-        snippet = (r.text or "").strip().replace("\n", " ")[:500]
+        body_len = len(r.text or "")
         logger.warning(
-            "Arr response JSON decode failed (app=%s status=%s url=%s snippet=%s).",
+            "Arr response JSON decode failed (app=%s status=%s url=%s body_len=%s).",
             app_name or "unknown",
             r.status_code,
             _sanitize_url_for_log(url),
-            snippet,
+            body_len,
         )
         raise
 
@@ -4958,7 +4980,12 @@ def _compute_sonarr(
                     app_name="sonarr",
                 )
             except Exception as exc:
-                logger.warning("Episode file fetch failed for seriesId=%s: %s", series_id, exc)
+                safe_error = _safe_exception_message(exc)
+                logger.warning(
+                    "Episode file fetch failed for seriesId=%s: %s",
+                    series_id,
+                    safe_error,
+                )
                 files = []
             if cache_seconds > 0:
                 _set_cached_episodefiles(cache_key, series_id, files, stats_key)
@@ -6007,11 +6034,12 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     except Exception as exc:
                         instance_id = instance.get("id")
                         instance_name = instance.get("name") or ""
+                        safe_error = _safe_exception_message(exc)
                         instance_errors.append(
                             {
                                 "id": instance_id,
                                 "name": instance_name,
-                                "error": str(exc),
+                                "error": safe_error,
                             }
                         )
                         logger.warning(
@@ -6019,7 +6047,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                             app_name,
                             instance_id,
                             instance_name or "unknown",
-                            exc,
+                            safe_error,
                         )
                         if strict_instance_errors:
                             raise
@@ -6042,11 +6070,12 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 except Exception as exc:
                     instance_id = instance.get("id")
                     instance_name = instance.get("name") or ""
+                    safe_error = _safe_exception_message(exc)
                     instance_errors.append(
                         {
                             "id": instance_id,
                             "name": instance_name,
-                            "error": str(exc),
+                            "error": safe_error,
                         }
                     )
                     logger.warning(
@@ -6054,7 +6083,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                         app_name,
                         instance_id,
                         instance_name or "unknown",
-                        exc,
+                        safe_error,
                     )
                     if strict_instance_errors:
                         raise
@@ -6067,11 +6096,16 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
         labels = []
         for err in instance_errors:
             label = err.get("name") or err.get("id") or "unknown"
-            labels.append(f"{label}: {err.get('error')}")
-        instance_warning = (
-            f"{app_name} instance fetch failed for {len(instance_errors)} instance(s): "
-            + "; ".join(labels)
-        )
+            labels.append(label)
+        if labels:
+            instance_warning = (
+                f"{app_name} instance fetch failed for {len(instance_errors)} instance(s): "
+                + "; ".join(labels)
+            )
+        else:
+            instance_warning = (
+                f"{app_name} instance fetch failed for {len(instance_errors)} instance(s)."
+            )
         tautulli_warning = _append_warning(tautulli_warning, instance_warning)
         if not results:
             raise RuntimeError(instance_warning)
@@ -7051,7 +7085,7 @@ def api_tautulli_match_diagnostics():
         },
         "cache": {
             "instance_id": instance_id,
-            "cache_path": cache_path or "",
+            "cache_path": _safe_log_path(cache_path) if cache_path else "",
             "memory_ts": _safe_int(memory_entry.get("ts")) if memory_entry else 0,
             "memory_age_seconds": _age_seconds(memory_entry.get("ts")) if memory_entry else None,
             "disk_ts": disk_ts,
