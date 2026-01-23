@@ -8,7 +8,10 @@ services:
       - "9595:8787"
     environment:
       - SORTARR_CONFIG_PATH=/data/Sortarr.env
+      - SORTARR_CONFIG_PATH=/data/Sortarr.env
       - CACHE_SECONDS=300
+      # Optional: Map container paths to host paths for the UI
+      # - RADARR_PATH_MAP=/movies:/mnt/media/movies
     volumes:
       - "./data:/data"
       # Optional: Mount .env for persistence if using default paths

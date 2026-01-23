@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "v0.7.3"
+APP_VERSION = "0.7.4"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -1303,6 +1303,12 @@ def _write_env_file(path: str, values: dict):
         "RADARR_URL_3",
         "RADARR_API_KEY_3",
         "RADARR_NAME_3",
+        "SONARR_PATH_MAP",
+        "SONARR_PATH_MAP_2",
+        "SONARR_PATH_MAP_3",
+        "RADARR_PATH_MAP",
+        "RADARR_PATH_MAP_2",
+        "RADARR_PATH_MAP_3",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
         "TAUTULLI_METADATA_LOOKUP_LIMIT",
@@ -1534,6 +1540,12 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
         url = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
         api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
         name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
+        path_map_raw = str(os.environ.get(f"{prefix}_PATH_MAP{suffix}") or "").strip()
+        path_map = None
+        if ":" in path_map_raw:
+            parts = path_map_raw.split(":", 1)
+            path_map = (parts[0].strip(), parts[1].strip())
+
         if not (url and api_key):
             continue
         instances.append(
@@ -1543,8 +1555,10 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
                 "name": name,
                 "url": url,
                 "api_key": api_key,
+                "path_map": path_map,
             }
         )
+
     if len(instances) == 1:
         if not instances[0]["name"]:
             instances[0]["name"] = label
@@ -5579,9 +5593,15 @@ def _compute_radarr_item(
 
 
 def _apply_instance_meta(rows: list[dict], instance: dict):
+    path_map = instance.get("path_map")
+    src, dst = path_map if path_map else (None, None)
     for row in rows:
         row["InstanceId"] = instance.get("id", "")
         row["InstanceName"] = instance.get("name", "")
+        if src and dst:
+            path = row.get("Path")
+            if path and path.startswith(src):
+                row["Path"] = path.replace(src, dst, 1)
 
 
 def _cache_entry_has_data(entry: dict | None) -> bool:
@@ -6241,6 +6261,9 @@ def setup():
             "SONARR_NAME_3": request.form.get("sonarr_name_3", "").strip(),
             "SONARR_URL_3": _normalize_url(request.form.get("sonarr_url_3", "")),
             "SONARR_API_KEY_3": request.form.get("sonarr_api_key_3", "").strip(),
+            "SONARR_PATH_MAP": request.form.get("sonarr_path_map", "").strip(),
+            "SONARR_PATH_MAP_2": request.form.get("sonarr_path_map_2", "").strip(),
+            "SONARR_PATH_MAP_3": request.form.get("sonarr_path_map_3", "").strip(),
             "RADARR_NAME": request.form.get("radarr_name", "").strip(),
             "RADARR_URL": _normalize_url(request.form.get("radarr_url", "")),
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
@@ -6250,6 +6273,9 @@ def setup():
             "RADARR_NAME_3": request.form.get("radarr_name_3", "").strip(),
             "RADARR_URL_3": _normalize_url(request.form.get("radarr_url_3", "")),
             "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
+            "RADARR_PATH_MAP": request.form.get("radarr_path_map", "").strip(),
+            "RADARR_PATH_MAP_2": request.form.get("radarr_path_map_2", "").strip(),
+            "RADARR_PATH_MAP_3": request.form.get("radarr_path_map_3", "").strip(),
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
             "TAUTULLI_METADATA_LOOKUP_LIMIT": tautulli_lookup_limit,
