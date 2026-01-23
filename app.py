@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.6.12"
+APP_VERSION = "0.7.0"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -6879,6 +6879,82 @@ def api_tautulli_refresh_item():
     return jsonify({"ok": True, "scope": "library", "refreshed": refreshed})
 
 
+
+
+@app.route("/api/<app_name>/health")
+@_auth_required
+def api_arr_health(app_name: str):
+    app_name = (app_name or "").strip().lower()
+    if app_name not in ("sonarr", "radarr"):
+        return jsonify({"error": "unknown app"}), 404
+
+    cfg = _get_config()
+    instances = cfg.get(f"{app_name}_instances") or []
+    configured = bool(instances)
+
+    def _norm_alert(a: dict) -> dict:
+        return {
+            "id": a.get("id"),
+            "source": a.get("source"),
+            "type": a.get("type"),
+            "message": a.get("message"),
+            "wikiUrl": a.get("wikiUrl"),
+        }
+
+    def fetch_one(inst: dict) -> dict:
+        inst_id = str(inst.get("id", ""))
+        inst_name = str(inst.get("name", "") or "").strip() or inst_id or app_name
+        try:
+            payload = _arr_get(
+                inst.get("url") or "",
+                inst.get("api_key") or "",
+                "/api/v3/health",
+                app_name=app_name,
+            )
+            if not isinstance(payload, list):
+                payload = []
+            alerts = [_norm_alert(a) for a in payload if isinstance(a, dict) and (a.get("type") or "").lower() != "ok"]
+            return {"id": inst_id, "name": inst_name, "alerts": alerts, "error": None}
+        except Exception as e:
+            return {"id": inst_id, "name": inst_name, "alerts": [], "error": str(e)}
+
+    results: list[dict] = []
+    if instances:
+        max_workers = min(8, max(1, len(instances)))
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [ex.submit(fetch_one, inst) for inst in instances]
+            for fut in as_completed(futures):
+                try:
+                    results.append(fut.result())
+                except Exception as e:
+                    results.append({"id": "", "name": "", "alerts": [], "error": str(e)})
+
+    # deterministic order for UI
+    results.sort(key=lambda r: (r.get("name") or "", r.get("id") or ""))
+
+    counts = {"notice": 0, "warning": 0, "error": 0}
+    total = 0
+    unreachable = 0
+    for r in results:
+        if r.get("error"):
+            unreachable += 1
+        for a in r.get("alerts") or []:
+            t = (a.get("type") or "").lower()
+            if t in counts:
+                counts[t] += 1
+                total += 1
+
+    return jsonify(
+        {
+            "configured": configured,
+            "app": app_name,
+            "counts": counts,
+            "total": total,
+            "unreachable": unreachable,
+            "instances": results,
+        }
+    )
+
 @app.route("/api/caches/clear", methods=["POST"])
 @_auth_required
 def api_clear_caches():
@@ -6891,6 +6967,176 @@ def api_clear_caches():
     if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
         started = _start_tautulli_background_refresh(cfg)
     return jsonify({"ok": True, "tautulli_refresh_started": started})
+
+class _TTLFilenameCache:
+    def __init__(self, ttl_seconds: int = 1800, max_entries: int = 5000):
+        self._ttl = max(60, int(ttl_seconds or 1800))
+        self._max = max(256, int(max_entries or 5000))
+        self._lock = threading.Lock()
+        # key -> (filename:str, expires_at:float, last_access:float)
+        self._data: dict[tuple[str, str, int, str], tuple[str, float, float]] = {}
+
+    def get(self, key: tuple[str, str, int, str]) -> str | None:
+        now = time.time()
+        with self._lock:
+            entry = self._data.get(key)
+            if not entry:
+                return None
+            filename, expires_at, _last_access = entry
+            if expires_at <= now:
+                self._data.pop(key, None)
+                return None
+            self._data[key] = (filename, expires_at, now)
+            return filename
+
+    def set(self, key: tuple[str, str, int, str], filename: str):
+        if not filename:
+            return
+        now = time.time()
+        expires_at = now + self._ttl
+        with self._lock:
+            self._data[key] = (str(filename), expires_at, now)
+            if len(self._data) <= self._max:
+                return
+            # Evict least-recently-accessed first
+            items = sorted(self._data.items(), key=lambda kv: kv[1][2])
+            for evict_key, _ in items[: max(1, len(items) - self._max)]:
+                self._data.pop(evict_key, None)
+
+
+_FILENAME_CACHE = _TTLFilenameCache(
+    ttl_seconds=_read_int_env("ARR_FILENAME_CACHE_TTL_SECONDS", 1800),
+    max_entries=_read_int_env("ARR_FILENAME_CACHE_MAX_ENTRIES", 5000),
+)
+
+
+def _arr_item_path_for_cover(app_name: str, item_id: int) -> str:
+    if app_name == "sonarr":
+        return f"/api/v3/series/{item_id}"
+    if app_name == "radarr":
+        return f"/api/v3/movie/{item_id}"
+    raise ValueError("unknown app")
+
+
+def _pick_cover_filename(item_json: dict, cover_type: str) -> str | None:
+    want = (cover_type or "").strip().lower()
+    images = item_json.get("images") if isinstance(item_json, dict) else None
+    if not isinstance(images, list):
+        return None
+    best_url = None
+    for img in images:
+        if not isinstance(img, dict):
+            continue
+        ctype = str(img.get("coverType") or "").strip().lower()
+        url = img.get("url") or img.get("remoteUrl") or img.get("href")
+        if not url:
+            continue
+        if want and ctype != want:
+            continue
+        best_url = str(url)
+        break
+    if not best_url:
+        return None
+    try:
+        parts = urlsplit(best_url)
+        path = parts.path or ""
+        filename = path.rsplit("/", 1)[-1].strip()
+        return filename or None
+    except Exception:
+        return None
+
+
+def _stream_arr_mediacover(
+    base_url: str, api_key: str, item_id: int, filename: str, timeout_seconds: int
+):
+    url = f"{base_url}/api/v3/mediacover/{item_id}/{filename}"
+    headers = {"X-Api-Key": api_key}
+    try:
+        upstream = requests.get(
+            url,
+            headers=headers,
+            stream=True,
+            timeout=timeout_seconds if timeout_seconds > 0 else None,
+        )
+    except Exception as exc:
+        logging.warning("Asset proxy upstream error: %s", exc)
+        return jsonify({"error": "upstream fetch failed"}), 502
+
+    if upstream.status_code != 200:
+        try:
+            upstream.close()
+        except Exception:
+            pass
+        if upstream.status_code == 404:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"error": "upstream fetch failed"}), 502
+
+    content_type = upstream.headers.get("Content-Type") or "application/octet-stream"
+    content_length = upstream.headers.get("Content-Length")
+    headers_out = {"Content-Type": content_type, "Cache-Control": "private, max-age=3600"}
+    if content_length:
+        headers_out["Content-Length"] = content_length
+
+    def _generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=65536):
+                if chunk:
+                    yield chunk
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                pass
+
+    return Response(_generate(), headers=headers_out)
+
+
+@app.route("/api/<app_name>/asset/<instance_id>/<cover_type>/<int:item_id>")
+@_auth_required
+def api_arr_asset(app_name: str, instance_id: str, cover_type: str, item_id: int):
+    app_name = (app_name or "").strip().lower()
+    if app_name not in ("sonarr", "radarr"):
+        return jsonify({"error": "unknown app"}), 404
+    cover_type = (cover_type or "").strip()
+    if not cover_type or not re.match(r"^[A-Za-z0-9_-]{1,24}$", cover_type):
+        return jsonify({"error": "invalid cover type"}), 400
+    if item_id <= 0:
+        return jsonify({"error": "invalid id"}), 400
+
+    cfg = _get_config()
+    instances = cfg.get(f"{app_name}_instances") or []
+    if not instances:
+        return jsonify({"error": f"{app_name} is not configured."}), 503
+
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        return jsonify({"error": "unknown instance"}), 404
+
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    cache_key = (app_name, instance.get("id") or "", int(item_id), cover_type.lower())
+    filename = _FILENAME_CACHE.get(cache_key)
+    if not filename:
+        timeout_seconds = _read_arr_timeout_seconds(app_name)
+        try:
+            item_json = _arr_get(
+                base_url,
+                api_key,
+                _arr_item_path_for_cover(app_name, int(item_id)),
+                timeout=timeout_seconds,
+                app_name=app_name,
+            )
+        except Exception as exc:
+            logging.warning("Asset proxy metadata error: %s", exc)
+            return jsonify({"error": "upstream fetch failed"}), 502
+        filename = _pick_cover_filename(item_json or {}, cover_type)
+        if not filename:
+            return jsonify({"error": "not found"}), 404
+        _FILENAME_CACHE.set(cache_key, filename)
+
+    timeout_seconds = _read_arr_timeout_seconds(app_name)
+    return _stream_arr_mediacover(base_url, api_key, int(item_id), filename, timeout_seconds)
+
 
 
 @app.route("/api/diagnostics/tautulli-match", methods=["POST"])

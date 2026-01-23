@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.7.0
+
+### New Features
+
+- Add Sonarr/Radarr health badge system in the toolbar with dismissible alerts and FLIP animations.
+- Add new `/api/{app}/health` endpoint to fetch instance health alerts from Sonarr/Radarr.
+- Add image proxy endpoint `/api/{app}/asset/{instance}/{coverType}/{id}` to stream posters directly from Sonarr/Radarr.
+- Add Radarr movie poster hover tooltip on title cells.
+- Add Sonarr series poster in the expanded series panel header.
+- Add tri-state chip filters: click to include (+), click again to exclude (-), click again to disable.
+- Add negated filter token support (`-prefix`) for excluding items via advanced query.
+- Add perf overlay (toggle with **Ctrl+Shift+P**) showing FPS, long tasks, render time, visible rows, and DOM counts.
+- Add benchmark mode (`?bench=1&app=radarr&rows=N`) to render synthetic datasets without connecting to Sonarr/Radarr.
+- Add `?images=0` query param to disable all image loading.
+
+### UI Improvements
+
+- Improve date/time formatting: use locale-aware 12h/24h display, prettier month names.
+- Add Announced, In Cinemas, and Released status labels for Radarr.
+- Add Video column group toggle alongside existing Language and Tautulli groups.
+- Add column width sync for virtualized rows to prevent jitter during scroll.
+- Fetch and display health badges on tab switch and status poll.
+- Improve scroll lock during season toggle clicks in Sonarr expansions.
+
+### Performance
+
+- Add `virtualRows` render flag for optional row virtualization (Radarr enabled by default).
+- Add TTL filename cache for cover image lookups to reduce repeated metadata fetches.
+- Add pre-hydration overscan window for virtualized rows to reduce visible pop-in.
+- Integrate perf overlay render timing into the render finalize step.
+
+### Documentation
+
+- Document perf overlay, benchmark mode, and image preview options in README.
+
 ## 0.6.12
 
 ### Maintenance

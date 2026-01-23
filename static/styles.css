@@ -1,4 +1,17 @@
+body {
+  font-family: var(--font-sans);
+}
+
+td.right,
+.num-cell,
+.audio-channels-cell {
+  font-family: var(--font-sans);
+}
+
 :root {
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-mono: Inter, system-ui, sans-serif;
+
 
   --bg: #f1f3f6;
 
@@ -23,13 +36,15 @@
 
   --border: #d8dee5;
 
-  --accent: #f59e0b;
+  --accent: #f0bbfd;
 
   --accent-rgb: 245, 158, 11;
 
   --match-ok: #16a34a;
 
   --match-warn: #b45309;
+
+  --match-bad: #dc2626;
 
   --match-future: #7c3aed;
 
@@ -174,16 +189,18 @@ html[data-theme="dark"] {
 
   --progress-bg: #252526;
 
-  --text: #e5e7eb;
+  --text: #e5e7ebe8;
 
   --muted: #9ca3af;
   --muted-rgb: 156, 163, 175;
 
   --border: #2f2f2f;
 
-  --accent: #fbbf24;
+  --chip-border-hover: #dadada;
 
-  --accent-rgb: 251, 191, 36;
+  --accent: #dadada;
+
+  --accent-rgb: 36, 201, 251;
 
   --match-ok: #4ade80;
 
@@ -215,7 +232,7 @@ html[data-theme="dark"] {
 
   --mismatch-bg: #2f2317;
 
-  --row-hover: #2a2a2a;
+  --row-hover: rgba(255, 255, 255, 0.014);
 
   --row-refresh-pending: #2c2f33;
 
@@ -282,7 +299,8 @@ html[data-theme="dark"] {
 
 
 
-html, body {
+html,
+body {
 
   margin: 0;
 
@@ -294,7 +312,7 @@ html, body {
 
   color: var(--text);
 
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font-sans);
 
 }
 
@@ -302,6 +320,7 @@ html, body {
 
 html {
   overflow: hidden;
+  scrollbar-gutter: stable;
 }
 
 
@@ -379,6 +398,7 @@ body {
 }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+
   .filters,
   .column-panel {
     backdrop-filter: blur(var(--glass-blur)) saturate(120%);
@@ -440,7 +460,7 @@ body {
 
   justify-content: flex-start;
 
-  margin-top: 8px;
+  margin-top: 15px;
 
   --filters-footer-control-height: 32px;
 
@@ -834,7 +854,7 @@ html[data-theme="dark"] .advanced-warnings {
 
 
 
-.chip-group + .chip-group::before {
+.chip-group+.chip-group::before {
 
   content: "|";
 
@@ -880,6 +900,9 @@ html[data-theme="dark"] .advanced-warnings {
 
   flex-wrap: wrap;
 
+  justify-content: center;
+
+
   gap: 8px;
 
 }
@@ -903,7 +926,6 @@ html[data-theme="dark"] .advanced-warnings {
   will-change: opacity, transform;
 
 }
-
 
 
 .chip-wrap--hidden {
@@ -941,41 +963,179 @@ html[data-theme="dark"] .advanced-warnings {
 }
 
 
-
 .chip {
+  position: relative;
+
+  --chip-pos-border-hover: var(--match-ok);
+  --chip-neg-border-hover: var(--match-bad);
+  --chip-border-hover: var(--border);
 
   border: 1px solid var(--border);
 
-  background: transparent;
 
-  padding: 4px 8px;
-
-  border-radius: 999px;
-
-  font-size: 0.9em;
-
+  background:
+    linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.10),
+      rgba(255, 255, 255, 0.02) 55%,
+      rgba(0, 0, 0, 0.10) 100%),
+    var(--glass-surface);
+  padding: 4px 6px;
+  border-radius: 15x;
+  font-size: 0.90em;
   font-weight: 500;
-
 }
+
+
+
 
 
 
 .chip:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 10px 24px rgba(0, 0, 0, 0.22);
+}
 
-  border-color: var(--accent);
-
+.chip:active {
+  transform: translateY(0);
+  box-shadow:
+    inset 0 2px 8px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 
 
-.chip.active {
 
-  border-color: var(--accent);
 
-  background: var(--row-hover);
 
+
+
+.chip>* {
+  position: relative;
+  z-index: 1;
 }
 
+.chip--pos:hover {
+  border-color: var(--match-ok);
+}
+
+.chip--neg:hover {
+  border-color: var(--match-bad);
+}
+
+/* Assign per-state hover border var */
+.chip--pos {
+  --chip-border-hover: var(--chip-pos-border-hover);
+}
+
+.chip--neg {
+  --chip-border-hover: var(--chip-neg-border-hover);
+}
+
+
+.chip:not(.chip--pos):not(.chip--neg):hover {
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+
+
+html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
+  border-color: #f0bbfd;
+}
+
+
+
+
+.chip::after {
+  opacity: 0.18;
+  /* slightly subtler */
+  background: linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.42) 0%,
+      rgba(255, 255, 255, 0.10) 22%,
+      rgba(255, 255, 255, 0.00) 55%);
+}
+
+
+
+/* Ensure chip content sits above the ::after layer */
+.chip>* {
+  position: relative;
+  z-index: 1;
+}
+
+
+.chip--pos {
+  border-color: rgba(78, 179, 112, 0.5);
+  color: var(--match-ok);
+  background:
+    linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.00) 100%),
+    rgba(22, 163, 74, 0.12);
+}
+
+
+.chip--neg {
+  border-color: rgba(179, 78, 78, 0.5);
+  color: var(--match-bad);
+  background:
+    linear-gradient(to bottom,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.00) 100%),
+    rgba(220, 38, 38, 0.12);
+}
+
+
+
+/* + / − prefix */
+.chip--pos::before,
+.chip--neg::before {
+  display: inline-block;
+  font-weight: 700;
+  width: 1.1em;
+  text-align: center;
+  margin-right: 6px;
+}
+
+
+.chip--pos::before {
+  content: "+";
+}
+
+.chip--neg::before {
+  content: "−";
+}
+
+
+
+
+
+/* + green shine */
+.chip--pos::after {
+  background: linear-gradient(to bottom,
+      rgba(22, 163, 74, 0.30) 0%,
+      rgba(22, 163, 74, 0.08) 24%,
+      rgba(22, 163, 74, 0.00) 60%);
+}
+
+/* - red shine */
+.chip--neg::after {
+  background: linear-gradient(to bottom,
+      rgba(220, 38, 38, 0.30) 0%,
+      rgba(220, 38, 38, 0.08) 24%,
+      rgba(220, 38, 38, 0.00) 60%);
+}
+
+
+
+.chip:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.12),
+    0 0 0 4px rgba(var(--accent-rgb), 0.45),
+    0 10px 24px rgba(0, 0, 0, 0.22);
+}
 
 
 .chip-advanced {
@@ -1436,6 +1596,197 @@ html[data-theme="dark"] .column-panel {
 
 }
 
+.health-badges {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.health-badges-slot {
+  display: inline-flex;
+  align-items: center;
+}
+
+.health-badge__icon {
+  display: inline-flex;
+  align-items: center;
+  line-height: 1;
+  transform: translateY(-2px);
+}
+
+.health-badge {
+  position: relative;
+  padding: 2px 35px 2px 8px;
+  border-radius: 999px;
+  font-size: 0.75em;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+
+  line-height: 1.9;
+
+  background: var(--panel-surface-soft);
+  overflow: hidden;
+  /* clip sheen to pill */
+  isolation: isolate;
+
+  --badge-glow: 255, 255, 255;
+  /* fallback for hover shadow */
+
+  transition: filter 160ms ease, opacity 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+/* sheen overlay base (no white gradient here) */
+.health-badge::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.55;
+  transition: opacity 180ms ease, transform 220ms ease;
+  transform: translateY(0);
+}
+
+/* content above sheen */
+.health-badge>* {
+  position: relative;
+  z-index: 1;
+}
+
+/* text truncation */
+.health-badge__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: center;
+  flex: 1;
+  white-space: nowrap;
+}
+
+/* state colors */
+.health-badge--ok {
+  --badge-glow: 22, 163, 74;
+  border-color: var(--match-ok);
+  color: var(--match-ok);
+  background: rgba(22, 163, 74, 0.10);
+}
+
+.health-badge--notice {
+  --badge-glow: var(--accent-rgb);
+  border-color: rgba(var(--accent-rgb), 0.65);
+  color: var(--accent);
+  background: rgba(var(--accent-rgb), 0.10);
+}
+
+.health-badge--warning {
+  --badge-glow: 251, 191, 36;
+  border-color: var(--match-warn);
+  color: var(--match-warn);
+  background: rgba(251, 191, 36, 0.10);
+}
+
+.health-badge--error {
+  --badge-glow: 220, 38, 38;
+  border-color: var(--match-bad);
+  color: var(--match-bad);
+  background: rgba(220, 38, 38, 0.10);
+}
+
+/* colored sheen per state */
+.health-badge--ok::before {
+  background: linear-gradient(to bottom,
+      rgba(22, 163, 74, 0.32) 0%,
+      rgba(22, 163, 74, 0.16) 35%,
+      rgba(22, 163, 74, 0.06) 60%,
+      rgba(22, 163, 74, 0.00) 100%);
+}
+
+.health-badge--notice::before {
+  background: linear-gradient(to bottom,
+      rgba(251, 191, 36, 0.35) 0%,
+      rgba(251, 191, 36, 0.18) 35%,
+      rgba(251, 191, 36, 0.06) 60%,
+      rgba(251, 191, 36, 0.00) 100%);
+}
+
+.health-badge--warning::before {
+  background: linear-gradient(to bottom,
+      rgba(251, 191, 36, 0.35) 0%,
+      rgba(251, 191, 36, 0.18) 35%,
+      rgba(251, 191, 36, 0.06) 60%,
+      rgba(251, 191, 36, 0.00) 100%);
+}
+
+.health-badge--error::before {
+  background: linear-gradient(to bottom,
+      rgba(220, 38, 38, 0.35) 0%,
+      rgba(220, 38, 38, 0.18) 35%,
+      rgba(220, 38, 38, 0.06) 60%,
+      rgba(220, 38, 38, 0.00) 100%);
+}
+
+/* hover glow */
+.health-badge:hover {
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 0 0 2px rgba(var(--badge-glow), 0.45),
+    inset 0 0 18px rgba(var(--badge-glow), 0.22),
+    0 6px 14px rgba(0, 0, 0, 0.18);
+}
+
+.health-badge:hover::before {
+  opacity: 0.95;
+  transform: translateY(-1px);
+}
+
+.health-badge:active {
+  transform: translateY(0);
+  filter: brightness(1.03);
+}
+
+.health-badge.is-dismissing {
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+  pointer-events: none;
+}
+
+/* close button */
+.health-badge__close {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  /* you didn’t have right set, add it */
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  transition: transform 120ms ease, opacity 120ms ease;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.85;
+  z-index: 2;
+}
+
+.health-badge__close:hover {
+  opacity: 1;
+  transform: translateY(-50%) scale(1.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+  .health-badge,
+  .health-badge::before,
+  .health-badge__close {
+    transition: none;
+  }
+}
 
 
 .diag-cell {
@@ -1468,7 +1819,7 @@ html[data-theme="dark"] .column-panel {
 
   font-size: 0.8em;
 
-  line-height: 1.2;
+  line-height: 1;
 
   padding: 2px 6px;
 
@@ -1661,6 +2012,17 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
 
 
 
+
+.lang-cell .lang-list {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.lang-cell .lang-toggle,
+.lang-cell .mixed-badge-inline {
+  flex: 0 0 auto;
+}
+
 .lang-cell-truncated {
 
   white-space: nowrap;
@@ -1670,20 +2032,38 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
 
 
 .lang-cell-truncated .lang-list {
+  flex: 1 1 auto;
 
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
-
+  max-width: 100%;
   overflow: hidden;
-
   text-overflow: ellipsis;
-
   white-space: nowrap;
-
 }
 
-
-
 .lang-cell-truncated.is-expanded {
+
+  .lang-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .lang-main {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .lang-more {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
 
   white-space: normal;
 
@@ -1704,6 +2084,18 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
 }
 
 
+
+
+.lang-cell-truncated.is-expanded .lang-summary {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.lang-cell-truncated.is-expanded .lang-main {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
 
 .lang-list {
 
@@ -1763,7 +2155,9 @@ button {
 
 
 
-button:hover { border-color: var(--accent); }
+button:hover {
+  border-color: var(--accent);
+}
 
 
 
@@ -1843,13 +2237,24 @@ input[type="checkbox"] {
 
 
 
-.status { color: var(--muted); font-size: 0.9em; }
+.status {
+  color: var(--muted);
+  font-size: 0.9em;
+}
 
-.version-badge { color: var(--muted); font-size: 0.8em; }
+.version-badge {
+  color: var(--muted);
+  font-size: 0.8em;
+}
 
-.last-updated { color: var(--muted); font-size: 0.8em; }
+.last-updated {
+  color: var(--muted);
+  font-size: 0.8em;
+}
 
-.muted { color: var(--muted); }
+.muted {
+  color: var(--muted);
+}
 
 
 
@@ -1885,7 +2290,9 @@ button:disabled {
 
 @keyframes spin {
 
-  to { transform: rotate(360deg); }
+  to {
+    transform: rotate(360deg);
+  }
 
 }
 
@@ -2211,9 +2618,9 @@ button:disabled {
 
 .status-pill.status-pill--pending {
 
-  color: var(--text);
+  color: rgb(135, 159, 189);
 
-  border-color: var(--accent);
+  border-color: rgb(29, 127, 255);
 
   background: linear-gradient(120deg, rgba(var(--accent-rgb), 0.08), rgba(var(--accent-rgb), 0.18), rgba(var(--accent-rgb), 0.08));
 
@@ -2226,12 +2633,56 @@ button:disabled {
 
 
 .status-pill.status-pill--loaded {
-  color: var(--text);
+  color: rgb(137, 177, 134);
   border-color: var(--match-ok);
   background: linear-gradient(120deg, rgba(var(--match-ok-rgb), 0.08), rgba(var(--match-ok-rgb), 0.18), rgba(var(--match-ok-rgb), 0.08));
   background-size: 200% 100%;
   animation: status-pill-sheen 2.8s var(--motion-ease) infinite;
 }
+
+
+/* Light mode visibility pass for animated status pills */
+html:not([data-theme="dark"]) .status-pill.status-pill--pending {
+  /* darker text for contrast on light backgrounds */
+  color: rgba(80, 60, 0, 0.92);
+
+  /* stronger, warmer border so it reads on white */
+  border-color: rgba(var(--accent-rgb), 0.85);
+
+  /* more opaque fill, less “washed out” */
+  background: linear-gradient(120deg,
+      rgba(var(--accent-rgb), 0.18),
+      rgba(var(--accent-rgb), 0.34),
+      rgba(var(--accent-rgb), 0.18));
+
+  background-size: 200% 100%;
+
+  /* subtle inner edge so it doesn't disappear on pale surfaces */
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--accent-rgb), 0.22),
+    0 1px 0 rgba(0, 0, 0, 0.06);
+
+  animation: status-pill-sheen 2.8s var(--motion-ease) infinite;
+}
+
+html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
+  color: rgba(10, 70, 18, 0.92);
+  border-color: rgba(var(--match-ok-rgb), 0.85);
+
+  background: linear-gradient(120deg,
+      rgba(var(--match-ok-rgb), 0.16),
+      rgba(var(--match-ok-rgb), 0.30),
+      rgba(var(--match-ok-rgb), 0.16));
+
+  background-size: 200% 100%;
+
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--match-ok-rgb), 0.20),
+    0 1px 0 rgba(0, 0, 0, 0.06);
+
+  animation: status-pill-sheen 2.8s var(--motion-ease) infinite;
+}
+
 
 .status-pill.status-pill--active {
 
@@ -2401,15 +2852,17 @@ button:disabled {
 
 
 
-.spacer { flex: 1; }
+.spacer {
+  flex: 1;
+}
 
 
 
 .table-wrap {
 
   margin-top: 12px;
-
-  overflow: auto;
+  overflow-x: auto;
+  overflow-y: scroll;
 
   border: 1px solid var(--border);
 
@@ -2491,7 +2944,7 @@ table {
 
   min-width: 100%;
 
-  width: max-content;
+  width: auto;
 
   background-clip: padding-box;
 
@@ -2515,7 +2968,7 @@ table {
   --cap-Instance: auto;
   --cap-QualityProfile: auto;
   --cap-ReleaseGroup: auto;
-  --cap-Tags: auto;
+  --cap-Tags: 220px;
   --cap-Studio: auto;
   --cap-OriginalLanguage: auto;
   --cap-Genres: auto;
@@ -2536,17 +2989,53 @@ table.stable-columns {
 
   table-layout: auto;
 
+
 }
+
 
 table[data-app="radarr"] {
 
-  table-layout: fixed;
+  table-layout: auto;
+  --cap-RuntimeMins: auto;
+  --cap-FileSizeGB: auto;
+  --cap-GBPerHour: auto;
+  --cap-BitrateMbps: auto;
 
+  --cap-Status: auto;
+  --cap-Instance: auto;
+  --cap-QualityProfile: auto;
+  --cap-ReleaseGroup: auto;
+  --cap-Tags: auto;
+
+  --cap-Studio: auto;
+  --cap-OriginalLanguage: auto;
+  --cap-Genres: auto;
+
+  --cap-Edition: auto;
+  --cap-CustomFormats: auto;
+
+  --cap-VideoQuality: auto;
+  --cap-Resolution: auto;
+  --cap-VideoCodec: auto;
+  --cap-VideoHDR: auto;
+
+  --cap-AudioCodec: auto;
+  --cap-AudioChannels: auto;
+  --cap-Languages: auto;
+  --cap-AudioLanguages: auto;
+  --cap-SubtitleLanguages: auto;
 }
 
 
 
-th, td {
+
+
+
+
+
+th,
+td {
+
 
   padding: 8px 10px;
 
@@ -2618,253 +3107,7 @@ td[data-col="Title"] {
 
 }
 
-table[data-app="radarr"] {
-  --title-expand-gutter: 0px;
-}
-
-th[data-col="ContentHours"],
-td[data-col="ContentHours"] {
-  width: var(--cap-ContentHours);
-  min-width: var(--cap-ContentHours);
-  max-width: var(--cap-ContentHours);
-}
-
-th[data-col="RuntimeMins"],
-td[data-col="RuntimeMins"] {
-  width: var(--cap-RuntimeMins);
-  min-width: var(--cap-RuntimeMins);
-  max-width: var(--cap-RuntimeMins);
-}
-
-th[data-col="EpisodesCounted"],
-td[data-col="EpisodesCounted"] {
-  width: var(--cap-EpisodesCounted);
-  min-width: var(--cap-EpisodesCounted);
-  max-width: var(--cap-EpisodesCounted);
-}
-
-th[data-col="SeasonCount"],
-td[data-col="SeasonCount"] {
-  width: var(--cap-SeasonCount);
-  min-width: var(--cap-SeasonCount);
-  max-width: var(--cap-SeasonCount);
-}
-
-th[data-col="MissingCount"],
-td[data-col="MissingCount"] {
-  width: var(--cap-MissingCount);
-  min-width: var(--cap-MissingCount);
-  max-width: var(--cap-MissingCount);
-}
-
-th[data-col="CutoffUnmetCount"],
-td[data-col="CutoffUnmetCount"] {
-  width: var(--cap-CutoffUnmetCount);
-  min-width: var(--cap-CutoffUnmetCount);
-  max-width: var(--cap-CutoffUnmetCount);
-}
-
-th[data-col="AvgEpisodeSizeGB"],
-td[data-col="AvgEpisodeSizeGB"] {
-  width: var(--cap-AvgEpisodeSizeGB);
-  min-width: var(--cap-AvgEpisodeSizeGB);
-  max-width: var(--cap-AvgEpisodeSizeGB);
-}
-
-th[data-col="TotalSizeGB"],
-td[data-col="TotalSizeGB"] {
-  width: var(--cap-TotalSizeGB);
-  min-width: var(--cap-TotalSizeGB);
-  max-width: var(--cap-TotalSizeGB);
-}
-
-th[data-col="FileSizeGB"],
-td[data-col="FileSizeGB"] {
-  width: var(--cap-FileSizeGB);
-  min-width: var(--cap-FileSizeGB);
-  max-width: var(--cap-FileSizeGB);
-}
-
-th[data-col="GBPerHour"],
-td[data-col="GBPerHour"] {
-  width: var(--cap-GBPerHour);
-  min-width: var(--cap-GBPerHour);
-  max-width: var(--cap-GBPerHour);
-}
-
-th[data-col="BitrateMbps"],
-td[data-col="BitrateMbps"] {
-  width: var(--cap-BitrateMbps);
-  min-width: var(--cap-BitrateMbps);
-  max-width: var(--cap-BitrateMbps);
-}
-
-table[data-app="radarr"] th[data-col="VideoQuality"],
-table[data-app="radarr"] td[data-col="VideoQuality"] {
-  width: var(--cap-VideoQuality);
-  min-width: var(--cap-VideoQuality);
-  max-width: var(--cap-VideoQuality);
-}
-
-table[data-app="radarr"] th[data-col="Resolution"],
-table[data-app="radarr"] td[data-col="Resolution"] {
-  width: var(--cap-Resolution);
-  min-width: var(--cap-Resolution);
-  max-width: var(--cap-Resolution);
-}
-
-table[data-app="radarr"] th[data-col="VideoCodec"],
-table[data-app="radarr"] td[data-col="VideoCodec"] {
-  width: var(--cap-VideoCodec);
-  min-width: var(--cap-VideoCodec);
-  max-width: var(--cap-VideoCodec);
-}
-
-table[data-app="radarr"] th[data-col="AudioCodec"],
-table[data-app="radarr"] td[data-col="AudioCodec"] {
-  width: var(--cap-AudioCodec);
-  min-width: var(--cap-AudioCodec);
-  max-width: var(--cap-AudioCodec);
-}
-
-th[data-col="AudioChannels"],
-td[data-col="AudioChannels"] {
-  width: var(--cap-AudioChannels);
-  min-width: var(--cap-AudioChannels);
-  max-width: var(--cap-AudioChannels);
-}
-
-th[data-col="Status"],
-td[data-col="Status"] {
-  width: var(--cap-Status);
-  min-width: var(--cap-Status);
-  max-width: var(--cap-Status);
-}
-
-th[data-col="Instance"],
-td[data-col="Instance"] {
-  width: var(--cap-Instance);
-  min-width: var(--cap-Instance);
-  max-width: var(--cap-Instance);
-}
-
-th[data-col="QualityProfile"],
-td[data-col="QualityProfile"] {
-  width: var(--cap-QualityProfile);
-  min-width: var(--cap-QualityProfile);
-  max-width: var(--cap-QualityProfile);
-}
-
-th[data-col="ReleaseGroup"],
-td[data-col="ReleaseGroup"] {
-  width: var(--cap-ReleaseGroup);
-  min-width: var(--cap-ReleaseGroup);
-  max-width: var(--cap-ReleaseGroup);
-}
-
-th[data-col="Tags"],
-td[data-col="Tags"] {
-  width: var(--cap-Tags);
-  min-width: var(--cap-Tags);
-  max-width: var(--cap-Tags);
-}
-
-th[data-col="Studio"],
-td[data-col="Studio"] {
-  width: var(--cap-Studio);
-  min-width: var(--cap-Studio);
-  max-width: var(--cap-Studio);
-}
-
-th[data-col="OriginalLanguage"],
-td[data-col="OriginalLanguage"] {
-  width: var(--cap-OriginalLanguage);
-  min-width: var(--cap-OriginalLanguage);
-  max-width: var(--cap-OriginalLanguage);
-}
-
-th[data-col="Genres"],
-td[data-col="Genres"] {
-  width: var(--cap-Genres);
-  min-width: var(--cap-Genres);
-  max-width: var(--cap-Genres);
-}
-
-th[data-col="Edition"],
-td[data-col="Edition"] {
-  width: var(--cap-Edition);
-  min-width: var(--cap-Edition);
-  max-width: var(--cap-Edition);
-}
-
-th[data-col="CustomFormats"],
-td[data-col="CustomFormats"] {
-  width: var(--cap-CustomFormats);
-  min-width: var(--cap-CustomFormats);
-  max-width: var(--cap-CustomFormats);
-}
-
-th[data-col="Languages"],
-td[data-col="Languages"] {
-  width: var(--cap-Languages);
-  min-width: var(--cap-Languages);
-  max-width: var(--cap-Languages);
-}
-
-th[data-col="AudioLanguages"],
-td[data-col="AudioLanguages"] {
-  width: var(--cap-AudioLanguages);
-  min-width: var(--cap-AudioLanguages);
-  max-width: var(--cap-AudioLanguages);
-}
-
-th[data-col="SubtitleLanguages"],
-td[data-col="SubtitleLanguages"] {
-  width: var(--cap-SubtitleLanguages);
-  min-width: var(--cap-SubtitleLanguages);
-  max-width: var(--cap-SubtitleLanguages);
-}
-
-th[data-col="VideoHDR"],
-td[data-col="VideoHDR"] {
-  width: var(--cap-VideoHDR);
-  min-width: var(--cap-VideoHDR);
-  max-width: var(--cap-VideoHDR);
-}
-
-th[data-col="Path"],
-
-td[data-col="Path"] {
-
-  width: var(--path-col-width);
-
-  min-width: var(--path-col-width);
-
-  max-width: var(--path-col-width);
-
-}
-
-td[data-col="Path"] {
-
-  white-space: nowrap;
-
-  overflow: hidden;
-
-  text-overflow: ellipsis;
-
-}
-
-th[data-col="Path"],
-
-td[data-col="Path"] {
-
-  text-align: left;
-
-}
-
-
-
-
+/* Column sizing normalized. See bottom of file: NORMALIZED COLUMN SIZING panel. */
 
 .audio-codec-wrap {
 
@@ -2910,7 +3153,6 @@ td[data-col="Path"] {
 
   text-align: center;
 
-  font-variant-numeric: tabular-nums;
 
 }
 
@@ -2919,6 +3161,7 @@ td[data-col="Path"] {
   max-width: 100%;
 
   min-width: 0;
+
 
 }
 
@@ -2934,7 +3177,6 @@ td[data-col="Path"] {
 
   align-items: baseline;
 
-  font-variant-numeric: tabular-nums;
 
 }
 
@@ -2943,6 +3185,7 @@ td[data-col="Path"] {
 .num-int {
 
   text-align: right;
+
 
 }
 
@@ -2953,6 +3196,8 @@ td[data-col="Path"] {
   text-align: center;
 
   width: var(--num-dot-width, 0.4ch);
+
+
 
 }
 
@@ -2974,9 +3219,13 @@ td[data-col="Path"] {
 }
 
 
-tbody tr.row-mismatch { background: var(--mismatch-bg); }
+tbody tr.row-mismatch {
+  background: var(--mismatch-bg);
+}
 
-tbody tr.row-mismatch td { background: var(--mismatch-bg); }
+tbody tr.row-mismatch td {
+  background: var(--mismatch-bg);
+}
 
 
 tbody tr.row-selected,
@@ -2985,9 +3234,13 @@ tbody tr.row-selected td {
 }
 
 
-tbody tr:hover { background: var(--row-hover); }
+tbody tr:hover {
+  background: var(--row-hover);
+}
 
-tbody tr:hover td { background: var(--row-hover); }
+tbody tr:hover td {
+  background: var(--row-hover);
+}
 
 tbody tr.row-selected:hover td {
   background: var(--row-hover);
@@ -3045,19 +3298,33 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-success {
 
-  0% { background-color: rgba(16, 140, 70, 0); }
+  0% {
+    background-color: rgba(16, 140, 70, 0);
+  }
 
-  12% { background-color: var(--row-refresh-success-strong); }
+  12% {
+    background-color: var(--row-refresh-success-strong);
+  }
 
-  30% { background-color: rgba(16, 140, 70, 0); }
+  30% {
+    background-color: rgba(16, 140, 70, 0);
+  }
 
-  46% { background-color: var(--row-refresh-success-mid); }
+  46% {
+    background-color: var(--row-refresh-success-mid);
+  }
 
-  62% { background-color: rgba(16, 140, 70, 0); }
+  62% {
+    background-color: rgba(16, 140, 70, 0);
+  }
 
-  78% { background-color: var(--row-refresh-success-low); }
+  78% {
+    background-color: var(--row-refresh-success-low);
+  }
 
-  100% { background-color: rgba(16, 140, 70, 0); }
+  100% {
+    background-color: rgba(16, 140, 70, 0);
+  }
 
 }
 
@@ -3065,19 +3332,33 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-fail {
 
-  0% { box-shadow: inset 0 0 0 0 rgba(234, 90, 90, 0); }
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(234, 90, 90, 0);
+  }
 
-  12% { box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.26); }
+  12% {
+    box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.26);
+  }
 
-  30% { box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0); }
+  30% {
+    box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0);
+  }
 
-  46% { box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.22); }
+  46% {
+    box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.22);
+  }
 
-  62% { box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0); }
+  62% {
+    box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0);
+  }
 
-  78% { box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.18); }
+  78% {
+    box-shadow: inset 0 0 0 9999px rgba(234, 90, 90, 0.18);
+  }
 
-  100% { box-shadow: inset 0 0 0 0 rgba(234, 90, 90, 0); }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(234, 90, 90, 0);
+  }
 
 }
 
@@ -3085,19 +3366,33 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-partial {
 
-  0% { box-shadow: inset 0 0 0 0 rgba(245, 199, 66, 0); }
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(245, 199, 66, 0);
+  }
 
-  12% { box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.26); }
+  12% {
+    box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.26);
+  }
 
-  30% { box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0); }
+  30% {
+    box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0);
+  }
 
-  46% { box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.22); }
+  46% {
+    box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.22);
+  }
 
-  62% { box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0); }
+  62% {
+    box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0);
+  }
 
-  78% { box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.18); }
+  78% {
+    box-shadow: inset 0 0 0 9999px rgba(245, 199, 66, 0.18);
+  }
 
-  100% { box-shadow: inset 0 0 0 0 rgba(245, 199, 66, 0); }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(245, 199, 66, 0);
+  }
 
 }
 
@@ -3105,15 +3400,25 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-pending {
 
-  0% { box-shadow: inset 0 0 0 0 rgba(0, 0, 0, 0); }
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(0, 0, 0, 0);
+  }
 
-  25% { box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.18); }
+  25% {
+    box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.18);
+  }
 
-  50% { box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.32); }
+  50% {
+    box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.32);
+  }
 
-  75% { box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.16); }
+  75% {
+    box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0.16);
+  }
 
-  100% { box-shadow: inset 0 0 0 0 rgba(0, 0, 0, 0); }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(0, 0, 0, 0);
+  }
 
 }
 
@@ -3121,15 +3426,25 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-focus {
 
-  0% { box-shadow: inset 0 0 0 0 var(--row-focus); }
+  0% {
+    box-shadow: inset 0 0 0 0 var(--row-focus);
+  }
 
-  18% { box-shadow: inset 0 0 0 9999px var(--row-focus); }
+  18% {
+    box-shadow: inset 0 0 0 9999px var(--row-focus);
+  }
 
-  40% { box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0); }
+  40% {
+    box-shadow: inset 0 0 0 9999px rgba(0, 0, 0, 0);
+  }
 
-  62% { box-shadow: inset 0 0 0 9999px var(--row-focus); }
+  62% {
+    box-shadow: inset 0 0 0 9999px var(--row-focus);
+  }
 
-  100% { box-shadow: inset 0 0 0 0 var(--row-focus); }
+  100% {
+    box-shadow: inset 0 0 0 0 var(--row-focus);
+  }
 
 }
 
@@ -3137,30 +3452,28 @@ tbody tr.row-refresh-focus td {
 
 @keyframes row-refresh-spin {
 
-  from { transform: translateY(-0.5px) rotate(0deg); }
+  from {
+    transform: translateY(-0.5px) rotate(0deg);
+  }
 
-  to { transform: translateY(-0.5px) rotate(360deg); }
+  to {
+    transform: translateY(-0.5px) rotate(360deg);
+  }
 
 }
 
 
 
-.right { text-align: center; }
+.right {
+  text-align: center;
+}
 
 
 
 
-td[data-col="AudioCodec"],
-td[data-col="AudioLanguages"],
-td[data-col="SubtitleLanguages"] {
-
+td[data-col="AudioCodec"] {
   max-width: 360px;
-
-  white-space: normal;
-
 }
-
-
 
 td[data-col="Path"] {
 
@@ -3264,15 +3577,25 @@ table.stable-columns td[data-col="Path"] {
 
 
 
-.brandName { font-size: 1.1rem; font-weight: 700; }
+.brandName {
+  font-size: 1.1rem;
+  font-weight: 700;
+}
 
-.brandSub { font-size: 0.8rem; color: var(--muted); }
+.brandSub {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
 
 
 
-th[data-sort] { user-select: none; }
+th[data-sort] {
+  user-select: none;
+}
 
-th[data-sort]:hover { opacity: 0.95; }
+th[data-sort]:hover {
+  opacity: 0.95;
+}
 
 
 
@@ -3294,11 +3617,15 @@ th[data-sort]:hover { opacity: 0.95; }
 
 
 
-th.active-sort .sort-indicator { opacity: 1; }
+th.active-sort .sort-indicator {
+  opacity: 1;
+}
 
 
 
-.col-hidden { display: none; }
+.col-hidden {
+  display: none;
+}
 
 
 
@@ -3457,14 +3784,36 @@ tr.series-child-row--open .series-expansion {
 
 .series-expansion-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+}
+
+.series-expansion-poster {
+  width: auto;
+  height: 200px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--panel-surface-soft);
+  padding: 6px;
+  box-shadow: var(--panel-shadow);
+}
+
+.series-expansion-poster--empty {
+  opacity: 0.25;
+}
+
+.series-expansion-poster-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .series-expansion-title {
-  font-weight: 600;
-  font-size: 0.95em;
+  display: none;
 }
 
 .series-expansion-actions {
@@ -3593,6 +3942,9 @@ tr.series-child-row--open .series-expansion {
   padding: 0 10px;
   max-height: 0;
   overflow: hidden;
+  contain: layout paint;
+  scroll-behavior: smooth;
+
   opacity: 0;
   transform: translate3d(0, -6px, 0);
   pointer-events: none;
@@ -3697,8 +4049,7 @@ tr.series-child-row--open .series-expansion {
   font-size: 0.85em;
   color: var(--muted);
   letter-spacing: 0.02em;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font-sans);
 }
 
 .series-episode-title {
@@ -3738,18 +4089,17 @@ tr.series-child-row--open .series-expansion {
 }
 
 .series-episode-runtime {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--font-sans);
 }
 
 .series-episode-custom-score,
 .series-episode-cutoff,
 .series-episode-monitored {
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--font-sans);
 }
 
 .series-episode-size {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-variant-numeric: tabular-nums;
+  font-family: var(--font-sans);
   color: var(--text);
 }
 
@@ -3778,15 +4128,620 @@ tr.series-child-row--open .series-expansion {
 }
 
 @keyframes series-skeleton-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* Perf overlay (Phase 0) */
+.perf-overlay {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 9999;
+  font-size: 12px;
+  line-height: 1.25;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.78);
+  color: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  pointer-events: none;
+  max-width: 280px;
+}
+
+.perf-overlay.hidden {
+  display: none;
+}
+
+.perf-overlay__row {
+  margin: 2px 0;
+}
+
+.perf-overlay__hint {
+  opacity: 0.75;
+  margin-top: 6px;
+}
+
+
+/* Virtual table body spacers (Phase 1) */
+.virtual-spacer-row td.virtual-spacer-cell {
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  height: 0px;
+}
+
+
+/* Containment hints (Phase 3) */
+.table-wrap {
+  contain: layout paint;
+}
+
+tbody tr {
+  contain: layout paint;
+}
+
+.settings-modal,
+.column-panel,
+.advanced-help {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 500px;
+}
+
+table[data-app="radarr"] td[data-col="AudioCodec"],
+table[data-app="radarr"] td[data-col="AudioLanguages"],
+table[data-app="radarr"] td[data-col="SubtitleLanguages"],
+table[data-app="radarr"] td[data-col="AudioCodecMixed"],
+table[data-app="radarr"] td[data-col="AudioLanguagesMixed"],
+table[data-app="radarr"] td[data-col="SubtitleLanguagesMixed"] {
+  white-space: nowrap !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+
+/* Force language columns to a single line (Sonarr + Radarr) */
+td[data-col="AudioLanguages"],
+td[data-col="SubtitleLanguages"],
+td[data-col="Languages"],
+td[data-col="AudioLanguagesMixed"],
+td[data-col="SubtitleLanguagesMixed"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* If the cell contains nested spans/divs, clamp them too */
+td[data-col="AudioLanguages"] *,
+td[data-col="SubtitleLanguages"] *,
+td[data-col="Languages"] *,
+td[data-col="AudioLanguagesMixed"] *,
+td[data-col="SubtitleLanguagesMixed"] * {
+  white-space: nowrap;
+}
+
+/* Give the Mixed columns more room */
+th[data-col="AudioLanguagesMixed"],
+td[data-col="AudioLanguagesMixed"],
+th[data-col="SubtitleLanguagesMixed"],
+td[data-col="SubtitleLanguagesMixed"] {
+  width: 220px;
+}
+
+/* Let inner content shrink correctly (prevents hard clipping in flex/grid) */
+td[data-col="AudioLanguagesMixed"]>*,
+td[data-col="SubtitleLanguagesMixed"]>* {
+  min-width: 0;
+}
+
+/* Force Audio Channels to single line with ellipsis */
+td[data-col="AudioChannels"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Allow inner flex/grid content to shrink properly */
+td[data-col="AudioChannels"]>* {
+  min-width: 0;
+}
+
+/* Last Watched: keep single-line */
+td[data-col="LastWatched"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+td[data-col="LastWatched"]>* {
+  min-width: 0;
+}
+
+.chip[data-query^="airing:"] {
+  min-width: 92px;
+  display: inline-flex;
+  justify-content: center;
+}
+
+td[data-col="TitleSlug"],
+th[data-col="TitleSlug"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+  position: relative;
+  /* tweak this */
+  width: 260px;
+}
+
+/* ===========================
+   NORMALIZED COLUMN SIZING
+   Keep all column widths in one place, like a spreadsheet config panel.
+   Edit the variables below (the mapping rules reference only these vars).
+   =========================== */
+
+/* Per-app knob: Sonarr has an expander gutter, Radarr does not. */
+table[data-app="radarr"] {
+  --title-expand-gutter: 0px;
+}
+
+/* Default caps (shared). Override inside table[data-app="sonarr"] or table[data-app="radarr"] if needed. */
+table[data-app] {
+  /* Title / Path */
+  --w-Title: var(--title-col-width);
+  --w-Path: var(--path-col-width);
+
+  /* Core numeric columns */
+  --w-ContentHours: var(--cap-ContentHours, auto);
+  --w-RuntimeMins: var(--cap-RuntimeMins, auto);
+  --w-EpisodesCounted: var(--cap-EpisodesCounted, auto);
+  --w-SeasonCount: var(--cap-SeasonCount, auto);
+  --w-MissingCount: var(--cap-MissingCount, auto);
+  --w-CutoffUnmetCount: var(--cap-CutoffUnmetCount, auto);
+  --w-AvgEpisodeSizeGB: var(--cap-AvgEpisodeSizeGB, auto);
+  --w-TotalSizeGB: var(--cap-TotalSizeGB, auto);
+  --w-FileSizeGB: var(--cap-FileSizeGB, auto);
+  --w-GBPerHour: var(--cap-GBPerHour, auto);
+  --w-BitrateMbps: var(--cap-BitrateMbps, auto);
+
+  /* Media details */
+  --w-VideoQuality: var(--cap-VideoQuality, auto);
+  --w-Resolution: var(--cap-Resolution, auto);
+  --w-VideoCodec: var(--cap-VideoCodec, auto);
+  --w-AudioCodec: var(--cap-AudioCodec, auto);
+  --w-AudioChannels: var(--cap-AudioChannels, auto);
+  --w-VideoHDR: var(--cap-VideoHDR, auto);
+
+  /* Metadata columns */
+  --w-Status: var(--cap-Status, auto);
+  --w-Instance: var(--cap-Instance, auto);
+  --w-QualityProfile: var(--cap-QualityProfile, auto);
+  --w-ReleaseGroup: var(--cap-ReleaseGroup, auto);
+  --w-Tags: var(--cap-Tags, auto);
+  --w-Studio: var(--cap-Studio, auto);
+  --w-OriginalLanguage: var(--cap-OriginalLanguage, auto);
+  --w-Genres: var(--cap-Genres, auto);
+  --w-Edition: var(--cap-Edition, auto);
+  --w-CustomFormats: var(--cap-CustomFormats, auto);
+  --w-Languages: var(--cap-Languages, auto);
+  --w-AudioLanguages: var(--cap-AudioLanguages, auto);
+  --w-SubtitleLanguages: var(--cap-SubtitleLanguages, auto);
+
+  /* Optional: Sonarr-only, keep fairly tight */
+  --w-TitleSlug: 260px;
+}
+
+/* Mapping rules (one selector per column). */
+th[data-col="Title"],
+td[data-col="Title"] {
+  padding-left: calc(10px + var(--title-refresh-gutter) + var(--title-expand-gutter));
+  text-align: left;
+  width: var(--w-Title);
+  min-width: var(--w-Title);
+  max-width: var(--w-Title);
+  position: relative;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+th[data-col="Path"],
+td[data-col="Path"] {
+  width: var(--w-Path);
+  min-width: 400px;
+  max-width: var(--w-Path);
+  text-align: left;
+}
+
+td[data-col="Path"] {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* TitleSlug (Sonarr) */
+th[data-col="TitleSlug"],
+td[data-col="TitleSlug"] {
+  width: var(--w-TitleSlug);
+  min-width: var(--w-TitleSlug);
+  max-width: var(--w-TitleSlug);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Numeric / compact columns */
+th[data-col="ContentHours"],
+td[data-col="ContentHours"] {
+  width: var(--w-ContentHours);
+  min-width: var(--w-ContentHours);
+  max-width: var(--w-ContentHours);
+}
+
+th[data-col="RuntimeMins"],
+td[data-col="RuntimeMins"] {
+  width: var(--w-RuntimeMins);
+  min-width: var(--w-RuntimeMins);
+  max-width: var(--w-RuntimeMins);
+}
+
+th[data-col="EpisodesCounted"],
+td[data-col="EpisodesCounted"] {
+  min-width: 50px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="SeasonCount"],
+td[data-col="SeasonCount"] {
+  width: var(--w-SeasonCount);
+  min-width: var(--w-SeasonCount);
+  max-width: var(--w-SeasonCount);
+}
+
+th[data-col="MissingCount"],
+td[data-col="MissingCount"] {
+  width: var(--w-MissingCount);
+  min-width: var(--w-MissingCount);
+  max-width: var(--w-MissingCount);
+}
+
+th[data-col="CutoffUnmetCount"],
+td[data-col="CutoffUnmetCount"] {
+  width: var(--w-CutoffUnmetCount);
+  min-width: var(--w-CutoffUnmetCount);
+  max-width: var(--w-CutoffUnmetCount);
+}
+
+th[data-col="AvgEpisodeSizeGB"],
+td[data-col="AvgEpisodeSizeGB"] {
+  width: var(--w-AvgEpisodeSizeGB);
+  min-width: var(--w-AvgEpisodeSizeGB);
+  max-width: var(--w-AvgEpisodeSizeGB);
+}
+
+th[data-col="TotalSizeGB"],
+td[data-col="TotalSizeGB"] {
+  width: var(--w-TotalSizeGB);
+  min-width: var(--w-TotalSizeGB);
+  max-width: var(--w-TotalSizeGB);
+}
+
+th[data-col="FileSizeGB"],
+td[data-col="FileSizeGB"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="GBPerHour"],
+td[data-col="GBPerHour"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="BitrateMbps"],
+td[data-col="BitrateMbps"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="VideoQuality"],
+td[data-col="VideoQuality"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="Resolution"],
+td[data-col="Resolution"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="VideoCodec"],
+td[data-col="VideoCodec"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+
+}
+
+th[data-col="AudioCodec"],
+td[data-col="AudioCodec"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="AudioChannels"],
+td[data-col="AudioChannels"] {
+  min-width: 200px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="VideoHDR"],
+td[data-col="VideoHDR"] {
+  width: var(--w-VideoHDR);
+  min-width: var(--w-VideoHDR);
+  max-width: var(--w-VideoHDR);
+}
+
+th[data-col="Status"],
+td[data-col="Status"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="Instance"],
+td[data-col="Instance"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="QualityProfile"],
+td[data-col="QualityProfile"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="ReleaseGroup"],
+td[data-col="ReleaseGroup"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="Tags"],
+td[data-col="Tags"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
 }
 
 
 
+th[data-col="Studio"],
+td[data-col="Studio"] {
+  min-width: 100px;
+  width: max-content;
+  max-width: none;
+}
+
+th[data-col="OriginalLanguage"],
+td[data-col="OriginalLanguage"] {
+  width: var(--w-OriginalLanguage);
+  min-width: var(--w-OriginalLanguage);
+  max-width: var(--w-OriginalLanguage);
+}
+
+th[data-col="Genres"],
+td[data-col="Genres"] {
+  width: var(--w-OriginalLanguage);
+  min-width: var(--w-OriginalLanguage);
+  max-width: var(--w-OriginalLanguage);
+}
+
+th[data-col="Genre"],
+td[data-col="Genre"] {
+  width: var(--w-OriginalLanguage);
+  min-width: var(--w-OriginalLanguage);
+  max-width: var(--w-OriginalLanguage);
+}
+
+th[data-col="Edition"],
+td[data-col="Edition"] {
+  width: var(--w-Edition);
+  min-width: var(--w-Edition);
+  max-width: var(--w-Edition);
+}
+
+th[data-col="CustomFormats"],
+td[data-col="CustomFormats"] {
+  width: var(--w-CustomFormats);
+  min-width: var(--w-CustomFormats);
+  max-width: var(--w-CustomFormats);
+}
+
+th[data-col="Languages"],
+td[data-col="Languages"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: none;
+}
+
+th[data-col="AudioLanguages"],
+td[data-col="AudioLanguages"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: 300px;
+}
+
+th[data-col="SubtitleLanguages"],
+td[data-col="SubtitleLanguages"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: 300px;
+}
+
+table[data-app="radarr"] {
+  --title-expand-gutter: 22px;
+}
+
+/* App specific tweaks */
+table[data-app="radarr"] {
+  --w-TitleSlug: 0px;
+}
+
+th[data-col="UsersWatched"],
+td[data-col="UsersWatched"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: 100px;
+}
 
 
+th[data-col="watchtimehours"],
+td[data-col="watchtimehours"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: 100px;
+}
+
+th[data-col="totalwatchtime"],
+td[data-col="totalwatchtime"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: 100px;
+}
 
 
+th[data-col="LastWatched"],
+td[data-col="LastWatched"] {
+  min-width: 100px;
+  width: var(--w-OriginalLanguage);
+  max-width: none;
+}
 
+table[data-app="radarr"] th[data-col="Studio"],
+table[data-app="radarr"] td[data-col="Studio"] {
+  min-width: 220px;
+  width: var(--w-OriginalLanguage);
+  max-width: 220px;
+}
 
+table[data-app="radarr"] {
+  --cap-Studio: 300px;
+}
+
+table[data-app="radarr"] th[data-col="Genres"],
+table[data-app="radarr"] td[data-col="Genres"] {
+  min-width: 300px;
+  width: var(--w-OriginalLanguage);
+  max-width: 300px;
+}
+
+table[data-app="radarr"] th[data-col="LastSearchTime"],
+table[data-app="radarr"] td[data-col="LastSearchTime"] {
+  min-width: 150px;
+  width: var(--w-OriginalLanguage);
+  max-width: 150px;
+}
+
+table[data-app="radarr"] th[data-col="Languages"],
+table[data-app="radarr"] td[data-col="Languages"] {
+  min-width: 220px;
+  width: var(--w-OriginalLanguage);
+  max-width: 220px;
+}
+
+table[data-app="radarr"] th[data-col="AudioLanguages"],
+table[data-app="radarr"] td[data-col="AudioLanguages"] {
+  min-width: 220px;
+  width: var(--w-OriginalLanguage);
+  max-width: 220px;
+}
+
+table[data-app="radarr"] th[data-col="SubtitleLanguages"],
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
+  min-width: 220px;
+  width: var(--w-OriginalLanguage);
+  max-width: 220px;
+}
+
+table[data-app="radarr"] th[data-col="LastWatched"],
+table[data-app="radarr"] td[data-col="LastWatched"] {
+  min-width: 150px;
+  width: var(--w-OriginalLanguage);
+  max-width: 150px;
+}
+
+.radarr-poster-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 190px;
+  height: 285px;
+  padding: 6px;
+  border-radius: 12px;
+  background: var(--panel-surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--panel-shadow);
+  opacity: 0;
+  transform: translate3d(0, 6px, 0);
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+  z-index: 9999;
+}
+
+.radarr-poster-tooltip.is-visible {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
+.radarr-poster-tooltip__img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 10px;
+  background: var(--panel-surface-soft);
+}
+
+/* When keyboard focus moves, the browser scrolls the focused row into view.
+   These keep it aligned instead of "slightly scrolled". */
+.series-episode-scroll {
+  scroll-padding-top: 42px;
+  /* tweak: should be >= your .series-episode-header height */
+}
+
+.series-episode-row {
+  scroll-margin-top: 42px;
+  /* match scroll-padding-top */
+}
+
+/* Optional: if header height differs on mobile, adjust via media query */
+@media (max-width: 700px) {
+  .series-episode-scroll {
+    scroll-padding-top: 48px;
+  }
+
+  .series-episode-row {
+    scroll-margin-top: 48px;
+  }
+}

@@ -7,6 +7,8 @@ const refreshTabBtn = document.getElementById("refreshTabBtn");
 const progressStatusEl = document.getElementById("progressStatus");
 const tautulliStatusEl = document.getElementById("tautulliStatus");
 const cacheStatusEl = document.getElementById("cacheStatus");
+const healthBadgesEl = document.getElementById("healthBadges");
+const healthStatusRowEl = document.getElementById("healthStatusRow");
 const statusRowEl = document.getElementById("statusRow");
 const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
 const statusPillEl = document.getElementById("statusPill");
@@ -57,6 +59,157 @@ const TABLE_SCROLL_SNAP_MIN_MS = 140;
 const TABLE_SCROLL_SNAP_MAX_MS = 260;
 const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
+
+function focusNoScroll(el) {
+  if (!el) return;
+  try {
+    el.focus({ preventScroll: true });
+  } catch {
+    el.focus();
+  }
+}
+
+function withWrapScrollLock(fn) {
+  const wrap = document.querySelector(".table-wrap");
+  if (!wrap) return fn();
+  const x = wrap.scrollLeft;
+  const y = wrap.scrollTop;
+  fn();
+  requestAnimationFrame(() => {
+    wrap.scrollLeft = x;
+    wrap.scrollTop = y;
+  });
+}
+
+
+// Perf overlay (Phase 0)
+const PERF_OVERLAY_STORAGE_KEY = "Sortarr-perf-overlay";
+function isPerfOverlayEnabled() {
+  try {
+    return localStorage.getItem(PERF_OVERLAY_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function setPerfOverlayEnabled(enabled) {
+  try {
+    localStorage.setItem(PERF_OVERLAY_STORAGE_KEY, enabled ? "1" : "0");
+  } catch { }
+}
+
+let perfOverlay = null;
+const perfOverlayState = {
+  enabled: false,
+  fps: 0,
+  frames: 0,
+  lastFpsAt: 0,
+  longTasks: 0,
+  lastLongTaskAt: 0,
+  lastRenderMs: null,
+  lastRowsTotal: 0,
+  lastRowsVisible: 0,
+  lastDomRows: 0,
+  lastDomCells: 0,
+};
+
+function initPerfOverlay() {
+  if (perfOverlay) return;
+  perfOverlayState.enabled = isPerfOverlayEnabled();
+  const el = document.createElement("div");
+  el.id = "perfOverlay";
+  el.className = "perf-overlay hidden";
+  el.innerHTML = `
+    <div class="perf-overlay__row"><strong>Perf</strong> <span id="perfOverlayState"></span></div>
+    <div class="perf-overlay__row">FPS: <span id="perfOverlayFps">0</span> | Long tasks: <span id="perfOverlayLong">0</span></div>
+    <div class="perf-overlay__row">Render: <span id="perfOverlayRender">-</span> ms</div>
+    <div class="perf-overlay__row">Rows: <span id="perfOverlayRows">-</span></div>
+    <div class="perf-overlay__row">DOM: <span id="perfOverlayDom">-</span></div>
+    <div class="perf-overlay__row perf-overlay__hint">Toggle: Ctrl+Shift+P</div>
+  `;
+  document.body.appendChild(el);
+  perfOverlay = el;
+
+  // Long tasks (best-effort)
+  try {
+    if ("PerformanceObserver" in window) {
+      const obs = new PerformanceObserver(list => {
+        const entries = list.getEntries();
+        if (entries && entries.length) {
+          perfOverlayState.longTasks += entries.length;
+          perfOverlayState.lastLongTaskAt = Date.now();
+          schedulePerfOverlayUpdate();
+        }
+      });
+      // "longtask" is not supported everywhere.
+      obs.observe({ entryTypes: ["longtask"] });
+    }
+  } catch { }
+
+  // FPS loop
+  const tick = (ts) => {
+    if (!perfOverlay) return;
+    if (!perfOverlayState.lastFpsAt) perfOverlayState.lastFpsAt = ts;
+    perfOverlayState.frames += 1;
+    const dt = ts - perfOverlayState.lastFpsAt;
+    if (dt >= 500) {
+      perfOverlayState.fps = Math.round((perfOverlayState.frames * 1000) / dt);
+      perfOverlayState.frames = 0;
+      perfOverlayState.lastFpsAt = ts;
+      schedulePerfOverlayUpdate();
+    }
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+
+  applyPerfOverlayVisibility();
+  schedulePerfOverlayUpdate();
+}
+
+function applyPerfOverlayVisibility() {
+  if (!perfOverlay) return;
+  perfOverlayState.enabled = isPerfOverlayEnabled();
+  perfOverlay.classList.toggle("hidden", !perfOverlayState.enabled);
+}
+
+let perfOverlayFrame = null;
+function schedulePerfOverlayUpdate() {
+  if (!perfOverlay || !perfOverlayState.enabled) return;
+  if (perfOverlayFrame) return;
+  perfOverlayFrame = requestAnimationFrame(() => {
+    perfOverlayFrame = null;
+    updatePerfOverlay();
+  });
+}
+
+function updatePerfOverlay() {
+  if (!perfOverlay || !perfOverlayState.enabled) return;
+  const s = perfOverlayState;
+  const stateEl = document.getElementById("perfOverlayState");
+  const fpsEl = document.getElementById("perfOverlayFps");
+  const longEl = document.getElementById("perfOverlayLong");
+  const renderEl = document.getElementById("perfOverlayRender");
+  const rowsEl = document.getElementById("perfOverlayRows");
+  const domEl = document.getElementById("perfOverlayDom");
+  if (stateEl) stateEl.textContent = "";
+  if (fpsEl) fpsEl.textContent = String(s.fps || 0);
+  if (longEl) longEl.textContent = String(s.longTasks || 0);
+  if (renderEl) renderEl.textContent = s.lastRenderMs == null ? "-" : String(Math.round(s.lastRenderMs));
+  if (rowsEl) rowsEl.textContent = `${s.lastRowsVisible} visible / ${s.lastRowsTotal} total`;
+  if (domEl) domEl.textContent = `${s.lastDomRows} rows, ${s.lastDomCells} cells`;
+}
+
+// Keyboard toggle
+document.addEventListener("keydown", (e) => {
+  if (!e) return;
+  if (e.ctrlKey && e.shiftKey && (e.key === "P" || e.key === "p")) {
+    e.preventDefault();
+    setPerfOverlayEnabled(!isPerfOverlayEnabled());
+    initPerfOverlay();
+    applyPerfOverlayVisibility();
+    schedulePerfOverlayUpdate();
+  }
+}, { passive: false });
+
 const TABLE_SCROLL_ANCHOR_MAX_FRAMES = 90;
 let tableScrollSnapTimer = null;
 let tableScrollSnapInProgress = false;
@@ -594,7 +747,7 @@ function setFiltersCollapsed(collapsed) {
   }
   try {
     localStorage.setItem(FILTERS_COLLAPSED_KEY, filtersCollapsed ? "1" : "0");
-  } catch {}
+  } catch { }
   syncStatusPillVisibility();
   scheduleTableWrapLayout();
 }
@@ -606,6 +759,84 @@ function apiUrl(path) {
     normalized = `/${normalized}`;
   }
   return API_ORIGIN ? `${API_ORIGIN}${normalized}` : normalized;
+}
+
+// Benchmark mode (Phase 0): add ?bench=1&app=radarr&rows=20000&wide=1
+const BENCH_PARAMS = (() => {
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    const enabled = sp.get("bench") === "1" || sp.get("benchmark") === "1";
+    const app = (sp.get("app") || "").toLowerCase();
+    const rows = Number(sp.get("rows") || sp.get("n") || "5000");
+    const wide = sp.get("wide") === "1";
+    return {
+      enabled,
+      app: app === "sonarr" || app === "radarr" ? app : null,
+      rows: Number.isFinite(rows) && rows > 0 ? Math.min(rows, 50000) : 5000,
+      wide,
+    };
+  } catch {
+    return { enabled: false, app: null, rows: 5000, wide: false };
+  }
+})()
+
+const IMAGES_ENABLED = (() => {
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    return sp.get("images") !== "0";
+  } catch (err) {
+    return true;
+  }
+})();
+;
+
+function randomInt(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+function randomFrom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+function makeBenchmarkRows(app, count) {
+  const out = [];
+  const now = Date.now();
+  const studios = ["HBO", "Netflix", "Apple", "BBC", "FX", "Paramount", "Disney"];
+  const codecs = ["H264", "H265", "AV1"];
+  const audio = ["AAC", "EAC3", "DTS", "TrueHD"];
+  for (let i = 0; i < count; i += 1) {
+    const minutes = randomInt(20, 180);
+    const sizeGb = Math.round((Math.random() * 50 + 0.2) * 100) / 100;
+    const gbPerHour = Math.round((sizeGb / (minutes / 60)) * 100) / 100;
+    const dateAdded = new Date(now - randomInt(0, 365) * 86400000).toISOString();
+    const title = app === "sonarr"
+      ? `Series ${i} Season ${randomInt(1, 20)}`
+      : `Movie ${i}`;
+    const row = {
+      Title: title,
+      Path: `/media/${app}/${i}`,
+      DateAdded: dateAdded,
+      RuntimeMins: minutes,
+      FileSizeGB: sizeGb,
+      GBPerHour: gbPerHour,
+      BitrateMbps: Math.round((gbPerHour * 1.2) * 100) / 100,
+      VideoCodec: randomFrom(codecs),
+      AudioCodec: randomFrom(audio),
+      Studio: randomFrom(studios),
+      InstanceName: "Bench",
+      InstanceId: "bench",
+      __sortarrKey: `bench-${app}-${i}`,
+    };
+    if (app === "sonarr") {
+      row.SeriesId = i + 1;
+      row.SeasonCount = randomInt(1, 20);
+      row.EpisodeCount = randomInt(10, 300);
+      row.AvgEpisodeSizeGB = Math.round((sizeGb / Math.max(1, row.EpisodeCount)) * 1000) / 1000;
+      row.TotalSizeGB = Math.round((row.AvgEpisodeSizeGB * row.EpisodeCount) * 100) / 100;
+    } else {
+      row.MovieId = i + 1;
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 const CSRF_COOKIE_NAME = "sortarr_csrf";
@@ -669,6 +900,30 @@ let tautulliRefreshReloadTimer = null;
 let copyToastEl = null;
 let copyToastTimer = null;
 const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null };
+const healthState = { sonarr: null, radarr: null, lastFetchedAt: { sonarr: 0, radarr: 0 }, dismissed: { sonarr: {}, radarr: {} } };
+const HEALTH_DISMISS_KEY = "Sortarr-health-dismissed";
+
+function loadHealthDismissed() {
+  try {
+    const raw = localStorage.getItem(HEALTH_DISMISS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      if (parsed.sonarr && typeof parsed.sonarr === "object") healthState.dismissed.sonarr = parsed.sonarr;
+      if (parsed.radarr && typeof parsed.radarr === "object") healthState.dismissed.radarr = parsed.radarr;
+    }
+  } catch (_) { }
+}
+
+function saveHealthDismissed() {
+  try {
+    localStorage.setItem(HEALTH_DISMISS_KEY, JSON.stringify(healthState.dismissed));
+  } catch (_) { }
+}
+
+loadHealthDismissed();
+
+
 const progressDisplayByApp = {
   sonarr: {
     processed: 0,
@@ -728,6 +983,63 @@ const SKIPPED_REASON_SORT_ORDER = {
   other: 2,
 };
 
+
+const SONARR_COLUMNS = new Set([
+  "SeriesType",
+  "OriginalLanguage",
+  "Genres",
+  "LastAired",
+  "MissingCount",
+  "CutoffUnmetCount",
+  "ContentHours",
+  "EpisodesCounted",
+  "SeasonCount",
+  "AvgEpisodeSizeGB",
+  "TotalSizeGB",
+  "Status",
+  "Monitored",
+  "Tags",
+  "ReleaseGroup",
+  "QualityProfile",
+]);
+
+
+const RADARR_COLUMNS = new Set([
+  "SeriesType",
+  "RuntimeMins",
+  "FileSizeGB",
+  "GBPerHour",
+  "BitrateMbps",
+  "Status",
+  "Monitored",
+  "Tags",
+  "ReleaseGroup",
+  "QualityProfile",
+  "Studio",
+  "OriginalLanguage",
+  "Genres",
+  "MissingCount",
+  "CutoffUnmetCount",
+  "HasFile",
+  "IsAvailable",
+  "InCinemas",
+  "LastSearchTime",
+  "Edition",
+  "CustomFormats",
+  "CustomFormatScore",
+  "QualityCutoffNotMet",
+  "Languages",
+]);
+
+
+const VIDEO_COLUMNS = new Set([
+  "VideoHDR",
+  "VideoCodec",
+  "Resolution",
+  "VideoQuality",
+]);
+
+
 const TAUTULLI_COLUMNS = new Set([
   "Diagnostics",
   "PlayCount",
@@ -740,14 +1052,22 @@ const TAUTULLI_COLUMNS = new Set([
 const LANGUAGE_COLUMNS = new Set([
   "AudioLanguages",
   "SubtitleLanguages",
+  "AudioCodec",
+  "AudioChannels",
   "Languages",
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
 ]);
 const COLUMN_GROUPS = {
+  sonarr: Array.from(SONARR_COLUMNS),
+  radarr: Array.from(RADARR_COLUMNS),
+  video: Array.from(VIDEO_COLUMNS),
   language: Array.from(LANGUAGE_COLUMNS),
   tautulli: Array.from(TAUTULLI_COLUMNS),
 };
+
+
+
 const TAUTULLI_FILTER_FIELDS = new Set([
   "mismatch",
   "match",
@@ -841,6 +1161,7 @@ const DEFAULT_RENDER_FLAGS = {
   widthLock: true,
   stabilize: true,
   virtualize: { sonarr: false, radarr: true },
+  virtualRows: { sonarr: false, radarr: true },
 };
 const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "ContentHours",
@@ -922,6 +1243,113 @@ let renderToken = 0;
 let sonarrHeaderNormalized = false;
 const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const pendingStabilizeByApp = { sonarr: false, radarr: false };
+
+let radarrPosterTooltipEl = null;
+let radarrPosterTooltipImg = null;
+let radarrPosterHoverTimer = 0;
+let radarrPosterHoverKey = "";
+
+function ensureRadarrPosterTooltip() {
+  if (radarrPosterTooltipEl) return radarrPosterTooltipEl;
+  const el = document.createElement("div");
+  el.className = "radarr-poster-tooltip";
+  el.setAttribute("aria-hidden", "true");
+  const img = document.createElement("img");
+  img.className = "radarr-poster-tooltip__img";
+  img.alt = "";
+  img.decoding = "async";
+  img.loading = "lazy";
+  el.appendChild(img);
+  document.body.appendChild(el);
+  radarrPosterTooltipEl = el;
+  radarrPosterTooltipImg = img;
+  return el;
+}
+
+function hideRadarrPosterTooltip() {
+  if (radarrPosterHoverTimer) {
+    clearTimeout(radarrPosterHoverTimer);
+    radarrPosterHoverTimer = 0;
+  }
+  radarrPosterHoverKey = "";
+  if (radarrPosterTooltipImg) {
+    radarrPosterTooltipImg.removeAttribute("src");
+  }
+  if (radarrPosterTooltipEl) {
+    radarrPosterTooltipEl.classList.remove("is-visible");
+  }
+}
+
+function positionRadarrPosterTooltip(anchorRect) {
+  if (!radarrPosterTooltipEl || !anchorRect) return;
+  const margin = 10;
+  const width = radarrPosterTooltipEl.offsetWidth || 190;
+  const height = radarrPosterTooltipEl.offsetHeight || 285;
+  let left = anchorRect.right + 12;
+  let top = anchorRect.top + Math.max(0, (anchorRect.height - height) / 2);
+  const maxLeft = window.innerWidth - width - margin;
+  const maxTop = window.innerHeight - height - margin;
+  if (left > maxLeft) left = Math.max(margin, anchorRect.left - width - 12);
+  if (top > maxTop) top = maxTop;
+  if (top < margin) top = margin;
+  radarrPosterTooltipEl.style.left = `${Math.round(left)}px`;
+  radarrPosterTooltipEl.style.top = `${Math.round(top)}px`;
+}
+
+function setupRadarrPosterTooltipDelegation() {
+  if (!IMAGES_ENABLED) return;
+  if (setupRadarrPosterTooltipDelegation._done) return;
+  setupRadarrPosterTooltipDelegation._done = true;
+
+  document.addEventListener("pointerover", (e) => {
+    const target = e.target;
+    if (!target || !(target instanceof Element)) return;
+    const cell = target.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
+    if (!cell) return;
+    const table = cell.closest('table[data-app="radarr"]');
+    if (!table) return;
+    const rowEl = cell.closest('tr[data-row-key], tr[data-id], tr[data-movie-id]');
+    if (!rowEl) return;
+    if (target.closest("button, a, input, select, textarea")) return;
+
+    const key = rowEl.dataset.rowKey || rowEl.dataset.id || rowEl.dataset.movieId || "";
+    const row = key ? (rowCacheByApp.radarr.get(key) || findRowByKey("radarr", key)) : null;
+
+    const movieId =
+      row?.MovieId ?? row?.movieId ?? row?.Id ?? row?.id ??
+      rowEl.dataset.movieId ?? rowEl.dataset.id;
+    if (!movieId) return;
+    const instId = row?.InstanceId ?? row?.instanceId ?? rowEl.dataset.instanceId ?? "radarr-1";
+    const anchorRect = cell.getBoundingClientRect();
+
+    if (radarrPosterHoverTimer) clearTimeout(radarrPosterHoverTimer);
+    const hoverKey = `${String(instId)}:${String(movieId)}`;
+    radarrPosterHoverKey = hoverKey;
+    radarrPosterHoverTimer = setTimeout(() => {
+      radarrPosterHoverTimer = 0;
+      if (!radarrPosterHoverKey || radarrPosterHoverKey !== hoverKey) return;
+      ensureRadarrPosterTooltip();
+      if (!radarrPosterTooltipEl || !radarrPosterTooltipImg) return;
+      radarrPosterTooltipImg.src = `/api/radarr/asset/${encodeURIComponent(String(instId))}/poster/${encodeURIComponent(String(movieId))}`;
+      radarrPosterTooltipEl.classList.add("is-visible");
+      positionRadarrPosterTooltip(anchorRect);
+    }, 150);
+  });
+
+  document.addEventListener("pointerout", (e) => {
+    const target = e.target;
+    if (!target || !(target instanceof Element)) return;
+    const cell = target.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
+    if (!cell) return;
+    const related = e.relatedTarget;
+    if (related && related instanceof Element && cell.contains(related)) return;
+    hideRadarrPosterTooltip();
+  });
+
+  document.addEventListener("scroll", () => hideRadarrPosterTooltip(), true);
+  window.addEventListener("resize", () => hideRadarrPosterTooltip());
+}
+setupRadarrPosterTooltipDelegation._done = false;
 const sonarrExpansionState = {
   expandedSeries: new Set(),
   expandedSeasons: new Set(),
@@ -968,7 +1396,7 @@ function loadRenderFlags() {
     if (stored && typeof stored === "object") {
       Object.assign(flags, stored);
     }
-  } catch {}
+  } catch { }
   if (window.SORTARR_RENDER_FLAGS && typeof window.SORTARR_RENDER_FLAGS === "object") {
     Object.assign(flags, window.SORTARR_RENDER_FLAGS);
   }
@@ -1049,7 +1477,7 @@ function queueRenderPerfSink(perf) {
     headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
     keepalive: true,
-  }).catch(() => {});
+  }).catch(() => { });
 }
 
 function finalizeRenderPerf(perf) {
@@ -1069,6 +1497,7 @@ function finalizeRenderPerf(perf) {
   perf.cacheHitRate = cacheTotal ? Number((perf.cacheHits / cacheTotal).toFixed(3)) : 0;
   renderPerfState.last = perf;
   window.__sortarrRenderPerf = perf;
+  try { perfOverlayState.lastRenderMs = perf.totalMs; schedulePerfOverlayUpdate(); } catch { }
   console.info("[Sortarr perf]", JSON.stringify(perf));
   queueRenderPerfSink(perf);
   perf.finalized = true;
@@ -1621,7 +2050,7 @@ function updateStatusRowVisibility(appState, tautulli) {
     clearStatusCountdown();
     statusCompletionFlashed = false;
     updateStatusCompleteNote("", false);
-  showStatusRow();
+    showStatusRow();
   }
 }
 
@@ -1855,6 +2284,301 @@ function mergeStatusApps(prevApps, nextApps) {
   return merged;
 }
 
+
+function buildHealthTooltip(data, allowedTypes = null) {
+  if (!data) return "";
+  const parts = [];
+  const instances = Array.isArray(data.instances) ? data.instances : [];
+  for (const inst of instances) {
+    const name = inst?.name || inst?.id || "";
+    if (inst?.error) {
+      if (!allowedTypes || allowedTypes.has("error")) parts.push(`${name}: ${inst.error}`);
+      continue;
+    }
+    const alerts = Array.isArray(inst?.alerts) ? inst.alerts : [];
+    for (const a of alerts) {
+      const t = (a?.type || "").toLowerCase();
+      if (allowedTypes && !allowedTypes.has(t)) continue;
+      const msg = (a?.message || "").toString().trim();
+      if (!msg) continue;
+      parts.push(`${name} [${t}]: ${msg}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+function applyFLIP(container, updateFn) {
+  if (!container) return updateFn();
+  const prev = new Map();
+  for (const el of Array.from(container.children)) {
+    const key = el.getAttribute("data-key") || el.id || "";
+    if (!key) continue;
+    prev.set(key, el.getBoundingClientRect());
+  }
+  updateFn();
+  const nextChildren = Array.from(container.children);
+  for (const el of nextChildren) {
+    const key = el.getAttribute("data-key") || el.id || "";
+    if (!key) continue;
+    const first = prev.get(key);
+    if (!first) continue;
+    const last = el.getBoundingClientRect();
+    const dx = first.left - last.left;
+    const dy = first.top - last.top;
+    if (!dx && !dy) continue;
+    el.animate(
+      [{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "translate(0px, 0px)" }],
+      { duration: 220, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" }
+    );
+  }
+}
+
+
+
+function healthSignature(data, type) {
+  if (!data) return "";
+  const instances = Array.isArray(data.instances) ? data.instances : [];
+  const parts = [];
+
+  for (const inst of instances) {
+    const name = inst?.name || inst?.id || "";
+
+    if (type === "error" && inst?.error) {
+      parts.push(`${name}|${inst.error}`);
+      continue;
+    }
+
+    const alerts = Array.isArray(inst?.alerts) ? inst.alerts : [];
+    for (const a of alerts) {
+      const t = (a?.type || "").toLowerCase();
+      if (t !== type) continue;
+      const msg = (a?.message || "").toString().trim();
+      if (!msg) continue;
+      parts.push(`${name}|${msg}`);
+    }
+  }
+
+  parts.sort();
+  return parts.join("\n");
+}
+
+
+
+
+
+function renderHealthStatus(app, data) {
+  if (app !== activeApp) return;
+
+  // Row summary (kept in the status bar)
+  if (healthStatusRowEl) {
+    healthStatusRowEl.textContent = "";
+    healthStatusRowEl.removeAttribute("title");
+    healthStatusRowEl.style.display = "none";
+  }
+
+  if (!healthBadgesEl) return;
+
+  if (!data || !data.configured) {
+    healthBadgesEl.innerHTML = "";
+    healthBadgesEl.removeAttribute("title");
+    return;
+  }
+
+  const counts = data.counts || {};
+  const unreachable = Number(data.unreachable || 0) || 0;
+  const errorCount = Number(counts.error || 0) || 0;
+  const warningCount = Number(counts.warning || 0) || 0;
+  const noticeCount = Number(counts.notice || 0) || 0;
+  const total = Number(data.total || 0) || 0;
+
+  const dismissed = healthState.dismissed?.[app] || {};
+
+  const errSig = healthSignature(data, "error");
+  const warnSig = healthSignature(data, "warning");
+  const noticeSig = healthSignature(data, "notice");
+
+  const show = {
+    unreachable: unreachable > 0 && dismissed.unreachable !== `unreachable:${unreachable}`,
+    error: errorCount > 0 && dismissed.error !== errSig,
+    warning: warningCount > 0 && dismissed.warning !== warnSig,
+    notice: noticeCount > 0 && dismissed.notice !== noticeSig,
+    ok: total === 0 && unreachable === 0 && dismissed.ok !== "1",
+  };
+
+  const container = healthBadgesEl;
+
+  function buildBadge({ key, text, cls, tooltipTypes = null }) {
+    const b = document.createElement("span");
+    b.className = `health-badge ${cls}`;
+    b.setAttribute("data-key", key);
+
+    const label = document.createElement("span");
+    label.className = "health-badge__text";
+    label.innerHTML = text;
+
+
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "health-badge__close";
+    close.setAttribute("aria-label", `Dismiss ${key}`);
+    close.textContent = "×";
+
+    close.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      b.classList.add("is-dismissing");
+
+      // After the fade, remove with FLIP so remaining badges glide into place.
+      window.setTimeout(() => {
+        applyFLIP(container, () => {
+          b.remove();
+        });
+      }, 180);
+
+      const sig =
+        key === "error" ? healthSignature(data, "error")
+          : key === "warning" ? healthSignature(data, "warning")
+            : key === "notice" ? healthSignature(data, "notice")
+              : key === "unreachable" ? `unreachable:${unreachable}`
+                : "1";
+
+      healthState.dismissed[app] = { ...(healthState.dismissed[app] || {}), [key]: sig };
+      saveHealthDismissed();
+    });
+
+    b.appendChild(label);
+    b.appendChild(close);
+
+    const typesSet = tooltipTypes ? new Set(tooltipTypes) : null;
+    b.title = buildHealthTooltip(data, typesSet);
+    if (key === "ok") b.title = "No health issues reported.";
+
+    return b;
+  }
+
+  function summarizeHealthForBadge(data, type, maxLen = 28) {
+    if (!data) return "";
+    const instances = Array.isArray(data.instances) ? data.instances : [];
+
+    const parts = [];
+
+    for (const inst of instances) {
+      const name = inst?.name || inst?.id || "";
+
+      // Treat unreachable as an error item
+      if (type === "error" && inst?.error) {
+        parts.push(`${name}: ${inst.error}`.trim());
+        continue;
+      }
+
+      const alerts = Array.isArray(inst?.alerts) ? inst.alerts : [];
+      for (const a of alerts) {
+        const t = (a?.type || "").toLowerCase();
+        if (t !== type) continue;
+        const msg = (a?.message || "").toString().trim();
+        if (!msg) continue;
+        parts.push(`${name}: ${msg}`.trim());
+      }
+    }
+
+    if (!parts.length) return "";
+
+    const extra = parts.length > 1 ? ` (+${parts.length - 1})` : "";
+    let s = `${parts[0]}${extra}`;
+
+    if (s.length > maxLen) s = s.slice(0, maxLen - 1).trimEnd() + "…";
+    return s;
+  }
+
+
+  applyFLIP(container, () => {
+    container.innerHTML = "";
+    container.classList.add("health-badges");
+
+    // Short summaries for pill text (truncated by summarizeHealthForBadge)
+    const errSummary = summarizeHealthForBadge(data, "error", 50);
+    const warnSummary = summarizeHealthForBadge(data, "warning", 50);
+
+    if (show.unreachable) {
+      container.appendChild(
+        buildBadge({
+          key: "unreachable",
+          text: `Unreach: ${unreachable}`,
+          cls: "health-badge--error",
+          tooltipTypes: ["error"],
+        })
+      );
+    }
+
+    if (show.ok) {
+      container.appendChild(buildBadge({ key: "ok", text: "OK", cls: "health-badge--ok", tooltipTypes: ["ok"] }));
+      return;
+    }
+
+    if (show.error) {
+      container.appendChild(
+        buildBadge({
+          key: "error",
+          text: errSummary
+            ? `<span class="health-badge__icon">⚠️</span> ${errSummary}`
+            : `⚠️ (${errorCount})`,
+          cls: "health-badge--error",
+          tooltipTypes: ["error"],
+        })
+      );
+    }
+
+    if (show.warning) {
+      container.appendChild(
+        buildBadge({
+          key: "warning",
+          text: warnSummary
+            ? `<span class="health-badge__icon">⚠️</span> ${warnSummary}`
+            : `⚠️ (${warningCount})`,
+          cls: "health-badge--warning",
+          tooltipTypes: ["warning"],
+        })
+      );
+    }
+
+    if (show.notice) {
+      container.appendChild(
+        buildBadge({
+          key: "notice",
+          text: `Note ${noticeCount}`,
+          cls: "health-badge--notice",
+          tooltipTypes: ["notice"],
+        })
+      );
+    }
+  });
+
+}
+
+async function fetchHealth({ app = activeApp, silent = false, force = false } = {}) {
+  if (!app) return;
+  const now = Date.now();
+  const last = Number(healthState.lastFetchedAt?.[app] || 0) || 0;
+  if (!force && healthState[app] && now - last < 20000) {
+    renderHealthStatus(app, healthState[app]);
+    return;
+  }
+  try {
+    const res = await fetch(apiUrl(`/api/${app}/health`));
+    if (!res.ok) {
+      if (!silent) console.warn("Health fetch failed", app, res.status);
+      return;
+    }
+    const data = await res.json();
+    healthState[app] = data;
+    healthState.lastFetchedAt[app] = now;
+    renderHealthStatus(app, data);
+  } catch (e) {
+    if (!silent) console.warn("Health fetch error", app, e);
+  }
+}
+
 async function fetchStatus({ silent = false, lite = false } = {}) {
   try {
     const url = lite ? "/api/status?lite=1" : "/api/status";
@@ -1872,6 +2596,7 @@ async function fetchStatus({ silent = false, lite = false } = {}) {
     handleTautulliRefreshState(prevTautulli, statusState.tautulli);
     updateStatusPanel();
     updateLastUpdatedDisplay();
+    fetchHealth({ app: activeApp, silent: true });
     scheduleStatusPoll();
   } catch (e) {
     if (!silent) console.warn("Status fetch failed", e);
@@ -2153,15 +2878,39 @@ function bindChipButtons(rootEl = document) {
     btn.addEventListener("click", () => {
       const query = btn.getAttribute("data-query") || "";
       if (!query) return;
-      const next = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
-      if (next.has(query)) {
-        next.delete(query);
-        btn.classList.remove("active");
+
+      // Tri-state chips:
+      //  - disabled: no token
+      //  - positive: token
+      //  - negative: -token
+      const negToken = `-${query}`;
+      const tokens = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
+
+      const hasPos = tokens.has(query);
+      const hasNeg = tokens.has(negToken);
+
+      // Cycle: off -> + -> - -> off
+      tokens.delete(query);
+      tokens.delete(negToken);
+
+      btn.classList.remove("chip--pos", "chip--neg");
+
+      if (!hasPos && !hasNeg) {
+        tokens.add(query);
+        btn.classList.add("chip--pos");
+        btn.setAttribute("aria-pressed", "true");
+        btn.dataset.state = "pos";
+      } else if (hasPos) {
+        tokens.add(negToken);
+        btn.classList.add("chip--neg");
+        btn.setAttribute("aria-pressed", "true");
+        btn.dataset.state = "neg";
       } else {
-        next.add(query);
-        btn.classList.add("active");
+        btn.setAttribute("aria-pressed", "false");
+        btn.dataset.state = "off";
       }
-      chipQuery = Array.from(next).join(" ");
+
+      chipQuery = Array.from(tokens).join(" ");
       if (tableReadyByApp[activeApp]) {
         pendingStabilizeByApp[activeApp] = true;
       }
@@ -2190,8 +2939,20 @@ function buildInstanceChips() {
       if (inst.id) {
         const query = `instance:${inst.id}`;
         btn.setAttribute("data-query", query);
-        if ((chipQuery || "").split(/\s+/).includes(query)) {
-          btn.classList.add("active");
+        {
+          const tokens = (chipQuery || "").split(/\s+/).filter(Boolean);
+          if (tokens.includes(query)) {
+            btn.classList.add("chip--pos");
+            btn.setAttribute("aria-pressed", "true");
+            btn.dataset.state = "pos";
+          } else if (tokens.includes(`-${query}`)) {
+            btn.classList.add("chip--neg");
+            btn.setAttribute("aria-pressed", "true");
+            btn.dataset.state = "neg";
+          } else {
+            btn.setAttribute("aria-pressed", "false");
+            btn.dataset.state = "off";
+          }
         }
       }
       container.appendChild(btn);
@@ -3427,6 +4188,10 @@ function formatSeriesDate(value) {
 
 function formatDateTimeValue(value) {
   if (!value) return "";
+  // If it's already a Tautulli formatted string, pretty print it
+  if (typeof value === "string" && value.includes(" - ")) {
+    return escapeHtml(formatTautulliRawPretty(value));
+  }
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return escapeHtml(value);
   const day = String(date.getDate()).padStart(2, "0");
@@ -3436,6 +4201,47 @@ function formatDateTimeValue(value) {
   const minutes = String(date.getMinutes()).padStart(2, "0");
   return escapeHtml(`${day}/${month}/${year} - ${hours}:${minutes}`);
 }
+
+
+// Detect 12h vs 24h user preference
+function prefers12Hour() {
+  const opt = Intl.DateTimeFormat().resolvedOptions();
+  if (typeof opt.hour12 === "boolean") return opt.hour12;
+
+  // Fallback inference: format an hour and see if AM/PM appears
+  const s = new Intl.DateTimeFormat(undefined, { hour: "numeric" })
+    .format(new Date("2025-01-01T13:00:00"));
+  return /AM|PM|am|pm/.test(s);
+}
+
+
+
+function formatDateDMY_to_DDMonYYYY(dateStr) {
+  const [dd, mm, yyyy] = dateStr.split("/");
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const m = Number(mm);
+  if (!dd || !mm || !yyyy || m < 1 || m > 12) return dateStr;
+  return `${dd.padStart(2, "0")} ${months[m - 1]} ${yyyy}`;
+}
+
+function formatTautulliRawPretty(ts) {
+  const [date, time] = ts.split(" - ");
+  if (!date || !time) return ts;
+
+  const prettyDate = formatDateDMY_to_DDMonYYYY(date);
+
+  // 24h users -> keep time
+  if (!prefers12Hour()) return `${prettyDate} · ${time}`;
+
+  // Convert to 12h
+  const [hStr, mStr] = time.split(":");
+  const h = Number(hStr);
+  const suffix = h >= 12 ? "PM" : "AM";
+  const hour12 = ((h + 11) % 12) + 1;
+
+  return `${prettyDate} · ${hour12}:${mStr.padStart(2, "0")} ${suffix}`;
+}
+
 
 function buildSeasonMetaText(season) {
   const parts = [];
@@ -3628,6 +4434,9 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
     shell.className = "series-expansion";
     shell.innerHTML = `
         <div class="series-expansion-header">
+          <div class="series-expansion-poster">
+            <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy" decoding="async" />
+          </div>
           <div class="series-expansion-title">Seasons</div>
           <div class="series-expansion-actions">
             <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
@@ -3645,7 +4454,8 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
   }
   const body = shell.querySelector('[data-role="series-expansion-body"]') || shell;
   const statusEl = shell.querySelector('[data-role="series-expansion-status"]');
-  return { shell, body, statusEl };
+  const posterImg = shell.querySelector('[data-role="series-expansion-poster"]');
+  return { shell, body, statusEl, posterImg };
 }
 
 function setSeasonExtrasState(block, enabled) {
@@ -3823,6 +4633,15 @@ function renderSeasonList(container, seriesKey, seasons) {
     toggle.dataset.seriesKey = seriesKey;
     toggle.dataset.season = String(seasonNumber);
 
+    toggle.addEventListener("click", (e) => {
+      withWrapScrollLock(() => {
+        // whatever you currently do to open/close the season
+        // (example: block.classList.toggle("is-open") etc)
+        // leave your existing logic inside here
+      });
+      focusNoScroll(e.currentTarget);
+    });
+
     const label = document.createElement("div");
     label.className = "series-season-title";
     label.textContent = formatSeasonLabel(seasonNumber);
@@ -3946,10 +4765,10 @@ function renderEpisodeList(container, episodes) {
     const seasonKey = container.dataset.seriesKey || "";
     const seasonNumber = container.dataset.season || "";
     if (Number.isFinite(selectedIndex) &&
-        keyboardNavState.level === "episodes" &&
-        seasonKey &&
-        seasonKey === keyboardNavState.seriesKey &&
-        seasonNumber === String(keyboardNavState.seasonNumber)) {
+      keyboardNavState.level === "episodes" &&
+      seasonKey &&
+      seasonKey === keyboardNavState.seriesKey &&
+      seasonNumber === String(keyboardNavState.seasonNumber)) {
       requestAnimationFrame(() => {
         applyEpisodeSelection(container, selectedIndex, { scroll: true });
       });
@@ -3969,10 +4788,10 @@ function renderEpisodeList(container, episodes) {
   const seasonKey = container.dataset.seriesKey || "";
   const seasonNumber = container.dataset.season || "";
   if (Number.isFinite(selectedIndex) &&
-      keyboardNavState.level === "episodes" &&
-      seasonKey &&
-      seasonKey === keyboardNavState.seriesKey &&
-      seasonNumber === String(keyboardNavState.seasonNumber)) {
+    keyboardNavState.level === "episodes" &&
+    seasonKey &&
+    seasonKey === keyboardNavState.seriesKey &&
+    seasonNumber === String(keyboardNavState.seasonNumber)) {
     requestAnimationFrame(() => {
       applyEpisodeSelection(container, selectedIndex, { scroll: true });
     });
@@ -4007,6 +4826,21 @@ async function handleSeriesExpanderClick(btn) {
   cell.textContent = "";
   const expansion = buildSeriesExpansionShell(seriesKey, seriesId, instanceId);
   cell.appendChild(expansion.shell);
+  if (IMAGES_ENABLED && expansion.posterImg && seriesId) {
+    const inst = instanceId ? encodeURIComponent(String(instanceId)) : "";
+    expansion.posterImg.src = inst ? `/api/sonarr/asset/${inst}/poster/${encodeURIComponent(String(seriesId))}` : `/api/sonarr/asset/sonarr-1/poster/${encodeURIComponent(String(seriesId))}`;
+    expansion.posterImg.onerror = () => {
+      expansion.posterImg.removeAttribute("src");
+      const wrap = expansion.posterImg.closest(".series-expansion-poster");
+      if (wrap) wrap.classList.add("series-expansion-poster--empty");
+    };
+    const wrap = expansion.posterImg.closest(".series-expansion-poster");
+    if (wrap) wrap.classList.remove("series-expansion-poster--empty");
+  } else if (expansion.posterImg) {
+    expansion.posterImg.removeAttribute("src");
+    const wrap = expansion.posterImg.closest(".series-expansion-poster");
+    if (wrap) wrap.classList.add("series-expansion-poster--empty");
+  }
   updateSeriesExpansionStatus(expansion.statusEl, "Loading seasons...");
   renderSeriesSkeleton(expansion.body, 4);
   await loadSeriesSeasons(row, seriesKey, expansion);
@@ -5124,6 +5958,9 @@ function formatStatusValue(value) {
   const key = raw.toLowerCase();
   if (key === "ended") return "Ended";
   if (key === "continuing") return "Continuing";
+  if (key === "announced") return "Announced";
+  if (key === "incinemas") return "In Cinemas";
+  if (key === "released") return "Released";
   if (key === "deleted") return "Deleted";
   return escapeHtml(raw);
 }
@@ -5397,30 +6234,68 @@ function parseAdvancedQuery(query) {
   const tautulliWarning = "Tautulli filters are unavailable until configured.";
   let tautulliWarned = false;
 
-  for (const token of tokens) {
+  const invertOp = (op) => {
+    switch (op) {
+      case ">=": return "<";
+      case ">": return "<=";
+      case "<=": return ">";
+      case "<": return ">=";
+      default: return null;
+    }
+  };
+
+  for (const rawToken of tokens) {
+    let token = rawToken;
+    let neg = false;
+
+    // Leading '-' indicates a negated token (exclude).
+    // This is intentionally token-scoped (not a general query language feature beyond this).
+    if (token[0] === "-" && token.length > 1) {
+      neg = true;
+      token = token.slice(1);
+    }
+
+    const addPred = (pred) => {
+      // Guard: never let a predicate exception break filtering.
+      preds.push((row) => {
+        try { return Boolean(pred(row)); } catch (_) { return false; }
+      });
+    };
+
     const comp = token.match(/^([a-zA-Z]+)(>=|<=|=|>|<)(.+)$/);
     if (comp) {
       const field = comp[1].toLowerCase();
+      const op = comp[2];
       if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
-        if (!tautulliWarned) {
-          warnings.push(tautulliWarning);
-          tautulliWarned = true;
-        }
-        preds.push(() => false);
+        if (!tautulliWarned) { warnings.push(tautulliWarning); tautulliWarned = true; }
+        addPred(() => false);
         continue;
       }
       if (!NUMERIC_FIELDS.has(field)) {
         warnings.push(`Field '${field}' does not support numeric comparisons.`);
-        preds.push(() => false);
+        addPred(() => false);
         continue;
       }
       const val = Number(comp[3]);
       if (!Number.isFinite(val)) {
         warnings.push(`Invalid number for '${field}'.`);
-        preds.push(() => false);
+        addPred(() => false);
         continue;
       }
-      preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), comp[2], val));
+
+      if (op === "=") {
+        // Explicit (not via generic predicate inversion): '=' negates to '!='.
+        addPred(row => {
+          const num = parseNumberValue(getFieldValue(row, field), field);
+          if (!Number.isFinite(num)) return false;
+          return neg ? (num !== val) : (num === val);
+        });
+      } else if (neg) {
+        const inv = invertOp(op);
+        addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), inv, val));
+      } else {
+        addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), op, val));
+      }
       continue;
     }
 
@@ -5428,167 +6303,210 @@ function parseAdvancedQuery(query) {
     if (idx > 0) {
       const field = token.slice(0, idx).toLowerCase();
       if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
-        if (!tautulliWarned) {
-          warnings.push(tautulliWarning);
-          tautulliWarned = true;
-        }
-        preds.push(() => false);
+        if (!tautulliWarned) { warnings.push(tautulliWarning); tautulliWarned = true; }
+        addPred(() => false);
         continue;
       }
       const value = token.slice(idx + 1);
+
       if (field === "nosubs") {
         const boolVal = parseBoolValue(value);
         if (boolVal === null) {
           warnings.push(`Invalid value for '${field}' (use true/false).`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => {
+        addPred(row => {
           const hasSubs = hasSubtitleLanguages(row);
-          return boolVal ? !hasSubs : hasSubs;
+          const wantNoSubs = boolVal ? !hasSubs : hasSubs;
+          return neg ? !wantNoSubs : wantNoSubs;
         });
         continue;
       }
+
       if (field === "missing" || field === "cutoff" || field === "cutoffunmet") {
         const boolVal = parseBoolValue(value);
         if (boolVal === null) {
           warnings.push(`Invalid value for '${field}' (use true/false).`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => {
+        addPred(row => {
           const raw = getFieldValue(row, field);
           const count = Number(raw);
           const hasCount = Number.isFinite(count) && count > 0;
-          return boolVal ? hasCount : !hasCount;
+          const want = boolVal ? hasCount : !hasCount;
+          return neg ? !want : want;
         });
         continue;
       }
+
       if (field === "recentlygrabbed" || field === "scene" || field === "airing") {
         const boolVal = parseBoolValue(value);
         if (boolVal === null) {
           warnings.push(`Invalid value for '${field}' (use true/false).`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => Boolean(getFieldValue(row, field)) === boolVal);
+        addPred(row => {
+          const want = (Boolean(getFieldValue(row, field)) === boolVal);
+          return neg ? !want : want;
+        });
         continue;
       }
+
       if (field === "audio") {
-        preds.push(row => matchPattern(getFieldValue(row, "AudioCodec"), value));
+        addPred(row => {
+          const hit = matchPattern(getFieldValue(row, "AudioCodec"), value);
+          return neg ? !hit : hit;
+        });
         continue;
       }
+
       if (field === "neverwatched") {
         const boolVal = parseBoolValue(value);
         if (boolVal === null) {
           warnings.push(`Invalid value for '${field}' (use true/false).`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => {
+        addPred(row => {
           const matched = row.TautulliMatched === true;
           const never = matched && !row.LastWatched;
-          return boolVal ? never : !never;
+          const want = boolVal ? never : !never;
+          return neg ? !want : want;
         });
         continue;
       }
+
       if (field === "mismatch") {
         const boolVal = parseBoolValue(value);
         if (boolVal === null) {
           warnings.push(`Invalid value for '${field}' (use true/false).`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => {
+        addPred(row => {
           const mismatched = row.TautulliMatchStatus === "unmatched";
-          return boolVal ? mismatched : !mismatched;
+          const want = boolVal ? mismatched : !mismatched;
+          return neg ? !want : want;
         });
         continue;
       }
+
       if (field === "matchstatus" || field === "match") {
         const matchPred = getMatchStatusFilterPredicate(value);
         if (matchPred) {
-          preds.push(matchPred);
+          addPred(row => {
+            const hit = matchPred(row);
+            return neg ? !hit : hit;
+          });
           continue;
         }
       }
+
       if (field === "instance") {
-        preds.push(row => (
-          matchPattern(row?.InstanceName ?? "", value) ||
-          matchPattern(row?.InstanceId ?? "", value)
-        ));
+        addPred(row => {
+          const hit = (
+            matchPattern(row?.InstanceName ?? "", value) ||
+            matchPattern(row?.InstanceId ?? "", value)
+          );
+          return neg ? !hit : hit;
+        });
         continue;
       }
-      if (field === "audiolanguages" || field === "audiolang" ||
-          field === "subtitlelanguages" || field === "sublanguages" ||
-          field === "sublang" || field === "subtitles" ||
-          field === "languages") {
+
+      const f = String(field || "").toLowerCase();
+
+      if (f === "audiolanguages" || f === "audiolang" ||
+        f === "subtitlelanguages" || f === "sublanguages" ||
+        f === "sublang" || f === "subtitles" ||
+        f === "languages") {
         const queryValue = normalizeLanguageQuery(value);
-        preds.push(row => matchPattern(
-          normalizeLanguageLabel(getFieldValue(row, field)),
-          queryValue
-        ));
+        addPred(row => {
+          const hit = matchPattern(
+            normalizeLanguageLabel(getFieldValue(row, field)),
+            queryValue
+          );
+          return neg ? !hit : hit;
+        });
         continue;
       }
+
       if (BUCKET_FIELDS.has(field)) {
         const val = Number(value);
         if (!Number.isFinite(val)) {
           warnings.push(`Invalid number for '${field}'.`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
         if (Number.isInteger(val)) {
-          preds.push(row => {
+          addPred(row => {
             const num = parseNumberValue(getFieldValue(row, field), field);
-            return Number.isFinite(num) && num >= val && num < val + 1;
+            if (!Number.isFinite(num)) return false;
+            const inBucket = (num >= val && num < val + 1);
+            return neg ? !inBucket : inBucket;
           });
           continue;
         }
-        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), ">=", val));
+        // Default: >= val, negates to < val.
+        addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), neg ? "<" : ">=", val));
         continue;
       }
+
       if (NUMERIC_FIELDS.has(field)) {
         const val = Number(value);
         if (!Number.isFinite(val)) {
           warnings.push(`Invalid number for '${field}'.`);
-          preds.push(() => false);
+          addPred(() => false);
           continue;
         }
-        preds.push(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), ">=", val));
+        // Default: >= val, negates to < val.
+        addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), neg ? "<" : ">=", val));
         continue;
       }
-      if (field === "videoquality") {
-        if (value.includes("*") || value.includes("?")) {
-          preds.push(row => matchPattern(getFieldValue(row, field), value));
-        } else {
-          const needle = normalizeToken(value);
-          preds.push(row => normalizeToken(getFieldValue(row, field)).includes(needle));
-        }
+
+      if (field === "videoquality" || field === "videocodec" || field === "videohdr") {
+        addPred(row => {
+          const hay = getFieldValue(row, field);
+          let hit;
+          if (value.includes("*") || value.includes("?")) {
+            hit = matchPattern(hay, value);
+          } else {
+            const needle = normalizeToken(value);
+            hit = normalizeToken(hay).includes(needle);
+          }
+          return neg ? !hit : hit;
+        });
         continue;
       }
-      if (field === "videocodec" || field === "videohdr") {
-        if (value.includes("*") || value.includes("?")) {
-          preds.push(row => matchPattern(getFieldValue(row, field), value));
-        } else {
-          const needle = normalizeToken(value);
-          preds.push(row => normalizeToken(getFieldValue(row, field)).includes(needle));
-        }
-        continue;
-      }
+
       if (field === "resolution") {
-        preds.push(row => resolutionMatches(getFieldValue(row, field), value));
+        addPred(row => {
+          const hit = resolutionMatches(getFieldValue(row, field), value);
+          return neg ? !hit : hit;
+        });
         continue;
       }
+
       if (!FIELD_MAP[field]) {
         warnings.push(`Unknown field '${field}'.`);
-        preds.push(() => false);
+        addPred(() => false);
         continue;
       }
-      preds.push(row => matchPattern(getFieldValue(row, field), value));
+
+      addPred(row => {
+        const hit = matchPattern(getFieldValue(row, field), value);
+        return neg ? !hit : hit;
+      });
       continue;
     }
 
-    preds.push(row => matchPattern(getFieldValue(row, "Title"), token) || matchPattern(getFieldValue(row, "Path"), token));
+    // Fallback search: Title or Path
+    addPred(row => {
+      const hit = matchPattern(getFieldValue(row, "Title"), token) || matchPattern(getFieldValue(row, "Path"), token);
+      return neg ? !hit : hit;
+    });
   }
 
   return { preds, warnings };
@@ -5716,7 +6634,11 @@ function clearActiveFilters() {
     changed = true;
   }
   if (changed) {
-    document.querySelectorAll(".chip.active").forEach(btn => btn.classList.remove("active"));
+    document.querySelectorAll(".chip.chip--pos, .chip.chip--neg").forEach(btn => {
+      btn.classList.remove("chip--pos", "chip--neg");
+      btn.setAttribute("aria-pressed", "false");
+      btn.dataset.state = "off";
+    });
     updateAdvancedWarnings([]);
   }
   return changed;
@@ -5777,7 +6699,7 @@ function compareMatchStatusTie(a, b) {
   const bKey = getMatchStatusSortKey(b);
   if (aKey.rank !== bKey.rank) return aKey.rank - bKey.rank;
   if (aKey.rank === MATCH_STATUS_SORT_ORDER.skipped &&
-      bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
+    bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
     if (aKey.reasonRank !== bKey.reasonRank) {
       return aKey.reasonRank - bKey.reasonRank;
     }
@@ -5814,7 +6736,7 @@ function sortData(arr) {
       const bKey = getMatchStatusSortKey(b);
       if (aKey.rank !== bKey.rank) return (aKey.rank - bKey.rank) * dir;
       if (aKey.rank === MATCH_STATUS_SORT_ORDER.skipped &&
-          bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
+        bKey.rank === MATCH_STATUS_SORT_ORDER.skipped) {
         if (aKey.reasonRank !== bKey.reasonRank) {
           return (aKey.reasonRank - bKey.reasonRank) * dir;
         }
@@ -5899,44 +6821,54 @@ const RADARR_VIRTUAL_DEFER_COLUMNS = new Set(
   LAZY_COLUMNS_ARRAY.filter(col => !RADARR_VIRTUAL_EAGER_COLUMNS.has(col))
 );
 const DISPLAY_CACHE_COLUMNS = {
-  AudioCodec: { key: "audioCodec", compute: row => formatAudioCodecCell(
-    row.AudioCodec ?? "",
-    row.AudioCodecMixed,
-    row.AudioCodecAll ?? ""
-  ) },
+  AudioCodec: {
+    key: "audioCodec", compute: row => formatAudioCodecCell(
+      row.AudioCodec ?? "",
+      row.AudioCodecMixed,
+      row.AudioCodecAll ?? ""
+    )
+  },
   ContentHours: { key: "contentHours", compute: row => formatWatchTimeHours(row.ContentHours ?? "") },
-  VideoQuality: { key: "videoQuality", compute: row => {
-    const full = row.VideoQualityAll ?? "";
-    const mixed = row.VideoQualityMixed;
-    const cell = (full || mixed)
-      ? formatMixedValueCell(row.VideoQuality ?? "", full, mixed)
-      : escapeHtml(row.VideoQuality ?? "");
-    return notReportedIfEmpty(cell);
-  } },
-  Resolution: { key: "resolution", compute: row => {
-    const full = row.ResolutionAll ?? "";
-    const mixed = row.ResolutionMixed;
-    const cell = (full || mixed)
-      ? formatMixedValueCell(row.Resolution ?? "", full, mixed)
-      : escapeHtml(row.Resolution ?? "");
-    return notReportedIfEmpty(cell);
-  } },
-  VideoCodec: { key: "videoCodec", compute: row => {
-    const full = row.VideoCodecAll ?? "";
-    const mixed = row.VideoCodecMixed;
-    const cell = (full || mixed)
-      ? formatMixedValueCell(row.VideoCodec ?? "", full, mixed)
-      : escapeHtml(row.VideoCodec ?? "");
-    return notReportedIfEmpty(cell);
-  } },
-  AudioChannels: { key: "audioChannels", compute: row => {
-    const full = row.AudioChannelsAll ?? "";
-    const mixed = row.AudioChannelsMixed;
-    const cell = (full || mixed)
-      ? formatMixedValueCell(row.AudioChannels ?? "", full, mixed, "audio-channels-cell")
-      : formatAudioChannelsCell(escapeHtml(row.AudioChannels ?? ""));
-    return notReportedIfEmpty(cell);
-  } },
+  VideoQuality: {
+    key: "videoQuality", compute: row => {
+      const full = row.VideoQualityAll ?? "";
+      const mixed = row.VideoQualityMixed;
+      const cell = (full || mixed)
+        ? formatMixedValueCell(row.VideoQuality ?? "", full, mixed)
+        : escapeHtml(row.VideoQuality ?? "");
+      return notReportedIfEmpty(cell);
+    }
+  },
+  Resolution: {
+    key: "resolution", compute: row => {
+      const full = row.ResolutionAll ?? "";
+      const mixed = row.ResolutionMixed;
+      const cell = (full || mixed)
+        ? formatMixedValueCell(row.Resolution ?? "", full, mixed)
+        : escapeHtml(row.Resolution ?? "");
+      return notReportedIfEmpty(cell);
+    }
+  },
+  VideoCodec: {
+    key: "videoCodec", compute: row => {
+      const full = row.VideoCodecAll ?? "";
+      const mixed = row.VideoCodecMixed;
+      const cell = (full || mixed)
+        ? formatMixedValueCell(row.VideoCodec ?? "", full, mixed)
+        : escapeHtml(row.VideoCodec ?? "");
+      return notReportedIfEmpty(cell);
+    }
+  },
+  AudioChannels: {
+    key: "audioChannels", compute: row => {
+      const full = row.AudioChannelsAll ?? "";
+      const mixed = row.AudioChannelsMixed;
+      const cell = (full || mixed)
+        ? formatMixedValueCell(row.AudioChannels ?? "", full, mixed, "audio-channels-cell")
+        : formatAudioChannelsCell(escapeHtml(row.AudioChannels ?? ""));
+      return notReportedIfEmpty(cell);
+    }
+  },
   Path: { key: "path", compute: row => escapeHtml(row.Path ?? "") },
 };
 const DISPLAY_CACHE_COLUMN_LIST = Object.keys(DISPLAY_CACHE_COLUMNS);
@@ -6163,37 +7095,37 @@ function getVisibleDisplayColumns(app, hiddenColumns) {
   });
   return visible;
 }
-  function updateColumnScrollHint() {
-    if (!columnsPanel) return;
-    if (columnsPanel.classList.contains("hidden")) {
-      columnsPanel.classList.remove("column-panel--scrollable-down");
-      columnsPanel.style.height = "";
-      columnsPanel.style.maxHeight = "";
-      columnsPanel.style.overflow = "";
-      return;
-    }
-    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
-    const rect = columnsPanel.getBoundingClientRect();
-    const availableHeight = Math.floor(viewportHeight - rect.top - 16);
-    const maxHeight = Math.max(120, availableHeight);
-
-    columnsPanel.style.maxHeight = `${maxHeight}px`;
-    columnsPanel.style.height = "auto";
-    columnsPanel.style.overflow = "hidden";
-
-    const scrollHeight = columnsPanel.scrollHeight;
-    const targetHeight = Math.min(scrollHeight, maxHeight);
-    columnsPanel.style.height = `${targetHeight}px`;
-
-    const clientHeight = columnsPanel.clientHeight;
-    const canScroll = scrollHeight - clientHeight > 2;
-    if (!canScroll && columnsPanel.scrollTop !== 0) {
-      columnsPanel.scrollTop = 0;
-    }
-    columnsPanel.style.overflow = canScroll ? "auto" : "hidden";
-    const atBottom = columnsPanel.scrollTop + clientHeight >= scrollHeight - 1;
-    columnsPanel.classList.toggle("column-panel--scrollable-down", canScroll && !atBottom);
+function updateColumnScrollHint() {
+  if (!columnsPanel) return;
+  if (columnsPanel.classList.contains("hidden")) {
+    columnsPanel.classList.remove("column-panel--scrollable-down");
+    columnsPanel.style.height = "";
+    columnsPanel.style.maxHeight = "";
+    columnsPanel.style.overflow = "";
+    return;
   }
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+  const rect = columnsPanel.getBoundingClientRect();
+  const availableHeight = Math.floor(viewportHeight - rect.top - 16);
+  const maxHeight = Math.max(120, availableHeight);
+
+  columnsPanel.style.maxHeight = `${maxHeight}px`;
+  columnsPanel.style.height = "auto";
+  columnsPanel.style.overflow = "hidden";
+
+  const scrollHeight = columnsPanel.scrollHeight;
+  const targetHeight = Math.min(scrollHeight, maxHeight);
+  columnsPanel.style.height = `${targetHeight}px`;
+
+  const clientHeight = columnsPanel.clientHeight;
+  const canScroll = scrollHeight - clientHeight > 2;
+  if (!canScroll && columnsPanel.scrollTop !== 0) {
+    columnsPanel.scrollTop = 0;
+  }
+  columnsPanel.style.overflow = canScroll ? "auto" : "hidden";
+  const atBottom = columnsPanel.scrollTop + clientHeight >= scrollHeight - 1;
+  columnsPanel.classList.toggle("column-panel--scrollable-down", canScroll && !atBottom);
+}
 
 function updateColumnFilter() {
   if (!columnsPanel) return;
@@ -6353,7 +7285,9 @@ function updateChipVisibility() {
       group.querySelectorAll(".chip").forEach(btn => {
         const query = btn.getAttribute("data-query") || "";
         if (query) hiddenQueries.add(query);
-        btn.classList.remove("active");
+        btn.classList.remove("chip--pos", "chip--neg");
+        btn.setAttribute("aria-pressed", "false");
+        btn.dataset.state = "off";
       });
     }
   });
@@ -6369,7 +7303,9 @@ function updateChipVisibility() {
     if (hideChip) {
       const query = btn.getAttribute("data-query") || "";
       if (query) hiddenQueries.add(query);
-      btn.classList.remove("active");
+      btn.classList.remove("chip--pos", "chip--neg");
+      btn.setAttribute("aria-pressed", "false");
+      btn.dataset.state = "off";
     }
   });
 
@@ -6388,6 +7324,7 @@ function updateChipVisibility() {
 }
 
 function clearTable() {
+  try { teardownVirtual("sonarr"); teardownVirtual("radarr"); } catch { }
   tbody.innerHTML = "";
 }
 
@@ -6616,6 +7553,7 @@ function applyColumnHeaderCaps() {
     if (!col || !HEADER_WIDTH_CAP_COLUMNS.has(col)) return;
     const appAttr = th.getAttribute("data-app");
     if (appAttr && appAttr !== app) return;
+
     if (th.classList.contains("col-hidden")) return;
     const width = measureHeaderCapWidth(th);
     if (!width) return;
@@ -6634,10 +7572,30 @@ function applyTitleWidth(app, _rows = null, _options = {}) {
   header.style.maxWidth = "";
 }
 
+
 function setActiveTab(app) {
   if (activeApp === app) return;
 
   activeApp = app;
+
+  // Clear stale badges immediately
+  if (healthBadgesEl) {
+    healthBadgesEl.innerHTML = "";
+    healthBadgesEl.removeAttribute("title");
+  }
+
+  // Re-render cached health instantly if we have it
+  renderHealthStatus(activeApp, statusState.apps?.[activeApp]?.health);
+
+  // Force a health refresh for the newly selected app
+  fetchHealth(activeApp).catch(() => { });
+
+  clearTableSelection();
+  markColumnVisibilityDirty();
+  if (tableEl) {
+    tableEl.dataset.app = activeApp;
+  }
+
   clearTableSelection();
   markColumnVisibilityDirty();
   if (tableEl) {
@@ -6688,6 +7646,7 @@ function setActiveTab(app) {
   // IMPORTANT: clear previous list and load new data immediately
   clearTable();
   load(false);
+  fetchHealth({ app: activeApp, silent: true });
 }
 
 function sonarrSlugFromTitle(title) {
@@ -7186,97 +8145,105 @@ function buildRow(row, app, options = {}) {
 
   if (app === "sonarr") {
     tr.innerHTML = `
-      <td data-col="Title">${titleCell}</td>
-      <td data-col="DateAdded">${dateAdded}</td>
-      <td data-col="Instance">${instanceName}</td>
-      <td data-col="SeriesType" data-app="sonarr">${seriesType}</td>
-      <td data-col="OriginalLanguage" data-app="sonarr">${originalLanguage}</td>
-      <td data-col="Genres" data-app="sonarr">${genres}</td>
-      <td data-col="LastAired" data-app="sonarr">${lastAired}</td>
-      <td class="right" data-col="MissingCount" data-app="sonarr">${missingCount}</td>
-      <td class="right" data-col="CutoffUnmetCount" data-app="sonarr">${cutoffUnmetCount}</td>
-      <td class="right" data-col="ContentHours" data-app="sonarr"${contentHoursAttr}>${contentHours}</td>
-      <td class="right" data-col="EpisodesCounted" data-app="sonarr">${episodesCounted}</td>
-      <td class="right" data-col="SeasonCount" data-app="sonarr">${seasonCount}</td>
-      <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${avgEpisodeSize}</td>
-      <td data-col="TotalSizeGB" data-app="sonarr">${totalSize}</td>
-      <td data-col="Status">${status}</td>
-      <td data-col="Monitored">${monitored}</td>
-      <td data-col="Tags">${tags}</td>
-      <td data-col="ReleaseGroup">${releaseGroup}</td>
-      <td data-col="QualityProfile">${qualityProfile}</td>
-      <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
-      <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
-      <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
-      <td data-col="VideoHDR">${videoHdr}</td>
-      <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
-      <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
-      <td data-col="AudioLanguages">${audioLanguages}</td>
-      <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-      <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
-      <td class="right" data-col="PlayCount">${playCount}</td>
-      <td data-col="LastWatched">${lastWatched}</td>
-      <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
-      <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
-      <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
-      <td class="right" data-col="UsersWatched">${usersWatched}</td>
-      <td data-col="TitleSlug" data-app="sonarr">${titleSlug}</td>
-      <td data-col="TmdbId">${tmdbId}</td>
-      <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
-      <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
-      <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
-        <td data-col="Path"${pathAttr}>${rowPath}</td>
-    `;
+    <td data-col="Title">${titleCell}</td>
+    <td data-col="DateAdded">${dateAdded}</td>
+    <td data-col="Instance">${instanceName}</td>
+    <td data-col="SeriesType" data-app="sonarr">${seriesType}</td>
+    <td data-col="OriginalLanguage" data-app="sonarr">${originalLanguage}</td>
+    <td data-col="Genres" data-app="sonarr">${genres}</td>
+    <td data-col="LastAired" data-app="sonarr">${lastAired}</td>
+    <td class="right" data-col="MissingCount" data-app="sonarr">${missingCount}</td>
+    <td class="right" data-col="CutoffUnmetCount" data-app="sonarr">${cutoffUnmetCount}</td>
+    <td class="right" data-col="ContentHours" data-app="sonarr" ${contentHoursAttr}>${contentHours}</td>
+    <td class="right" data-col="EpisodesCounted" data-app="sonarr">${episodesCounted}</td>
+    <td class="right" data-col="SeasonCount" data-app="sonarr">${seasonCount}</td>
+    <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${avgEpisodeSize}</td>
+    <td data-col="TotalSizeGB" data-app="sonarr">${totalSize}</td>
+    <td data-col="Status">${status}</td>
+    <td data-col="Monitored">${monitored}</td>
+    <td data-col="Tags">${tags}</td>
+    <td data-col="ReleaseGroup">${releaseGroup}</td>
+    <td data-col="QualityProfile">${qualityProfile}</td>
+    <td data-col="VideoQuality" ${videoQualityAttr}>${videoQuality}</td>
+    <td data-col="Resolution" ${resolutionAttr}>${resolution}</td>
+    <td data-col="VideoCodec" ${videoCodecAttr}>${videoCodec}</td>
+    <td data-col="VideoHDR">${videoHdr}</td>
+    <td data-col="AudioCodec" ${audioCodecAttr}>${audioCodec}</td>
+    <td data-col="AudioChannels" ${audioChannelsAttr}>${audioChannels}</td>
+    <td data-col="AudioLanguages">${audioLanguages}</td>
+    <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+    <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
+    <td class="right" data-col="PlayCount">${playCount}</td>
+    <td data-col="LastWatched">${lastWatched}</td>
+    <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+    <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+    <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
+    <td class="right" data-col="UsersWatched">${usersWatched}</td>
+    <td data-col="TitleSlug" data-app="sonarr">${titleSlug}</td>
+    <td data-col="TmdbId">${tmdbId}</td>
+    <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
+    <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
+    <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
+    <td data-col="Path" ${pathAttr}>${rowPath}</td>
+  `;
   } else {
     tr.innerHTML = `
-      <td data-col="Title">${titleCell}</td>
-      <td data-col="DateAdded">${dateAdded}</td>
-      <td data-col="Instance">${instanceName}</td>
-      <td class="right" data-col="RuntimeMins" data-app="radarr">${runtimeMins}</td>
-      <td class="right" data-col="FileSizeGB" data-app="radarr">${fileSize}</td>
-      <td class="right" data-col="GBPerHour" data-app="radarr">${gbPerHour}</td>
-      <td class="right" data-col="BitrateMbps" data-app="radarr">${bitrateCell}</td>
-      <td data-col="Status">${status}</td>
-      <td data-col="Monitored">${monitored}</td>
-      <td data-col="Tags">${tags}</td>
-      <td data-col="ReleaseGroup">${releaseGroup}</td>
-      <td data-col="QualityProfile">${qualityProfile}</td>
-      <td data-col="Studio" data-app="radarr">${studio}</td>
-      <td data-col="OriginalLanguage" data-app="radarr">${originalLanguage}</td>
-      <td data-col="Genres" data-app="radarr">${genres}</td>
-      <td class="right" data-col="MissingCount" data-app="radarr">${missingCount}</td>
-      <td class="right" data-col="CutoffUnmetCount" data-app="radarr">${cutoffUnmetCount}</td>
-      <td data-col="HasFile" data-app="radarr">${hasFile}</td>
-      <td data-col="IsAvailable" data-app="radarr">${isAvailable}</td>
-      <td data-col="InCinemas" data-app="radarr">${inCinemas}</td>
-      <td data-col="LastSearchTime" data-app="radarr">${lastSearchTime}</td>
-      <td data-col="Edition" data-app="radarr">${edition}</td>
-      <td data-col="CustomFormats" data-app="radarr">${customFormats}</td>
-      <td class="right" data-col="CustomFormatScore" data-app="radarr">${customFormatScore}</td>
-      <td data-col="QualityCutoffNotMet" data-app="radarr">${qualityCutoffNotMet}</td>
-      <td data-col="Languages" data-app="radarr">${languages}</td>
-      <td data-col="VideoQuality"${videoQualityAttr}>${videoQuality}</td>
-      <td data-col="Resolution"${resolutionAttr}>${resolution}</td>
-      <td data-col="VideoCodec"${videoCodecAttr}>${videoCodec}</td>
-      <td data-col="VideoHDR">${videoHdr}</td>
-      <td data-col="AudioCodec"${audioCodecAttr}>${audioCodec}</td>
-      <td data-col="AudioChannels"${audioChannelsAttr}>${audioChannels}</td>
-      <td data-col="AudioLanguages">${audioLanguages}</td>
-      <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
-      <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
-      <td class="right" data-col="PlayCount">${playCount}</td>
-      <td data-col="LastWatched">${lastWatched}</td>
-      <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
-      <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
-      <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
-      <td class="right" data-col="UsersWatched">${usersWatched}</td>
-      <td data-col="TmdbId">${tmdbId}</td>
-      <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
-      <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
-      <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
-        <td data-col="Path"${pathAttr}>${rowPath}</td>
-    `;
+    <td data-col="Title">${titleCell}</td>
+    <td data-col="DateAdded">${dateAdded}</td>
+    <td data-col="Instance">${instanceName}</td>
+    <td class="right" data-col="RuntimeMins" data-app="radarr">${runtimeMins}</td>
+    <td class="right" data-col="FileSizeGB" data-app="radarr">${fileSize}</td>
+    <td class="right" data-col="GBPerHour" data-app="radarr">${gbPerHour}</td>
+    <td class="right" data-col="BitrateMbps" data-app="radarr">${bitrateCell}</td>
+    <td data-col="Status">${status}</td>
+    <td data-col="Monitored">${monitored}</td>
+    <td data-col="Tags">${tags}</td>
+    <td data-col="ReleaseGroup">${releaseGroup}</td>
+    <td data-col="QualityProfile">${qualityProfile}</td>
+    <td data-col="Studio" data-app="radarr">${studio}</td>
+    <td data-col="OriginalLanguage" data-app="radarr">${originalLanguage}</td>
+    <td data-col="Genres" data-app="radarr">${genres}</td>
+    <td class="right" data-col="MissingCount" data-app="radarr">${missingCount}</td>
+    <td class="right" data-col="CutoffUnmetCount" data-app="radarr">${cutoffUnmetCount}</td>
+    <td data-col="HasFile" data-app="radarr">${hasFile}</td>
+    <td data-col="IsAvailable" data-app="radarr">${isAvailable}</td>
+    <td data-col="InCinemas" data-app="radarr">${inCinemas}</td>
+    <td data-col="LastSearchTime" data-app="radarr">${lastSearchTime}</td>
+    <td data-col="Edition" data-app="radarr">${edition}</td>
+    <td data-col="CustomFormats" data-app="radarr">${customFormats}</td>
+    <td class="right" data-col="CustomFormatScore" data-app="radarr">${customFormatScore}</td>
+    <td data-col="QualityCutoffNotMet" data-app="radarr">${qualityCutoffNotMet}</td>
+    <td data-col="Languages" data-app="radarr">${languages}</td>
+    <td data-col="VideoQuality" ${videoQualityAttr}>${videoQuality}</td>
+    <td data-col="Resolution" ${resolutionAttr}>${resolution}</td>
+    <td data-col="VideoCodec" ${videoCodecAttr}>${videoCodec}</td>
+    <td data-col="VideoHDR">${videoHdr}</td>
+    <td data-col="AudioCodec" ${audioCodecAttr}>${audioCodec}</td>
+    <td data-col="AudioChannels" ${audioChannelsAttr}>${audioChannels}</td>
+    <td data-col="AudioLanguages">${audioLanguages}</td>
+    <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
+    <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
+    <td class="right" data-col="PlayCount">${playCount}</td>
+    <td data-col="LastWatched">${lastWatched}</td>
+    <td class="right" data-col="DaysSinceWatched">${daysSinceWatched}</td>
+    <td class="right" data-col="TotalWatchTimeHours">${watchTimeHours}</td>
+    <td class="right" data-col="WatchContentRatio">${watchContentHours}</td>
+    <td class="right" data-col="UsersWatched">${usersWatched}</td>
+    <td data-col="TmdbId">${tmdbId}</td>
+    <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
+    <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
+    <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
+    <td data-col="Path" ${pathAttr}>${rowPath}</td>
+  `;
   }
+
+  requestAnimationFrame(() => {
+    tr.querySelectorAll('td[data-col="TitleSlug"]').forEach(td => {
+      const slug = (td.textContent || "").trim();
+      td.removeAttribute("title");
+      if (slug && td.scrollWidth > td.clientWidth) td.title = slug;
+    });
+  });
 
   if (columnWidthLock.active && columnWidthLock.widths.size) {
     columnWidthLock.widths.forEach((width, col) => {
@@ -7414,6 +8381,332 @@ function getRowElement(row, app, options = {}) {
   return tr;
 }
 
+
+
+function syncRowWidthLock(tr) {
+  if (!tr) return;
+  const currentToken = columnWidthLock && columnWidthLock.active ? (columnWidthLock.token || 0) : 0;
+  const prevToken = tr.__sortarrWidthToken || 0;
+  if (currentToken === prevToken) return;
+
+  // If a lock is active, ensure this row's cells match the locked widths.
+  if (currentToken && columnWidthLock && columnWidthLock.widths && columnWidthLock.widths.size) {
+    columnWidthLock.widths.forEach((width, col) => {
+      if (!col || col === "Title") return;
+      const cell = tr.querySelector(`td[data-col="${col}"]`);
+      if (!cell) return;
+      const widthPx = `${width}px`;
+      cell.style.width = widthPx;
+      cell.style.minWidth = widthPx;
+      cell.style.maxWidth = widthPx;
+    });
+  } else if (prevToken) {
+    // No lock active anymore, clear stale inline widths from prior locks.
+    try {
+      tr.querySelectorAll("td").forEach(td => {
+        td.style.width = "";
+        td.style.minWidth = "";
+        td.style.maxWidth = "";
+      });
+    } catch { }
+  }
+
+  tr.__sortarrWidthToken = currentToken;
+}
+
+
+// Virtualized main table body (Phase 1)
+// Note: Uses top/bottom spacer rows to preserve scroll height and keeps DOM bounded.
+const VIRTUAL_MIN_ROWS = 800;
+const VIRTUAL_OVERSCAN_ROWS = 8; // Render overscan rows above/below viewport (keeps scroll smooth)
+const VIRTUAL_HYDRATION_OVERSCAN_ROWS = 24; // Extra rows to pre-hydrate offscreen (reduces visible "pop-in")
+const VIRTUAL_ROW_CACHE_MULTIPLIER = 5; // LRU cap = pool * multiplier
+
+const virtualStateByApp = { sonarr: null, radarr: null };
+
+function getTableColumnCount() {
+  const thead = document.querySelector("table thead");
+  if (!thead) return 1;
+  const ths = thead.querySelectorAll("th");
+  return Math.max(1, ths.length);
+}
+
+function makeSpacerRow(colCount, className) {
+  const tr = document.createElement("tr");
+  tr.className = className || "virtual-spacer-row";
+  const td = document.createElement("td");
+  td.colSpan = colCount;
+  td.className = "virtual-spacer-cell";
+  td.style.height = "0px";
+  tr.appendChild(td);
+  return tr;
+}
+
+function getRowHeightOnce() {
+  // Measure once from an existing row, otherwise fallback.
+  try {
+    const tr = tbody && tbody.querySelector("tr:not(.virtual-spacer-row):not(.series-child-row)");
+    const h = tr ? tr.getBoundingClientRect().height : 0;
+    if (h && Number.isFinite(h) && h > 10) return h;
+  } catch { }
+  return 34; // reasonable fallback
+}
+
+function lruGet(map, key) {
+  const v = map.get(key);
+  if (!v) return null;
+  map.delete(key);
+  map.set(key, v);
+  return v;
+}
+
+function lruSet(map, key, value, max) {
+  if (map.has(key)) map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const first = map.keys().next().value;
+    map.delete(first);
+  }
+}
+
+function teardownVirtual(app) {
+  const state = virtualStateByApp[app];
+  if (!state) return;
+  try {
+    if (state.onScroll) {
+      tableWrapEl && tableWrapEl.removeEventListener("scroll", state.onScroll);
+    }
+    if (state.resizeObserver) {
+      try { state.resizeObserver.disconnect(); } catch { }
+    }
+  } catch { }
+  virtualStateByApp[app] = null;
+}
+
+function renderVirtualWindow(state) {
+  if (!state || state.token !== renderToken) return;
+  const wrap = tableWrapEl;
+  if (!wrap || !tbody) return;
+
+  // If Sonarr series expansions exist, virtualizing would break flow rows.
+  // Keep virtual mode off when any child rows are present.
+  if (state.app === "sonarr") {
+    const hasChild = tbody.querySelector("tr.series-child-row");
+    if (hasChild) return;
+  }
+
+  const scrollTop = wrap.scrollTop || 0;
+  const height = wrap.clientHeight || 0;
+  const rowHeight = state.rowHeight;
+  const total = state.rows.length;
+  if (!total) return;
+
+  const visibleCount = Math.max(1, Math.ceil(height / rowHeight));
+  // DOM window size (rendered rows): viewport rows + overscan on both sides.
+  const poolSize = visibleCount + state.overscan * 2;
+  // Hydration window size: we pre-hydrate additional rows beyond the rendered overscan so that
+  // rows are already "filled" before they scroll into view (avoids visible pop-in/blinks).
+  const hydrationOverscan = VIRTUAL_HYDRATION_OVERSCAN_ROWS;
+  const hydratePoolSize = visibleCount + (state.overscan + hydrationOverscan) * 2;
+  // Cache must be large enough to hold prebuilt + prehydrated rows without churn.
+  const maxCache = Math.max(100, hydratePoolSize * VIRTUAL_ROW_CACHE_MULTIPLIER);
+
+  let start = Math.floor(scrollTop / rowHeight) - state.overscan;
+  if (start < 0) start = 0;
+  let end = start + poolSize;
+  if (end > total) end = total;
+  if (end < total && (end - start) < poolSize) {
+    start = Math.max(0, end - poolSize);
+  }
+
+  // Hydration range extends beyond the rendered window.
+  // We build rows into the cache and hydrate their deferred cells even if the rows are not in the DOM yet.
+  // This makes scrolling feel instant because upcoming rows are already populated.
+  let hydrateStart = start - hydrationOverscan;
+  if (hydrateStart < 0) hydrateStart = 0;
+  let hydrateEnd = end + hydrationOverscan;
+  if (hydrateEnd > total) hydrateEnd = total;
+
+  // Avoid churn if window unchanged.
+  if (state.lastStart === start && state.lastEnd === end && state.lastColVisVer === columnVisibilityVersion) {
+    return;
+  }
+  const prevColVisVer = state.lastColVisVer;
+  state.lastStart = start;
+  state.lastEnd = end;
+  state.lastColVisVer = columnVisibilityVersion;
+
+  const topPx = start * rowHeight;
+  const bottomPx = (total - end) * rowHeight;
+
+  const topTd = state.topSpacer.firstElementChild;
+  const bottomTd = state.bottomSpacer.firstElementChild;
+  if (topTd) topTd.style.height = `${topPx}px`;
+  if (bottomTd) bottomTd.style.height = `${bottomPx}px`;
+
+  const frag = document.createDocumentFragment();
+  frag.appendChild(state.topSpacer);
+
+  const lazyRows = [];
+  const lazySet = new Set();
+
+  for (let i = start; i < end; i += 1) {
+    const row = state.rows[i];
+    const key = row.__sortarrKey || buildRowKey(row, state.app);
+    let tr = lruGet(state.rowCache, key);
+    if (!tr) {
+      tr = buildRow(row, state.app, state.rowOptions);
+    } else {
+      // Patch minimal row pointer for handlers.
+      tr.__sortarrRow = row;
+    }
+    syncRowWidthLock(tr);
+    if (tr && tr.dataset && tr.dataset.lazy === "1" && !lazySet.has(tr)) { lazySet.add(tr); lazyRows.push(tr); }
+    frag.appendChild(tr);
+    lruSet(state.rowCache, key, tr, maxCache);
+  }
+
+  // Pre-warm and hydrate rows just outside the rendered window so they are ready before they appear.
+  // This intentionally does NOT append rows to the DOM.
+  if (hydrateStart < start || hydrateEnd > end) {
+    for (let i = hydrateStart; i < hydrateEnd; i += 1) {
+      if (i >= start && i < end) continue; // already built/handled above
+      const row = state.rows[i];
+      const key = row.__sortarrKey || buildRowKey(row, state.app);
+      let tr = lruGet(state.rowCache, key);
+      if (!tr) {
+        tr = buildRow(row, state.app, state.rowOptions);
+      } else {
+        tr.__sortarrRow = row;
+      }
+      // Keep width lock state consistent so hydrated cells match locked widths when inserted.
+      syncRowWidthLock(tr);
+      if (tr && tr.dataset && tr.dataset.lazy === "1" && !lazySet.has(tr)) { lazySet.add(tr); lazyRows.push(tr); }
+      lruSet(state.rowCache, key, tr, maxCache);
+    }
+  }
+
+  frag.appendChild(state.bottomSpacer);
+
+  // Apply current column visibility to any newly built/reused rows before they enter the DOM.
+  // (Virtual windows can introduce brand new rows that have never had visibility classes applied.)
+  updateColumnVisibility(frag);
+  tbody.replaceChildren(frag);
+
+  // Hydrate deferred (lazy) cells for the visible window AND an extended hydration overscan window.
+  // Large datasets render rows in a light mode first; this fills in heavy columns without hydrating the entire table.
+  if (lazyRows.length) {
+    queueHydration(lazyRows, state.token, state.perf);
+  }
+
+  // If column visibility changed since the last virtual paint, ensure header + body stay in sync.
+  if (prevColVisVer !== columnVisibilityVersion) {
+    updateColumnVisibility(tbody);
+  }
+
+  // Update interaction classes after window render.
+  finalizeTableInteractionState(state.app);
+
+  // Perf overlay stats
+  perfOverlayState.lastRowsTotal = total;
+  perfOverlayState.lastRowsVisible = end - start;
+  try {
+    perfOverlayState.lastDomRows = tbody.querySelectorAll("tr").length;
+    perfOverlayState.lastDomCells = tbody.querySelectorAll("td").length;
+  } catch { }
+  schedulePerfOverlayUpdate();
+}
+
+function enableVirtualRows(rows, app, rowOptions, token, perf) {
+  teardownVirtual(app);
+  if (!tbody || !tableWrapEl) return false;
+
+  // Disable virtual rows for Sonarr when expansions are enabled or likely to be used heavily.
+  // Radarr is the primary target for now.
+  if (app === "sonarr") {
+    return false;
+  }
+
+  const colCount = getTableColumnCount();
+  const topSpacer = makeSpacerRow(colCount, "virtual-spacer-row virtual-spacer-row--top");
+  const bottomSpacer = makeSpacerRow(colCount, "virtual-spacer-row virtual-spacer-row--bottom");
+
+  const state = {
+    app,
+    rows,
+    rowOptions,
+    token,
+    perf,
+    rowHeight: getRowHeightOnce(),
+    overscan: VIRTUAL_OVERSCAN_ROWS,
+    topSpacer,
+    bottomSpacer,
+    rowCache: new Map(),
+    lastStart: -1,
+    lastEnd: -1,
+    lastColVisVer: -1,
+    scrollFrame: null,
+    onScroll: null,
+    resizeFrame: null,
+    onResize: null,
+    resizeObserver: null,
+  };
+
+  const onScroll = () => {
+    if (state.scrollFrame) return;
+    state.scrollFrame = requestAnimationFrame(() => {
+      state.scrollFrame = null;
+      renderVirtualWindow(state);
+    });
+  };
+  state.onScroll = onScroll;
+  tableWrapEl.addEventListener("scroll", onScroll, { passive: true });
+
+  // Re-render when the scroll container size changes (chips/header transitions can change height after initial paint).
+  const onResize = () => {
+    if (state.resizeFrame) return;
+    state.resizeFrame = requestAnimationFrame(() => {
+      state.resizeFrame = null;
+      renderVirtualWindow(state);
+    });
+  };
+  state.onResize = onResize;
+  if (typeof ResizeObserver !== "undefined") {
+    try {
+      state.resizeObserver = new ResizeObserver(() => onResize());
+      state.resizeObserver.observe(tableWrapEl);
+    } catch { }
+  }
+
+  // Initial paint
+  tbody.replaceChildren(topSpacer, bottomSpacer);
+  renderVirtualWindow(state);
+  // In some layouts, the wrap height finalizes after this tick (chip/status transitions).
+  requestAnimationFrame(() => renderVirtualWindow(state));
+  setTimeout(() => renderVirtualWindow(state), 250);
+
+  // Finalize
+  tableReadyByApp[app] = true;
+  setChipsVisible(true);
+  flushDeferredPrefetch();
+  if (perf && !perf.renderEnd) {
+    perf.renderEnd = perfNow();
+  }
+  if (perf) {
+    perfOverlayState.lastRenderMs = perf.renderEnd && perf.renderStart ? (perf.renderEnd - perf.renderStart) : null;
+  }
+  finalizeRenderPerf(perf);
+  cacheColumnWidths(app);
+  applyColumnHeaderCaps();
+  scheduleTitlePathWidthLock();
+  scheduleTruncationTooltipUpdate();
+  maybeStabilizeRender(app, { allowBatch: false });
+  finalizeTableInteractionState(app);
+
+  virtualStateByApp[app] = state;
+  return true;
+}
+
 function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, options) {
   if (token !== renderToken) {
     unlockColumnWidths(token);
@@ -7436,7 +8729,7 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     index += 1;
     processed += 1;
     if (processed % frameCheckEvery === 0 &&
-        (perfNow() - frameStart) >= frameBudget) {
+      (perfNow() - frameStart) >= frameBudget) {
       break;
     }
   }
@@ -7451,8 +8744,8 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
   if (token !== renderToken) return;
   setBatching(false);
   if (options &&
-      options.columnVisibilityVersionAtStart !== undefined &&
-      options.columnVisibilityVersionAtStart !== columnVisibilityVersion) {
+    options.columnVisibilityVersionAtStart !== undefined &&
+    options.columnVisibilityVersionAtStart !== columnVisibilityVersion) {
     updateColumnVisibility(tbody);
     const visibleColumns = getVisibleDisplayColumns(activeApp, getHiddenColumns());
     visibleColumns.forEach(col => hydrateLazyDisplayCells(col, tbody));
@@ -7501,10 +8794,10 @@ function render(data, options = {}) {
   let sorted = null;
   const sortCache = isPrimaryData ? sortCacheByApp[app] : null;
   if (sortCache &&
-      sortCache.version === dataVersion &&
-      sortCache.sortKey === sortKey &&
-      sortCache.sortDir === sortDir &&
-      sortCache.filterSig === filterSig) {
+    sortCache.version === dataVersion &&
+    sortCache.sortKey === sortKey &&
+    sortCache.sortDir === sortDir &&
+    sortCache.filterSig === filterSig) {
     sorted = sortCache.sorted;
   } else {
     sorted = sortData(filtered);
@@ -7596,6 +8889,18 @@ function render(data, options = {}) {
     };
   setBatching(shouldBatch);
 
+  const virtualizeRows = app === "radarr" && resolveRenderFlag("virtualRows", app) && sorted.length >= VIRTUAL_MIN_ROWS;
+  if (virtualizeRows) {
+    const ok = enableVirtualRows(sorted, app, rowOptions, token, perf);
+    if (ok) {
+      setStatus(`Loaded ${sorted.length} / ${(data || []).length}`);
+      if (!holdWidthLock) {
+        unlockColumnWidths(token);
+      }
+      return;
+    }
+  }
+
   if (!sorted.length) {
     clearTable();
     setBatching(false);
@@ -7676,6 +8981,39 @@ function render(data, options = {}) {
 async function load(refresh, options = {}) {
   const app = activeApp;
   const myToken = ++loadTokens[app];
+  // Benchmark mode bypasses network and renders synthetic rows.
+  if (BENCH_PARAMS.enabled) {
+    const benchApp = BENCH_PARAMS.app || app;
+    if (benchApp !== activeApp) {
+      setActiveApp(benchApp);
+    }
+    const synthetic = makeBenchmarkRows(benchApp, BENCH_PARAMS.rows);
+    if (BENCH_PARAMS.wide) {
+      try { setHiddenColumns([]); } catch { }
+    }
+    dataByApp[benchApp] = synthetic;
+    dataVersionByApp[benchApp] = (dataVersionByApp[benchApp] || 0) + 1;
+    setStatus(`Benchmark: ${BENCH_PARAMS.rows} rows (${benchApp})`);
+    renderData(benchApp, { allowBatch: false });
+    return;
+  }
+
+  if (BENCH_PARAMS.enabled) {
+    const benchApp = BENCH_PARAMS.app || app;
+    activeApp = benchApp;
+    setActiveApp(benchApp);
+    const synthetic = makeBenchmarkRows(benchApp, BENCH_PARAMS.rows);
+    // Force wide mode if requested by showing all columns.
+    if (BENCH_PARAMS.wide) {
+      try { setHiddenColumns([]); } catch { }
+    }
+    dataByApp[benchApp] = synthetic;
+    dataVersionByApp[benchApp] = (dataVersionByApp[benchApp] || 0) + 1;
+    setStatus(`Benchmark: ${synthetic.length} rows (${benchApp})`);
+    renderData(benchApp, { allowBatch: false });
+    return;
+  }
+
   const background = options.background === true;
   const hydrate = options.hydrate === true;
   if (hydrate) {
@@ -8443,6 +9781,8 @@ async function loadConfig() {
 
 /* init */
 (async function init() {
+  initPerfOverlay();
+
   if (resetUiRequested) {
     localStorage.removeItem(COLUMN_STORAGE_KEY);
     localStorage.removeItem(CSV_COLUMNS_KEY);
@@ -8464,6 +9804,7 @@ async function loadConfig() {
   updateChipVisibility();
   updateLastUpdatedDisplay();
   updateSortIndicators();
+  if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
   setAdvancedMode(false);
   scheduleTitlePathWidthLock();
   await loadConfig();
@@ -8510,5 +9851,4 @@ async function loadConfig() {
     queuePrefetch(otherApp, false);
   }
   await load(false);
-})();
-
+})()
