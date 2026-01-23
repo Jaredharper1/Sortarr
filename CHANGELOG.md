@@ -1,3 +1,19 @@
+## [0.7.4] - 2026-01-24
+### Feature
+- Added Path Mapping support! You can now map container paths to host paths per instance (e.g. `/movies:/mnt/media/movies`).
+- This fixes the display of file paths in the UI when using Docker volume mappings.
+- Configurable via Setup page or `SONARR_PATH_MAP`/`RADARR_PATH_MAP` env vars.
+
+## [0.7.3] - 2026-01-24
+### Fixed
+- Fixed Docker setup page not saving configuration by respecting `SORTARR_CONFIG_PATH`.
+- Updated `docker-compose.yaml` example to use `SORTARR_CONFIG_PATH` for easier persistence.
+
+## [0.7.2] - 2026-01-23
+- Fetch New Data now forces a Tautulli background refresh to pick up new matches
+- Include Tautulli original titles when matching by title
+
+
 # Changelog
 
 ## 0.7.2
@@ -250,20 +266,6 @@
 - Switch table layout to auto sizing and reserve scrollbar gutter for consistent column widths during loads
 - Left-align all table columns for consistency
 
-## [0.7.4] - 2026-01-24
-### Feature
-- Added Path Mapping support! You can now map container paths to host paths per instance (e.g. `/movies:/mnt/media/movies`).
-- This fixes the display of file paths in the UI when using Docker volume mappings.
-- Configurable via Setup page or `SONARR_PATH_MAP`/`RADARR_PATH_MAP` env vars.
-
-## [0.7.3] - 2026-01-24
-### Fixed
-- Fixed Docker setup page not saving configuration by respecting `SORTARR_CONFIG_PATH`.
-- Updated `docker-compose.yaml` example to use `SORTARR_CONFIG_PATH` for easier persistence.
-
-## [0.7.2] - 2026-01-23
-- Fetch New Data now forces a Tautulli background refresh to pick up new matches
-- Include Tautulli original titles when matching by title
 
 ## 0.6.1
 
