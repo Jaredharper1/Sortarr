@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.1"
+APP_VERSION = "0.7.2"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"

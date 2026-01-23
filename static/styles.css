@@ -4347,9 +4347,7 @@ td[data-col="Title"] {
   width: var(--w-Title);
   min-width: var(--w-Title);
   max-width: var(--w-Title);
-  position: relative;
-  white-space: nowrap;
-  overflow: hidden;
+
 }
 
 th[data-col="Path"],

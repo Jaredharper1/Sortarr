@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.2
+
+### UI Fixes
+
+- Update styles.css to prevent Title header from disappearing on scroll.
+
 ## 0.7.1
 
 ### Security
