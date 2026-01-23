@@ -250,8 +250,12 @@
 - Switch table layout to auto sizing and reserve scrollbar gutter for consistent column widths during loads
 - Left-align all table columns for consistency
 
-## 0.6.2
+## [0.7.3] - 2026-01-24
+### Fixed
+- Fixed Docker setup page not saving configuration by respecting `SORTARR_CONFIG_PATH`.
+- Updated `docker-compose.yaml` example to use `SORTARR_CONFIG_PATH` for easier persistence.
 
+## [0.7.2] - 2026-01-23
 - Fetch New Data now forces a Tautulli background refresh to pick up new matches
 - Include Tautulli original titles when matching by title
 

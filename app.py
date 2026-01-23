@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.2"
+APP_VERSION = "v0.7.3"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -237,7 +237,7 @@ RADARR_LITE_FIELDS = {
     "TautulliMatched",
 }
 
-ENV_FILE_PATH = os.environ.get(
+ENV_FILE_PATH = os.environ.get("SORTARR_CONFIG_PATH") or os.environ.get(
     "ENV_FILE_PATH",
     os.path.join(os.path.dirname(__file__), ".env"),
 )

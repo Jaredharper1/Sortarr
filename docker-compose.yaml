@@ -7,8 +7,10 @@ services:
     ports:
       - "9595:8787"
     environment:
-      - ENV_FILE_PATH=/data/Sortarr.env
+      - SORTARR_CONFIG_PATH=/data/Sortarr.env
       - CACHE_SECONDS=300
     volumes:
       - "./data:/data"
+      # Optional: Mount .env for persistence if using default paths
+      # - "/path/to/config/.env:/app/.env"
     restart: unless-stopped
