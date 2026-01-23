@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.1
+
+### Security
+
+- Prevent exception details from leaking in health endpoint error responses.
+
 ## 0.7.0
 
 ### New Features

@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -6915,8 +6915,9 @@ def api_arr_health(app_name: str):
                 payload = []
             alerts = [_norm_alert(a) for a in payload if isinstance(a, dict) and (a.get("type") or "").lower() != "ok"]
             return {"id": inst_id, "name": inst_name, "alerts": alerts, "error": None}
-        except Exception as e:
-            return {"id": inst_id, "name": inst_name, "alerts": [], "error": str(e)}
+        except Exception:
+            return {"id": inst_id, "name": inst_name, "alerts": [], "error": "unreachable"}
+
 
     results: list[dict] = []
     if instances:
@@ -6926,8 +6927,9 @@ def api_arr_health(app_name: str):
             for fut in as_completed(futures):
                 try:
                     results.append(fut.result())
-                except Exception as e:
-                    results.append({"id": "", "name": "", "alerts": [], "error": str(e)})
+                except Exception:
+                    results.append({"id": "", "name": "", "alerts": [], "error": "unreachable"})
+
 
     # deterministic order for UI
     results.sort(key=lambda r: (r.get("name") or "", r.get("id") or ""))
@@ -6944,16 +6946,23 @@ def api_arr_health(app_name: str):
                 counts[t] += 1
                 total += 1
 
-    return jsonify(
-        {
-            "configured": configured,
-            "app": app_name,
-            "counts": counts,
-            "total": total,
-            "unreachable": unreachable,
-            "instances": results,
-        }
-    )
+    try:
+        return jsonify(
+            {
+                "configured": configured,
+                "app": app_name,
+                "counts": counts,
+                "total": total,
+                "unreachable": unreachable,
+                "instances": results,
+            }
+        )
+    except Exception:
+        # Do NOT leak stack trace or error details
+        return jsonify({
+            "error": "internal_error",
+            "message": "Request failed"
+        }), 500
 
 @app.route("/api/caches/clear", methods=["POST"])
 @_auth_required
