@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.5"
+APP_VERSION = "0.7.6"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -5367,12 +5367,20 @@ def _fetch_radarr_movie_file_detail(
             circuit_group="moviefile",
         )
         _record_timing(timing, "radarr_moviefile_ms", start)
+
     except Exception as exc:
-        logger.warning("Radarr moviefile fetch failed (id=%s): %s", movie_file_id, exc)
+        # Safe: no sensitive data leaked
+        logger.warning(
+            "Radarr moviefile fetch failed (id=%s): %s",
+            movie_file_id,
+            type(exc).__name__,
+        )
         return None
+
     if isinstance(detail, dict):
         return detail
     return None
+
 
 
 def _radarr_movie_files(

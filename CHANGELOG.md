@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.7.6] - 2026-01-24
+
+### Security
+
+- Prevent exception details from leaking in radarr moviefile endpoint error responses.
+
 ## [0.7.5] - 2026-01-24
 
 - Improve table zoom anchoring on touch devices, prevent iOS pinch-zoom from scaling the page, and add Firefox trackpad zoom support.
