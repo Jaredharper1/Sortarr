@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.7.5-blue)
+![Version](https://img.shields.io/badge/version-0.7.4-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -18,17 +18,15 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 
 ## Features
 
-- Sonarr series size stats (total includes specials; averages exclude specials; includes GiB per hour + bitrate estimate)
+- Sonarr series size stats (total includes specials; averages exclude specials)
 - Expand Sonarr series rows to view season rollups and episode lists (virtualized for large seasons)
 - Radarr movie size stats (file size and GiB per hour)
 - Radarr bitrate metric with estimated fallback indicator
 - Sorting, filtering, and column toggles
-- Per-tab filters, chips, sort order, and column visibility persist across reloads
 - Optional Arr metadata columns (status, monitored, quality profile, tags, release group)
 - Sonarr series metadata and wanted columns (series type, original language, genres, last aired, missing/cutoff counts)
 - Sonarr chips for missing, cutoff unmet, recently grabbed, scene numbering, and airing
 - Fixed-width Title column with CSS ellipsis to keep large tables stable
-- Touch-friendly table pinch zoom with Firefox trackpad zoom support
 - CSV export for Sonarr and Radarr (Tautulli playback columns appear only when configured)
 - Date added column for Sonarr and Radarr views
 - Compressed JSON/CSV API responses for large payloads
@@ -37,7 +35,7 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Optional Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
 - Tautulli match status orbs beside titles to flag potential mismatches
 - Status pill distinguishes receiving Tautulli data vs matching during refresh
-- Refresh active Sonarr/Radarr data from the status bar plus per-row refresh actions that reload the refreshed item after a short delay (Tautulli refreshes when configured)
+- Refresh all Sonarr/Radarr items from the status bar and per-row refresh actions that reload the refreshed item after a short delay (Tautulli refreshes when configured)
 - Defer Tautulli overlay on cold starts and backfill in the background with an in-app progress notice (live processed counts + last update time)
 - Audio/subtitle language columns with filters and quick chips
 
@@ -61,11 +59,15 @@ Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, 
 Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
 Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
-Refresh Sonarr/Radarr data triggers an Arr metadata refresh and reloads the active app cache. Refresh Tautulli data refreshes the Tautulli library/media info and rebuilds matches. Clear caches & rebuild clears cache files and reloads everything. Reset UI clears local UI settings and reloads using the cached data.
+Refresh active tab reloads only the active tab's Sonarr/Radarr data and updates the persistent cache. Refresh all data reloads both Sonarr and Radarr (and Tautulli if configured) and updates the persistent cache. Reset UI clears local UI settings and reloads using the cached data.
 Data status panel actions:
-- Refresh Sonarr/Radarr data refreshes Arr metadata and reloads the active app cache.
-- Refresh Tautulli data refreshes Tautulli library/media info, then rebuilds matches so new titles appear.
-- Clear caches & rebuild clears Sortarr caches and reloads Sonarr/Radarr (and Tautulli if configured).
+- Refresh active tab reloads the active tab's Sonarr/Radarr cache.
+- Refresh all data reloads both apps (and Tautulli if configured).
+- Clear cached data clears Sortarr caches and reloads Sonarr/Radarr (and Tautulli if configured).
+- Refresh Sonarr metadata asks Sonarr to refresh series metadata; Sortarr updates on the next fetch.
+- Refresh Radarr metadata asks Radarr to refresh movie metadata; Sortarr updates on the next fetch.
+- Rebuild Tautulli matches rebuilds Tautulli matching using the existing library data.
+- Refresh Tautulli media + matches refreshes Tautulli library/media info, then rebuilds matches so new titles appear.
 The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
 
 The Docker image runs Gunicorn with a single worker and 4 threads to keep refresh state and cache progress consistent. If you need to change worker or thread counts, override the container command (and be aware that multiple workers require shared state).
@@ -93,9 +95,6 @@ Sortarr writes and reads:
 - `SONARR_URL_3`
 - `SONARR_API_KEY_3`
 - `SONARR_NAME_3`
-- `SONARR_PATH_MAP` (optional; map container -> host paths for instance 1)
-- `SONARR_PATH_MAP_2` (optional; map container -> host paths for instance 2)
-- `SONARR_PATH_MAP_3` (optional; map container -> host paths for instance 3)
 - `SONARR_EPISODEFILE_WORKERS` (optional, defaults to `8`; parallel episode file fetch workers for Sonarr)
 - `SONARR_EPISODEFILE_MODE` (optional, `series` default; `bulk` fetches all episode files at once, `fast` skips per-episode file lookups and omits codec/language detail)
 - `SONARR_EPISODEFILE_DELAY_SECONDS` (optional, per-request delay for Sonarr episode file calls; default `0`)
@@ -109,9 +108,6 @@ Sortarr writes and reads:
 - `RADARR_URL_3`
 - `RADARR_API_KEY_3`
 - `RADARR_NAME_3`
-- `RADARR_PATH_MAP` (optional; map container -> host paths for instance 1)
-- `RADARR_PATH_MAP_2` (optional; map container -> host paths for instance 2)
-- `RADARR_PATH_MAP_3` (optional; map container -> host paths for instance 3)
 - `RADARR_WANTED_WORKERS` (optional, defaults to `2`; parallel Radarr wanted/missing/cutoff/recent fetch workers, set `1` for low-end boxes)
 - `RADARR_INSTANCE_WORKERS` (optional, defaults to `1`; parallel Radarr instance fetch workers, opt-in for multi-instance setups)
 - `TAUTULLI_URL` (optional)
@@ -155,10 +151,9 @@ Requirements and notes:
 - Stale Tautulli refresh locks clear after `TAUTULLI_REFRESH_STALE_SECONDS` to avoid stuck matching
 - On first run after an upgrade, Sortarr clears caches and drops legacy Tautulli default env values so new defaults apply
 - When Tautulli matching runs in the background, the UI auto-refreshes to apply playback stats
-- Arr caches persist until Refresh Sonarr/Radarr data or Clear caches & rebuild is clicked
+- Arr caches persist until Refresh all data is clicked
 - When `PUID`/`PGID` are set, the container runs as that user and will chown the config/cache paths on startup.
 - Treat `Sortarr.env` as a secret; it stores API keys and optional basic auth credentials
-- `*_PATH_MAP` values can include multiple mappings separated by `|` (for example: `/movies:/mnt/movies | /anime:/mnt/anime`); the setup page supports adding multiple mappings per instance.
 - Basic auth is optional but recommended if exposed beyond your LAN
 - State-changing API requests require a CSRF token header (`X-CSRF-Token`) that matches the `sortarr_csrf` cookie; the UI handles this automatically
 - Designed for on-demand queries with persistent caching; the UI only polls while Tautulli matching finishes
@@ -178,7 +173,7 @@ Steps:
 5) In Tautulli, go to the matching library and search for the item by name.
 6) If it is missing or stale, open the item and choose Media Info -> Refresh Media Info.
 7) After the refresh completes, search again to confirm the item appears.
-8) Back in Sortarr, click Refresh Sonarr/Radarr data and wait for the load to complete.
+8) Back in Sortarr, click Refresh all data and wait for the load to complete.
 
 If the title still does not match, the issue is likely missing IDs in Plex/Tautulli or a mismatch between libraries. Share the title and the Tautulli history count for that item so we can investigate further.
 
