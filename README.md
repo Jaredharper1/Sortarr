@@ -58,18 +58,6 @@ Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, 
 
 Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
-Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
-Refresh active tab reloads only the active tab's Sonarr/Radarr data and updates the persistent cache. Refresh all data reloads both Sonarr and Radarr (and Tautulli if configured) and updates the persistent cache. Reset UI clears local UI settings and reloads using the cached data.
-Data status panel actions:
-- Refresh active tab reloads the active tab's Sonarr/Radarr cache.
-- Refresh all data reloads both apps (and Tautulli if configured).
-- Clear cached data clears Sortarr caches and reloads Sonarr/Radarr (and Tautulli if configured).
-- Refresh Sonarr metadata asks Sonarr to refresh series metadata; Sortarr updates on the next fetch.
-- Refresh Radarr metadata asks Radarr to refresh movie metadata; Sortarr updates on the next fetch.
-- Rebuild Tautulli matches rebuilds Tautulli matching using the existing library data.
-- Refresh Tautulli media + matches refreshes Tautulli library/media info, then rebuilds matches so new titles appear.
-The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
-
 The Docker image runs Gunicorn with a single worker and 4 threads to keep refresh state and cache progress consistent. If you need to change worker or thread counts, override the container command (and be aware that multiple workers require shared state).
 
 ## Deployment (Unraid)
