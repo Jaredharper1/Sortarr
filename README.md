@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.7.7-blue)
+![Version](https://img.shields.io/badge/version-0.7.8-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -128,6 +128,23 @@ Sortarr writes and reads:
 - `PGID` (optional, container group ID; used when set alongside `PUID`)
 - `BASIC_AUTH_USER`
 - `BASIC_AUTH_PASS`
+
+**NOTE**
+
+**Reverse proxy / HTTPS (Traefik, Nginx, Cloudflare, etc.)**
+
+Sortarr can be run behind a reverse proxy. In that case it may need to trust `X-Forwarded-*` headers so Flask correctly detects the external scheme/host (for example `https://sortarr.mydomain.com`). If this is not set correctly, you may see errors like **"CSRF origin mismatch"** during setup when accessing Sortarr via HTTPS through a proxy.
+
+- `SORTARR_PROXY_HOPS` (optional)
+
+Typical values:
+- `0` = Disabled. Safer if you only run Sortarr locally and are not using a reverse proxy.
+- `1` = One proxy hop (Traefik/Nginx directly in front of Sortarr). Default.
+- `2` = Two proxy hops (for example Cloudflare Tunnel -> Traefik -> Sortarr).
+
+Security note:
+- If `SORTARR_PROXY_HOPS` is enabled, make sure Sortarr is only reachable through your reverse proxy (for example, do not publish the Sortarr container port directly to the internet).
+
 
 Runtime overrides (optional):
 

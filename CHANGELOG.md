@@ -1,5 +1,15 @@
 # Changelog
 
+
+## [0.7.8] - 2026-01-25
+
+- Fix CSRF behind reverse proxy. See README if you run Sortarr behind a reverse proxy. Search for "CSRF".
+
+## [0.7.7] - 2026-01-25
+
+- Prevent exception details from leaking in radarr moviefile endpoint error responses.
+
+
 ## [0.7.6] - 2026-01-25
 
 ### Security

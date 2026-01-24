@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 import os
 import sys
 import re
@@ -18,9 +19,10 @@ from functools import wraps
 import requests
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g
 from flask_compress import Compress
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.7"
+APP_VERSION = "0.7.8"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -34,6 +36,27 @@ SAFE_TAUTULLI_REFRESH_BUCKETS = {
 }
 
 app = Flask(__name__)
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)).strip())
+    except Exception:
+        return default
+
+# ProxyFix (reverse proxy support)
+proxy_hops = _int_env("SORTARR_PROXY_HOPS", 0)
+if proxy_hops > 0:
+    app.wsgi_app = ProxyFix(
+        app.wsgi_app,
+        x_for=proxy_hops,
+        x_proto=proxy_hops,
+        x_host=proxy_hops,
+        x_port=proxy_hops,
+        x_prefix=proxy_hops,
+    )
+
+
+# Then extensions
 app.config.update(
     COMPRESS_MIMETYPES=["application/json", "text/csv"],
     COMPRESS_MIN_SIZE=500,
