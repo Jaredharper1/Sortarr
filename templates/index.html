@@ -59,7 +59,7 @@
               <input type="checkbox" data-col-group="sonarr" /> Sonarr columns
             </label>
             <label class="column-row"><input type="checkbox" data-col="SeriesType" /> Series Type</label>
-            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
+            <label class="column-row"><input type="checkbox" data-col="Studio" /> Studio</label>
             <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
             <label class="column-row"><input type="checkbox" data-col="LastAired" /> Last Aired</label>
             <label class="column-row" title="Episodes missing on disk."><input type="checkbox"
@@ -75,6 +75,9 @@
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
             <label class="column-row" title="Total size includes specials."><input type="checkbox"
                 data-col="TotalSizeGB" /> Total (GiB)</label>
+            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
+            <label class="column-row" title="Estimated series bitrate from total size and runtime."><input
+                type="checkbox" data-col="BitrateMbps" /> Bitrate (Mbps)</label>
             <label class="column-row"><input type="checkbox" data-col="Status" /> Status</label>
             <label class="column-row"><input type="checkbox" data-col="Monitored" /> Monitored</label>
             <label class="column-row"><input type="checkbox" data-col="Tags" /> Tags</label>
@@ -106,7 +109,6 @@
             <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> Quality Profile</label>
 
             <label class="column-row"><input type="checkbox" data-col="Studio" /> Studio</label>
-            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
             <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
 
             <label class="column-row" title="Movies missing on disk."><input type="checkbox" data-col="MissingCount" />
@@ -122,7 +124,6 @@
             <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> Custom Formats</label>
             <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> Custom Format Score</label>
             <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> Cutoff Not Met</label>
-            <label class="column-row"><input type="checkbox" data-col="Languages" /> Languages</label>
           </div>
 
 
@@ -141,13 +142,21 @@
 
 
           <div class="column-group">
-            <div class="column-group-title">Audio</div>
+            <div class="column-group-title">Language</div>
             <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> Language
               columns</label>
+            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
+            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="Languages" /> Audio
+              Languages</label>
             <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
             <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioLanguages" /> Audio Languages</label>
+            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="AudioLanguages" /> Audio
+              Languages</label>
             <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> Subtitle Languages</label>
+            <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages
+              Mixed</label>
+            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages
+              Mixed</label>
           </div>
 
 
@@ -171,10 +180,6 @@
               Slug</label>
             <label class="column-row"><input type="checkbox" data-col="TmdbId" /> TMDB ID</label>
             <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> Audio Codec Mixed</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages
-              Mixed</label>
-            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages
-              Mixed</label>
           </div>
           <div class="column-scroll-hint" aria-hidden="true"></div>
         </div>
@@ -372,21 +377,12 @@
       </div>
       <div class="status-actions">
         <div class="status-actions-group">
-          <button id="refreshTabBtn" title="Refresh only the active tab from Sonarr/Radarr and update the cache">Refresh
-            active tab</button>
-          <button id="loadBtn"
-            title="Refresh both tabs from Sonarr/Radarr (and Tautulli if configured) and update the cache">Refresh all
+          <button id="refreshTabBtn"
+            title="Refresh the active app metadata, reload its data, and update the cache">Refresh Sonarr data</button>
+          <button id="deepRefreshTautulliBtn" title="Refresh Tautulli library data and rebuild matches">Refresh Tautulli
             data</button>
-          <button id="clearCachesBtn"
-            title="Clear Sortarr caches, then reload Sonarr/Radarr (and Tautulli if configured)">Clear cached
-            data</button>
-        </div>
-        <div class="status-actions-group" id="arrRefreshButtons"></div>
-        <div class="status-actions-group">
-          <button id="refreshTautulliBtn" title="Rebuild Tautulli matches from existing library data">Rebuild Tautulli
-            matches</button>
-          <button id="deepRefreshTautulliBtn" title="Refresh Tautulli library data, then rebuild matches">Refresh
-            Tautulli media + matches</button>
+          <button id="clearCachesBtn" title="Clear all Sortarr cache files and rebuild everything from scratch">Clear
+            caches & rebuild</button>
         </div>
       </div>
       <div class="status-complete hidden" id="statusCompleteNote">All data is up to date. Hiding in 5s…</div>
@@ -408,6 +404,7 @@
             <th data-sort="InstanceName" data-col="Instance">Instance <span class="sort-indicator"></span></th>
             <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">Series Type <span
                 class="sort-indicator"></span></th>
+            <th data-sort="Studio" data-app="sonarr" data-col="Studio">Studio <span class="sort-indicator"></span></th>
             <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">Original Language <span
                 class="sort-indicator"></span></th>
             <th data-sort="Genres" data-app="sonarr" data-col="Genres">Genres <span class="sort-indicator"></span></th>
@@ -430,6 +427,11 @@
             </th>
             <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB" title="Total size includes specials.">
               Total (GiB) <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="GBPerHour" data-app="sonarr" data-col="GBPerHour">GiB / Hour <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="BitrateMbps" data-app="sonarr" data-col="BitrateMbps"
+              title="Estimated series bitrate from total size and runtime.">Bitrate (Mbps) <span
+                class="sort-indicator"></span></th>
 
             <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">Runtime (hh:mm) <span
                 class="sort-indicator"></span></th>
@@ -470,7 +472,7 @@
               Score <span class="sort-indicator"></span></th>
             <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">Cutoff Not Met <span
                 class="sort-indicator"></span></th>
-            <th data-sort="Languages" data-app="radarr" data-col="Languages">Languages <span
+            <th data-sort="Languages" data-app="radarr" data-col="Languages">Audio Languages <span
                 class="sort-indicator"></span></th>
 
             <th data-sort="VideoQuality" data-col="VideoQuality">Video Quality <span class="sort-indicator"></span></th>
@@ -480,7 +482,7 @@
             <th data-sort="AudioCodec" data-col="AudioCodec">Audio Codec <span class="sort-indicator"></span></th>
             <th data-sort="AudioChannels" data-col="AudioChannels">Audio Channels <span class="sort-indicator"></span>
             </th>
-            <th data-sort="AudioLanguages" data-col="AudioLanguages">Audio Languages <span
+            <th data-sort="AudioLanguages" data-app="sonarr" data-col="AudioLanguages">Audio Languages <span
                 class="sort-indicator"></span></th>
             <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">Subtitle Languages <span
                 class="sort-indicator"></span></th>

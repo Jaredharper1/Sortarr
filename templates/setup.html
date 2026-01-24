@@ -46,7 +46,19 @@
         </label>
         <label>
           Path map
-          <input name="sonarr_path_map" placeholder="/container/path:/host/path" value="{{ values.sonarr_path_map }}" />
+          <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map"
+            data-path-map-placeholder="/container/path:/host/path">
+            <div class="setup-path-map-list" data-path-map-list>
+              {% for entry in values.sonarr_path_maps or [""] %}
+              <input name="sonarr_path_map" placeholder="/container/path:/host/path" value="{{ entry }}"
+                aria-label="Path map" />
+              {% endfor %}
+            </div>
+            <button class="setup-path-map-add" type="button" data-path-map-add>
+              <span class="setup-path-map-add-icon">+</span>
+              <span class="setup-path-map-add-text">Add mapping</span>
+            </button>
+          </div>
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url"
@@ -76,8 +88,19 @@
             </label>
             <label>
               Path map
-              <input name="sonarr_path_map_2" placeholder="/container/path:/host/path"
-                value="{{ values.sonarr_path_map_2 }}" />
+              <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_2"
+                data-path-map-placeholder="/container/path:/host/path">
+                <div class="setup-path-map-list" data-path-map-list>
+                  {% for entry in values.sonarr_path_maps_2 or [""] %}
+                  <input name="sonarr_path_map_2" placeholder="/container/path:/host/path" value="{{ entry }}"
+                    aria-label="Path map" />
+                  {% endfor %}
+                </div>
+                <button class="setup-path-map-add" type="button" data-path-map-add>
+                  <span class="setup-path-map-add-icon">+</span>
+                  <span class="setup-path-map-add-text">Add mapping</span>
+                </button>
+              </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_2"
@@ -105,8 +128,19 @@
             </label>
             <label>
               Path map
-              <input name="sonarr_path_map_3" placeholder="/container/path:/host/path"
-                value="{{ values.sonarr_path_map_3 }}" />
+              <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_3"
+                data-path-map-placeholder="/container/path:/host/path">
+                <div class="setup-path-map-list" data-path-map-list>
+                  {% for entry in values.sonarr_path_maps_3 or [""] %}
+                  <input name="sonarr_path_map_3" placeholder="/container/path:/host/path" value="{{ entry }}"
+                    aria-label="Path map" />
+                  {% endfor %}
+                </div>
+                <button class="setup-path-map-add" type="button" data-path-map-add>
+                  <span class="setup-path-map-add-icon">+</span>
+                  <span class="setup-path-map-add-text">Add mapping</span>
+                </button>
+              </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_3"
@@ -140,7 +174,19 @@
         </label>
         <label>
           Path map
-          <input name="radarr_path_map" placeholder="/container/path:/host/path" value="{{ values.radarr_path_map }}" />
+          <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map"
+            data-path-map-placeholder="/container/path:/host/path">
+            <div class="setup-path-map-list" data-path-map-list>
+              {% for entry in values.radarr_path_maps or [""] %}
+              <input name="radarr_path_map" placeholder="/container/path:/host/path" value="{{ entry }}"
+                aria-label="Path map" />
+              {% endfor %}
+            </div>
+            <button class="setup-path-map-add" type="button" data-path-map-add>
+              <span class="setup-path-map-add-icon">+</span>
+              <span class="setup-path-map-add-text">Add mapping</span>
+            </button>
+          </div>
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url"
@@ -170,8 +216,19 @@
             </label>
             <label>
               Path map
-              <input name="radarr_path_map_2" placeholder="/container/path:/host/path"
-                value="{{ values.radarr_path_map_2 }}" />
+              <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_2"
+                data-path-map-placeholder="/container/path:/host/path">
+                <div class="setup-path-map-list" data-path-map-list>
+                  {% for entry in values.radarr_path_maps_2 or [""] %}
+                  <input name="radarr_path_map_2" placeholder="/container/path:/host/path" value="{{ entry }}"
+                    aria-label="Path map" />
+                  {% endfor %}
+                </div>
+                <button class="setup-path-map-add" type="button" data-path-map-add>
+                  <span class="setup-path-map-add-icon">+</span>
+                  <span class="setup-path-map-add-text">Add mapping</span>
+                </button>
+              </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_2"
@@ -199,8 +256,19 @@
             </label>
             <label>
               Path map
-              <input name="radarr_path_map_3" placeholder="/container/path:/host/path"
-                value="{{ values.radarr_path_map_3 }}" />
+              <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_3"
+                data-path-map-placeholder="/container/path:/host/path">
+                <div class="setup-path-map-list" data-path-map-list>
+                  {% for entry in values.radarr_path_maps_3 or [""] %}
+                  <input name="radarr_path_map_3" placeholder="/container/path:/host/path" value="{{ entry }}"
+                    aria-label="Path map" />
+                  {% endfor %}
+                </div>
+                <button class="setup-path-map-add" type="button" data-path-map-add>
+                  <span class="setup-path-map-add-icon">+</span>
+                  <span class="setup-path-map-add-text">Add mapping</span>
+                </button>
+              </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_3"

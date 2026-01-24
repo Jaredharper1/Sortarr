@@ -147,4 +147,32 @@
   document.querySelectorAll(".setup-test").forEach((button) => {
     button.addEventListener("click", () => runTest(button));
   });
+
+  function buildPathMapInput(name, placeholder) {
+    const input = document.createElement("input");
+    input.type = "text";
+    input.name = name;
+    if (placeholder) {
+      input.placeholder = placeholder;
+    }
+    input.setAttribute("aria-label", "Path map");
+    return input;
+  }
+
+  function initPathMapGroups() {
+    document.querySelectorAll("[data-path-map-group]").forEach((group) => {
+      const name = group.dataset.pathMapName || "";
+      const placeholder = group.dataset.pathMapPlaceholder || "";
+      const list = group.querySelector("[data-path-map-list]");
+      const addBtn = group.querySelector("[data-path-map-add]");
+      if (!name || !list || !addBtn) return;
+      addBtn.addEventListener("click", () => {
+        const input = buildPathMapInput(name, placeholder);
+        list.appendChild(input);
+        input.focus();
+      });
+    });
+  }
+
+  initPathMapGroups();
 })();

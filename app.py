@@ -20,7 +20,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_compress import Compress
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.4"
+APP_VERSION = "0.7.5"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -1533,6 +1533,34 @@ def _instance_error_key(prefix: str, idx: int) -> str:
     return f"{prefix.lower()}_{idx}"
 
 
+_PATH_MAP_SPLIT_RE = re.compile(r"\s*[|,;]\s*")
+
+
+def _split_path_map_entries(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    if _PATH_MAP_SPLIT_RE.search(raw):
+        parts = [part.strip() for part in _PATH_MAP_SPLIT_RE.split(raw)]
+    else:
+        parts = [raw]
+    return [part for part in parts if part]
+
+
+def _parse_path_map_entries(raw: str) -> list[tuple[str, str]]:
+    entries = _split_path_map_entries(raw)
+    pairs = []
+    for entry in entries:
+        if ":" not in entry:
+            continue
+        src, dst = entry.split(":", 1)
+        src = src.strip()
+        dst = dst.strip()
+        if src and dst:
+            pairs.append((src, dst))
+    return pairs
+
+
 def _build_instances(prefix: str, label: str) -> list[dict]:
     instances = []
     for idx in _collect_instance_indexes(prefix):
@@ -1541,10 +1569,8 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
         api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
         name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
         path_map_raw = str(os.environ.get(f"{prefix}_PATH_MAP{suffix}") or "").strip()
-        path_map = None
-        if ":" in path_map_raw:
-            parts = path_map_raw.split(":", 1)
-            path_map = (parts[0].strip(), parts[1].strip())
+        path_maps = _parse_path_map_entries(path_map_raw)
+        path_map = path_maps[0] if path_maps else None
 
         if not (url and api_key):
             continue
@@ -1556,6 +1582,7 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
                 "url": url,
                 "api_key": api_key,
                 "path_map": path_map,
+                "path_maps": path_maps,
             }
         )
 
@@ -1587,6 +1614,12 @@ def _get_config():
     radarr_instances = _build_instances("RADARR", "Radarr")
     sonarr_primary = sonarr_instances[0] if sonarr_instances else None
     radarr_primary = radarr_instances[0] if radarr_instances else None
+    sonarr_path_map = os.environ.get("SONARR_PATH_MAP", "")
+    sonarr_path_map_2 = os.environ.get("SONARR_PATH_MAP_2", "")
+    sonarr_path_map_3 = os.environ.get("SONARR_PATH_MAP_3", "")
+    radarr_path_map = os.environ.get("RADARR_PATH_MAP", "")
+    radarr_path_map_2 = os.environ.get("RADARR_PATH_MAP_2", "")
+    radarr_path_map_3 = os.environ.get("RADARR_PATH_MAP_3", "")
     tautulli_timeout_seconds = _read_int_env("TAUTULLI_TIMEOUT_SECONDS", 60)
     default_fetch_seconds = 0
     raw_fetch_seconds = os.environ.get("TAUTULLI_FETCH_SECONDS")
@@ -1604,6 +1637,12 @@ def _get_config():
         "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
         "sonarr_api_key_3": os.environ.get("SONARR_API_KEY_3", ""),
         "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
+        "sonarr_path_map": sonarr_path_map,
+        "sonarr_path_maps": _split_path_map_entries(sonarr_path_map),
+        "sonarr_path_map_2": sonarr_path_map_2,
+        "sonarr_path_maps_2": _split_path_map_entries(sonarr_path_map_2),
+        "sonarr_path_map_3": sonarr_path_map_3,
+        "sonarr_path_maps_3": _split_path_map_entries(sonarr_path_map_3),
         "radarr_url": radarr_primary["url"] if radarr_primary else _normalize_url(os.environ.get("RADARR_URL", "")),
         "radarr_api_key": radarr_primary["api_key"] if radarr_primary else os.environ.get("RADARR_API_KEY", ""),
         "radarr_name": os.environ.get("RADARR_NAME", ""),
@@ -1613,6 +1652,12 @@ def _get_config():
         "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
         "radarr_api_key_3": os.environ.get("RADARR_API_KEY_3", ""),
         "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
+        "radarr_path_map": radarr_path_map,
+        "radarr_path_maps": _split_path_map_entries(radarr_path_map),
+        "radarr_path_map_2": radarr_path_map_2,
+        "radarr_path_maps_2": _split_path_map_entries(radarr_path_map_2),
+        "radarr_path_map_3": radarr_path_map_3,
+        "radarr_path_maps_3": _split_path_map_entries(radarr_path_map_3),
         "sonarr_instances": sonarr_instances,
         "radarr_instances": radarr_instances,
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
@@ -1963,6 +2008,30 @@ def _format_original_language(value) -> str:
         raw = value.get("name") or value.get("value") or value.get("id") or ""
     else:
         raw = value
+    return str(raw).strip()
+
+
+def _format_series_studio(series: dict) -> str:
+    if not isinstance(series, dict):
+        return ""
+    raw = series.get("network") or series.get("studio") or series.get("networkName")
+    if not raw:
+        networks = series.get("networks")
+        if isinstance(networks, (list, tuple)):
+            names = []
+            for item in networks:
+                if not item:
+                    continue
+                if isinstance(item, dict):
+                    val = item.get("name") or item.get("value") or item.get("id")
+                else:
+                    val = item
+                text = str(val).strip()
+                if text:
+                    names.append(text)
+            return ", ".join(names)
+    if isinstance(raw, dict):
+        raw = raw.get("name") or raw.get("value") or raw.get("id") or ""
     return str(raw).strip()
 
 
@@ -4621,6 +4690,7 @@ def _build_sonarr_row(
     tag_labels = _format_tag_labels(tags, tag_map or {})
     series_type = series.get("seriesType") or ""
     original_language = _format_original_language(series.get("originalLanguage"))
+    studio = _format_series_studio(series)
     genres = _format_genres(series.get("genres") or [])
     last_aired = series.get("lastAired") or ""
     next_airing = series.get("nextAiring") or ""
@@ -4702,7 +4772,17 @@ def _build_sonarr_row(
     audio_channels_all = _format_unique_values(audio_channel_values)
 
     total_gib = _bytes_to_gib(total_bytes_all)
+    total_gib_regular = _bytes_to_gib(total_bytes_regular)
     avg_gib = round((total_bytes_regular / count) / (1024 ** 3), 2) if count else 0.0
+    gb_per_hour = 0.0
+    bitrate_mbps = 0.0
+    bitrate_estimated = False
+    runtime_seconds = runtime_mins * count * 60 if runtime_mins > 0 and count else 0
+    if runtime_seconds > 0 and total_gib_regular > 0:
+        gb_per_hour = round(total_gib_regular / (runtime_seconds / 3600.0), 2)
+        bitrate_bps = (total_bytes_regular * 8) / runtime_seconds
+        bitrate_mbps = round(bitrate_bps / 1_000_000, 2)
+        bitrate_estimated = True
     missing_count = (missing_counts or {}).get(series_id, 0)
     cutoff_count = (cutoff_counts or {}).get(series_id, 0)
     recently_grabbed_flag = series_id in (recently_grabbed or set())
@@ -4722,6 +4802,7 @@ def _build_sonarr_row(
         "Tags": tag_labels,
         "ReleaseGroup": release_group,
         "SeriesType": series_type,
+        "Studio": studio,
         "OriginalLanguage": original_language,
         "Genres": genres,
         "LastAired": last_aired,
@@ -4734,6 +4815,9 @@ def _build_sonarr_row(
         "EpisodesCounted": count,
         "TotalSizeGB": total_gib,
         "AvgEpisodeSizeGB": avg_gib,
+        "GBPerHour": gb_per_hour if gb_per_hour else "",
+        "BitrateMbps": bitrate_mbps if bitrate_mbps else "",
+        "BitrateEstimated": bitrate_estimated if bitrate_mbps else False,
         "ContentHours": content_hours,
         "VideoQuality": video_quality,
         "VideoQualityMixed": video_quality_mixed,
@@ -5216,6 +5300,81 @@ def _get_sonarr_episode_payload(
     return season_episodes, fast_mode
 
 
+def _radarr_movie_file_needs_custom_format(file: dict) -> bool:
+    if not isinstance(file, dict):
+        return False
+    if "customFormatScore" in file:
+        score = file.get("customFormatScore")
+        return score is None or score == ""
+    return True
+
+
+def _merge_radarr_movie_files(existing: list[dict], details: list[dict]) -> list[dict]:
+    if not existing:
+        return details or []
+    if not details:
+        return existing
+    detail_by_id = {
+        f.get("id"): f
+        for f in details
+        if isinstance(f, dict) and f.get("id") is not None
+    }
+    merged: list[dict] = []
+    existing_ids: set[int] = set()
+    for f in existing:
+        if not isinstance(f, dict):
+            merged.append(f)
+            continue
+        file_id = f.get("id")
+        if file_id is not None:
+            existing_ids.add(file_id)
+        detail = detail_by_id.get(file_id)
+        if detail:
+            merged.append({**f, **detail})
+        else:
+            merged.append(f)
+    for detail in details:
+        if not isinstance(detail, dict):
+            continue
+        detail_id = detail.get("id")
+        if detail_id is None or detail_id in existing_ids:
+            continue
+        merged.append(detail)
+    return merged
+
+
+def _fetch_radarr_movie_files_by_id(
+    base_url: str,
+    api_key: str,
+    movie_file_ids: list[int],
+) -> list[dict]:
+    return _fetch_radarr_movie_files_bulk(base_url, api_key, movie_file_ids)
+
+
+def _fetch_radarr_movie_file_detail(
+    base_url: str,
+    api_key: str,
+    movie_file_id: int,
+    timing: dict | None = None,
+) -> dict | None:
+    try:
+        start = time.perf_counter()
+        detail = _arr_get(
+            base_url,
+            api_key,
+            f"/api/v3/moviefile/{movie_file_id}",
+            app_name="radarr",
+            circuit_group="moviefile",
+        )
+        _record_timing(timing, "radarr_moviefile_ms", start)
+    except Exception as exc:
+        logger.warning("Radarr moviefile fetch failed (id=%s): %s", movie_file_id, exc)
+        return None
+    if isinstance(detail, dict):
+        return detail
+    return None
+
+
 def _radarr_movie_files(
     movie: dict,
     base_url: str,
@@ -5225,7 +5384,28 @@ def _radarr_movie_files(
     movie_file = movie.get("movieFile")
     if movie_file:
         if isinstance(movie_file, list):
+            missing_ids = []
+            for f in movie_file:
+                if _radarr_movie_file_needs_custom_format(f):
+                    file_id = f.get("id") if isinstance(f, dict) else None
+                    if file_id:
+                        missing_ids.append(file_id)
+            if missing_ids:
+                details = _fetch_radarr_movie_files_by_id(base_url, api_key, missing_ids)
+                if details:
+                    return _merge_radarr_movie_files(movie_file, details)
             return movie_file
+        if _radarr_movie_file_needs_custom_format(movie_file):
+            movie_file_id = movie_file.get("id") or movie.get("movieFileId")
+            if movie_file_id:
+                detail = _fetch_radarr_movie_file_detail(
+                    base_url,
+                    api_key,
+                    movie_file_id,
+                    timing=timing,
+                )
+                if detail:
+                    return [detail]
         return [movie_file]
     if movie.get("hasFile"):
         radarr_internal_id = movie.get("id")
@@ -5375,7 +5555,11 @@ def _build_radarr_row(
         scene_name = str(primary.get("sceneName") or "")
         file_languages = _format_language_list(primary.get("languages") or "")
         custom_formats = ", ".join(_format_custom_formats(primary.get("customFormats") or []))
+        if not custom_formats:
+            custom_formats = ", ".join(_format_custom_formats(movie.get("customFormats") or []))
         score = primary.get("customFormatScore")
+        if score == "" or score is None:
+            score = movie.get("customFormatScore")
         if score != "" and score is not None:
             custom_format_score = _safe_int(score)
         if "qualityCutoffNotMet" in primary:
@@ -5478,7 +5662,7 @@ def _compute_radarr(
     cutoff_ids: set[int] = set()
     recently_grabbed: set[int] = set()
     files_by_movie_id: dict[int, list[dict]] = {}
-    movie_file_ids: list[int] = []
+    bulk_file_ids: list[int] = []
     fallback_movie_ids: set[int] = set()
 
     if movies:
@@ -5488,25 +5672,37 @@ def _compute_radarr(
                 continue
             movie_file = movie.get("movieFile")
             if movie_file:
-                if isinstance(movie_file, list):
-                    files_by_movie_id[movie_id] = movie_file
-                else:
-                    files_by_movie_id[movie_id] = [movie_file]
+                file_list = movie_file if isinstance(movie_file, list) else [movie_file]
+                files_by_movie_id[movie_id] = file_list
+                for f in file_list:
+                    if _radarr_movie_file_needs_custom_format(f):
+                        file_id = f.get("id") if isinstance(f, dict) else None
+                        if file_id:
+                            bulk_file_ids.append(file_id)
                 continue
             if movie.get("hasFile"):
                 movie_file_id = movie.get("movieFileId")
                 if movie_file_id:
-                    movie_file_ids.append(movie_file_id)
+                    bulk_file_ids.append(movie_file_id)
                 else:
                     fallback_movie_ids.add(movie_id)
 
-        if movie_file_ids:
-            bulk_files = _fetch_radarr_movie_files_bulk(base_url, api_key, movie_file_ids)
+        if bulk_file_ids:
+            bulk_files = _fetch_radarr_movie_files_bulk(base_url, api_key, bulk_file_ids)
+            files_by_movie: dict[int, list[dict]] = {}
             for file in bulk_files or []:
                 movie_id = file.get("movieId")
                 if movie_id is None:
                     continue
-                files_by_movie_id.setdefault(movie_id, []).append(file)
+                files_by_movie.setdefault(movie_id, []).append(file)
+            for movie_id, detail_files in files_by_movie.items():
+                if movie_id in files_by_movie_id:
+                    files_by_movie_id[movie_id] = _merge_radarr_movie_files(
+                        files_by_movie_id[movie_id],
+                        detail_files,
+                    )
+                else:
+                    files_by_movie_id[movie_id] = detail_files
 
         cached_wanted = _get_cached_radarr_wanted(cache_key, cache_seconds)
         if cached_wanted:
@@ -5593,15 +5789,20 @@ def _compute_radarr_item(
 
 
 def _apply_instance_meta(rows: list[dict], instance: dict):
-    path_map = instance.get("path_map")
-    src, dst = path_map if path_map else (None, None)
+    path_maps = instance.get("path_maps")
+    if path_maps is None:
+        path_map = instance.get("path_map")
+        path_maps = [path_map] if path_map else []
     for row in rows:
         row["InstanceId"] = instance.get("id", "")
         row["InstanceName"] = instance.get("name", "")
-        if src and dst:
+        if path_maps:
             path = row.get("Path")
-            if path and path.startswith(src):
-                row["Path"] = path.replace(src, dst, 1)
+            if path:
+                for src, dst in path_maps:
+                    if path.startswith(src):
+                        row["Path"] = path.replace(src, dst, 1)
+                        break
 
 
 def _cache_entry_has_data(entry: dict | None) -> bool:
@@ -6199,6 +6400,18 @@ def setup():
                 return "", f"{label} must be {max_value} or less."
             return str(value), None
 
+        def join_path_maps(field_name: str) -> str:
+            entries = [str(value or "").strip() for value in request.form.getlist(field_name)]
+            entries = [entry for entry in entries if entry]
+            return " | ".join(entries)
+
+        sonarr_path_map = join_path_maps("sonarr_path_map")
+        sonarr_path_map_2 = join_path_maps("sonarr_path_map_2")
+        sonarr_path_map_3 = join_path_maps("sonarr_path_map_3")
+        radarr_path_map = join_path_maps("radarr_path_map")
+        radarr_path_map_2 = join_path_maps("radarr_path_map_2")
+        radarr_path_map_3 = join_path_maps("radarr_path_map_3")
+
         tautulli_timeout_seconds, timeout_error = parse_optional_int(
             tautulli_timeout_raw,
             "Tautulli timeout seconds",
@@ -6261,9 +6474,9 @@ def setup():
             "SONARR_NAME_3": request.form.get("sonarr_name_3", "").strip(),
             "SONARR_URL_3": _normalize_url(request.form.get("sonarr_url_3", "")),
             "SONARR_API_KEY_3": request.form.get("sonarr_api_key_3", "").strip(),
-            "SONARR_PATH_MAP": request.form.get("sonarr_path_map", "").strip(),
-            "SONARR_PATH_MAP_2": request.form.get("sonarr_path_map_2", "").strip(),
-            "SONARR_PATH_MAP_3": request.form.get("sonarr_path_map_3", "").strip(),
+            "SONARR_PATH_MAP": sonarr_path_map,
+            "SONARR_PATH_MAP_2": sonarr_path_map_2,
+            "SONARR_PATH_MAP_3": sonarr_path_map_3,
             "RADARR_NAME": request.form.get("radarr_name", "").strip(),
             "RADARR_URL": _normalize_url(request.form.get("radarr_url", "")),
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
@@ -6273,9 +6486,9 @@ def setup():
             "RADARR_NAME_3": request.form.get("radarr_name_3", "").strip(),
             "RADARR_URL_3": _normalize_url(request.form.get("radarr_url_3", "")),
             "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
-            "RADARR_PATH_MAP": request.form.get("radarr_path_map", "").strip(),
-            "RADARR_PATH_MAP_2": request.form.get("radarr_path_map_2", "").strip(),
-            "RADARR_PATH_MAP_3": request.form.get("radarr_path_map_3", "").strip(),
+            "RADARR_PATH_MAP": radarr_path_map,
+            "RADARR_PATH_MAP_2": radarr_path_map_2,
+            "RADARR_PATH_MAP_3": radarr_path_map_3,
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
             "TAUTULLI_METADATA_LOOKUP_LIMIT": tautulli_lookup_limit,
@@ -7564,6 +7777,7 @@ def shows_csv():
             "Tags",
             "ReleaseGroup",
             "SeriesType",
+            "Studio",
             "OriginalLanguage",
             "Genres",
             "LastAired",
@@ -7576,6 +7790,8 @@ def shows_csv():
             "EpisodesCounted",
             "TotalSizeGB",
             "AvgEpisodeSizeGB",
+            "GBPerHour",
+            "BitrateMbps",
             "VideoQuality",
             "Resolution",
             "VideoCodec",

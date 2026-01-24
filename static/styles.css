@@ -706,6 +706,73 @@ body {
 
 }
 
+@media (max-width: 900px) {
+  .toolbar {
+    flex-wrap: wrap;
+  }
+
+  .brand {
+    margin-right: 0;
+  }
+
+  .version-badge {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+
+  .filter-row {
+    grid-template-columns: 1fr;
+  }
+
+  .filter-inputs {
+    min-width: 0;
+  }
+
+  .filter-controls {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .simple-filters {
+    flex-wrap: wrap;
+  }
+
+  .simple-filters input {
+    flex: 1 1 100%;
+  }
+
+  .filter-inputs.advanced-on .advanced-filter {
+    position: static;
+    width: 100%;
+  }
+
+  .filter-inputs.advanced-on .simple-filters {
+    display: none;
+  }
+
+  .tabs {
+    flex-wrap: wrap;
+  }
+
+  .status-row {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .status-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .status-actions-group {
+    width: 100%;
+  }
+
+  .status-actions-group button {
+    flex: 1 1 200px;
+  }
+}
+
 
 
 .advanced-help-btn {
@@ -965,10 +1032,14 @@ html[data-theme="dark"] .advanced-warnings {
 
 .chip {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 
   --chip-pos-border-hover: var(--match-ok);
   --chip-neg-border-hover: var(--match-bad);
   --chip-border-hover: var(--border);
+  --chip-prefix-space: 0.78em;
 
   border: 1px solid var(--border);
 
@@ -979,7 +1050,7 @@ html[data-theme="dark"] .advanced-warnings {
       rgba(255, 255, 255, 0.02) 55%,
       rgba(0, 0, 0, 0.10) 100%),
     var(--glass-surface);
-  padding: 4px 6px;
+  padding: 2px calc(6px + var(--chip-prefix-space));
   border-radius: 15x;
   font-size: 0.90em;
   font-weight: 500;
@@ -992,9 +1063,6 @@ html[data-theme="dark"] .advanced-warnings {
 
 .chip:hover {
   transform: translateY(-1px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.14),
-    0 10px 24px rgba(0, 0, 0, 0.22);
 }
 
 .chip:active {
@@ -1089,15 +1157,22 @@ html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
 
 
 /* + / − prefix */
-.chip--pos::before,
-.chip--neg::before {
-  display: inline-block;
-  font-weight: 700;
-  width: 1.1em;
+.chip::before {
+  content: "+";
+  position: absolute;
+  left: 6px;
+  width: var(--chip-prefix-space);
   text-align: center;
-  margin-right: 6px;
+  font-weight: 700;
+  opacity: 0;
+  pointer-events: none;
+  line-height: 1;
 }
 
+.chip--pos::before,
+.chip--neg::before {
+  opacity: 1;
+}
 
 .chip--pos::before {
   content: "+";
@@ -1208,6 +1283,16 @@ html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
 
   box-shadow: var(--panel-shadow);
 
+}
+
+@media (max-width: 700px) {
+  .column-panel {
+    right: auto;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(94vw, 360px);
+    max-width: 94vw;
+  }
 }
 
 html[data-theme="dark"] .column-panel {
@@ -2345,7 +2430,16 @@ button:disabled {
   overflow: hidden;
 
   position: relative;
+  z-index: 3;
+  touch-action: pan-y;
 
+}
+
+@media (max-width: 900px) {
+  .status-row {
+    max-height: none;
+    overflow: visible;
+  }
 }
 
 
@@ -2862,7 +2956,10 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
   margin-top: 12px;
   overflow-x: auto;
-  overflow-y: scroll;
+  overflow-y: auto;
+
+  position: relative;
+  z-index: 1;
 
   border: 1px solid var(--border);
 
@@ -3799,6 +3896,7 @@ tr.series-child-row--open .series-expansion {
   background: var(--panel-surface-soft);
   padding: 6px;
   box-shadow: var(--panel-shadow);
+  box-sizing: border-box;
 }
 
 .series-expansion-poster--empty {
@@ -4265,11 +4363,6 @@ td[data-col="LastWatched"]>* {
   min-width: 0;
 }
 
-.chip[data-query^="airing:"] {
-  min-width: 92px;
-  display: inline-flex;
-  justify-content: center;
-}
 
 td[data-col="TitleSlug"],
 th[data-col="TitleSlug"] {
@@ -4742,4 +4835,96 @@ table[data-app="radarr"] td[data-col="LastWatched"] {
   .series-episode-row {
     scroll-margin-top: 48px;
   }
+}
+
+/* Safari/iOS usability and rendering fallbacks */
+
+/* Make nested scroll containers feel native on iOS Safari */
+.table-wrap,
+.column-panel {
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-wrap {
+  /* Allow pinch-zoom on iOS Safari inside the table */
+  touch-action: auto;
+}
+
+.column-panel {
+  touch-action: pan-y;
+}
+
+/* Touch devices: increase tap targets and prevent iOS input zoom */
+@media (pointer: coarse) {
+  .column-row {
+    padding: 10px 10px;
+    min-height: 44px;
+    gap: 12px;
+    font-size: 1rem;
+  }
+
+  .column-row input[type="checkbox"] {
+    width: 22px;
+    height: 22px;
+    flex: 0 0 auto;
+  }
+
+  button,
+  select,
+  input[type="text"],
+  input[type="search"] {
+    min-height: 44px;
+    font-size: 16px;
+  }
+
+  .table-wrap {
+    font-size: 0.95rem;
+  }
+}
+
+/* Safari: containment and content-visibility can cause broken scrolling and hit testing */
+html.is-safari .table-wrap,
+html.is-safari tbody tr,
+html.is-safari .series-season-episodes {
+  contain: none;
+}
+
+html.is-safari .settings-modal,
+html.is-safari .column-panel,
+html.is-safari .advanced-help {
+  content-visibility: visible;
+  contain-intrinsic-size: auto;
+}
+
+html.is-ios {
+  --column-panel-surface: var(--panel-surface-strong);
+}
+
+html.is-ios,
+html.is-ios body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+html.is-ios body {
+  -webkit-overflow-scrolling: touch;
+}
+
+html.is-ios .series-expansion-poster {
+  width: 140px;
+}
+
+/* iOS: blur can reduce readability and cause scroll jank */
+html.is-ios .column-panel,
+html.is-ios .filters,
+html.is-ios .perf-overlay {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+
+/* Table-only pinch zoom wrapper (iOS Safari) */
+.table-zoom-inner {
+  display: inline-block;
+  will-change: transform;
 }

@@ -128,6 +128,46 @@ label {
   font-size: 0.9rem;
 }
 
+.setup-path-map-group {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-path-map-list {
+  display: grid;
+  gap: 6px;
+}
+
+.setup-path-map-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px dashed var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.setup-path-map-add:hover {
+  color: var(--text);
+  border-color: var(--text);
+}
+
+.setup-path-map-add-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-weight: 600;
+  line-height: 1;
+}
+
 .setup-checkbox {
   display: inline-flex;
   align-items: center;
@@ -262,4 +302,3 @@ html[data-theme="dark"] .setup-inline-message.is-error {
 html[data-theme="dark"] .setup-inline-message.is-ok {
   color: #86efac;
 }
-

@@ -1,3 +1,40 @@
+
+## [0.7.5] - 2026-01-24
+
+- Improve table zoom anchoring on touch devices, prevent iOS pinch-zoom from scaling the page, and add Firefox trackpad zoom support.
+- Increase iOS column panel opacity for better readability.
+- Persist per-tab filters, chips, sort order, and column visibility across tab switches and reloads.
+- Wrap toolbar/filters/status actions on smaller screens to avoid clipped controls.
+- Center the Columns panel on small screens to avoid off-screen clipping.
+- Reserve tri-state chip prefix space without reflow so filters remain stable.
+- Clamp table height calculations during scroll so the table does not stretch when filters are visible.
+- Allow the status/progress panel to grow on small screens so action buttons stay visible.
+- Simplify data status refresh actions to three buttons (active app, Tautulli, clear caches).
+- Add Sonarr GiB / Hour and Bitrate columns alongside existing size metrics.
+- Fetch full Radarr moviefile details when needed so Custom Format Score is reported consistently.
+- Keep the status/progress panel above the table while scrolling on iOS and prevent table scroll bleed.
+- Normalize Sonarr series poster sizing on iOS and keep the Advanced filter input height consistent on small screens.
+- Fix Sonarr size/efficiency column ordering so headers align with their data.
+- Keep filter controls stacked on small screens so Advanced + help buttons don't overlap inputs.
+- Add an estimate note for Sonarr series bitrate in the columns panel and header tooltip.
+- Keep Sonarr Studio, remove the redundant Sonarr Languages column, and label Radarr Languages as Audio Languages.
+
+## [0.7.4] - 2026-01-24
+### Feature
+- Added Path Mapping support! You can now map container paths to host paths per instance (e.g. `/movies:/mnt/media/movies`).
+- This fixes the display of file paths in the UI when using Docker volume mappings.
+- Configurable via Setup page or `SONARR_PATH_MAP`/`RADARR_PATH_MAP` env vars.
+
+## [0.7.3] - 2026-01-24
+### Fixed
+- Fixed Docker setup page not saving configuration by respecting `SORTARR_CONFIG_PATH`.
+- Updated `docker-compose.yaml` example to use `SORTARR_CONFIG_PATH` for easier persistence.
+
+## [0.7.2] - 2026-01-23
+- Fetch New Data now forces a Tautulli background refresh to pick up new matches
+- Include Tautulli original titles when matching by title
+
+
 # Changelog
 
 ## 0.7.2
@@ -5,6 +42,11 @@
 ### UI Fixes
 
 - Update styles.css to prevent Title header from disappearing on scroll.
+
+
+### Configuration
+
+- Allow multiple path mappings per instance via the setup UI; `*_PATH_MAP` accepts `|`-separated entries.
 
 ## 0.7.1
 
@@ -250,20 +292,6 @@
 - Switch table layout to auto sizing and reserve scrollbar gutter for consistent column widths during loads
 - Left-align all table columns for consistency
 
-## [0.7.4] - 2026-01-24
-### Feature
-- Added Path Mapping support! You can now map container paths to host paths per instance (e.g. `/movies:/mnt/media/movies`).
-- This fixes the display of file paths in the UI when using Docker volume mappings.
-- Configurable via Setup page or `SONARR_PATH_MAP`/`RADARR_PATH_MAP` env vars.
-
-## [0.7.3] - 2026-01-24
-### Fixed
-- Fixed Docker setup page not saving configuration by respecting `SORTARR_CONFIG_PATH`.
-- Updated `docker-compose.yaml` example to use `SORTARR_CONFIG_PATH` for easier persistence.
-
-## [0.7.2] - 2026-01-23
-- Fetch New Data now forces a Tautulli background refresh to pick up new matches
-- Include Tautulli original titles when matching by title
 
 ## 0.6.1
 

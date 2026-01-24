@@ -1,3 +1,19 @@
+(function () {
+  const ua = navigator.userAgent || "";
+  const isIOS =
+    /iPad|iPhone|iPod/.test(ua) ||
+    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
+  const isSafari =
+    /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|Android/.test(ua);
+  const isFirefox = /Firefox/i.test(ua);
+
+  const root = document.documentElement;
+  if (isIOS) root.classList.add("is-ios");
+  if (isSafari) root.classList.add("is-safari");
+  if (isFirefox) root.classList.add("is-firefox");
+})();
+
 const tbody = document.getElementById("tbody");
 const statusEl = document.getElementById("status");
 const loadingIndicator = document.getElementById("loadingIndicator");
@@ -268,20 +284,123 @@ function flushFilterRender() {
 
 function bindFilterInput(input) {
   if (!input) return;
-  input.addEventListener("input", scheduleFilterRender);
-  input.addEventListener("blur", flushFilterRender);
+  input.addEventListener("input", () => {
+    scheduleFilterRender();
+    scheduleViewStateSave();
+  });
+  input.addEventListener("blur", () => {
+    flushFilterRender();
+    flushViewStateSave();
+  });
   input.addEventListener("keydown", e => {
     if (e.key === "Enter") {
       flushFilterRender();
+      flushViewStateSave();
     }
   });
+}
+
+function getDefaultSortKey(app) {
+  return app === "sonarr" ? "AvgEpisodeSizeGB" : "GBPerHour";
+}
+
+function normalizeSortKey(app, key) {
+  if (!key) return getDefaultSortKey(app);
+  const th = document.querySelector(`th[data-sort="${CSS.escape(key)}"]`);
+  if (!th) return getDefaultSortKey(app);
+  const appAttr = th.getAttribute("data-app");
+  if (appAttr && appAttr !== app) return getDefaultSortKey(app);
+  return key;
+}
+
+function buildDefaultViewState(app) {
+  return {
+    titleFilter: "",
+    pathFilter: "",
+    advancedFilter: "",
+    advancedEnabled: false,
+    chipQuery: "",
+    sortKey: getDefaultSortKey(app),
+    sortDir: "desc",
+  };
+}
+
+function loadViewState() {
+  let stored = null;
+  try {
+    stored = JSON.parse(localStorage.getItem(VIEW_STATE_KEY) || "");
+  } catch {
+    stored = null;
+  }
+  viewStateByApp.sonarr = {
+    ...buildDefaultViewState("sonarr"),
+    ...(stored?.sonarr || {}),
+  };
+  viewStateByApp.radarr = {
+    ...buildDefaultViewState("radarr"),
+    ...(stored?.radarr || {}),
+  };
+}
+
+function saveViewState() {
+  try {
+    localStorage.setItem(VIEW_STATE_KEY, JSON.stringify(viewStateByApp));
+  } catch {
+  }
+}
+
+function syncViewStateFromUi(app = activeApp) {
+  const state = viewStateByApp[app] || buildDefaultViewState(app);
+  state.titleFilter = String(titleFilter?.value ?? "").trim();
+  state.pathFilter = String(pathFilter?.value ?? "").trim();
+  state.advancedFilter = String(advancedFilter?.value ?? "").trim();
+  state.advancedEnabled = Boolean(advancedEnabled);
+  state.chipQuery = String(chipQuery ?? "").trim();
+  state.sortKey = normalizeSortKey(app, sortKey || getDefaultSortKey(app));
+  state.sortDir = sortDir === "asc" ? "asc" : "desc";
+  viewStateByApp[app] = state;
+}
+
+function scheduleViewStateSave(app = activeApp) {
+  syncViewStateFromUi(app);
+  if (viewStateSaveTimer) return;
+  viewStateSaveTimer = window.setTimeout(() => {
+    viewStateSaveTimer = null;
+    saveViewState();
+  }, 200);
+}
+
+function flushViewStateSave(app = activeApp) {
+  syncViewStateFromUi(app);
+  if (viewStateSaveTimer) {
+    window.clearTimeout(viewStateSaveTimer);
+    viewStateSaveTimer = null;
+  }
+  saveViewState();
+}
+
+function applyViewState(app) {
+  const state = viewStateByApp[app] || buildDefaultViewState(app);
+  sortKey = normalizeSortKey(app, state.sortKey);
+  sortDir = state.sortDir === "asc" ? "asc" : "desc";
+  chipQuery = String(state.chipQuery || "").trim();
+  setAdvancedMode(Boolean(state.advancedEnabled));
+  if (titleFilter) titleFilter.value = state.titleFilter || "";
+  if (pathFilter) pathFilter.value = state.pathFilter || "";
+  if (advancedFilter) {
+    advancedFilter.value = state.advancedEnabled ? (state.advancedFilter || "") : "";
+  }
+  syncChipButtonsToQuery();
 }
 
 function updateTableWrapMaxHeight() {
   if (!tableWrapEl) return;
   const rect = tableWrapEl.getBoundingClientRect();
   const bottomPadding = 12;
-  const available = window.innerHeight - rect.top - bottomPadding;
+  const viewportHeight = window.visualViewport?.height || window.innerHeight;
+  const viewportOffset = window.visualViewport?.offsetTop || 0;
+  const anchorTop = Math.max(rect.top, viewportOffset);
+  const available = viewportHeight - (anchorTop - viewportOffset) - bottomPadding;
   if (available > 200) {
     tableWrapEl.style.maxHeight = `${available}px`;
   } else {
@@ -303,6 +422,9 @@ if (tableWrapEl) {
   tableWrapEl.setAttribute("tabindex", "0");
   scheduleTableWrapLayout();
   window.addEventListener("resize", scheduleTableWrapLayout);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", scheduleTableWrapLayout);
+  }
   if (window.ResizeObserver && appEl) {
     const tableWrapObserver = new ResizeObserver(scheduleTableWrapLayout);
     tableWrapObserver.observe(appEl);
@@ -986,7 +1108,6 @@ const SKIPPED_REASON_SORT_ORDER = {
 
 const SONARR_COLUMNS = new Set([
   "SeriesType",
-  "OriginalLanguage",
   "Genres",
   "LastAired",
   "MissingCount",
@@ -996,10 +1117,13 @@ const SONARR_COLUMNS = new Set([
   "SeasonCount",
   "AvgEpisodeSizeGB",
   "TotalSizeGB",
+  "GBPerHour",
+  "BitrateMbps",
   "Status",
   "Monitored",
   "Tags",
   "ReleaseGroup",
+  "Studio",
   "QualityProfile",
 ]);
 
@@ -1016,7 +1140,6 @@ const RADARR_COLUMNS = new Set([
   "ReleaseGroup",
   "QualityProfile",
   "Studio",
-  "OriginalLanguage",
   "Genres",
   "MissingCount",
   "CutoffUnmetCount",
@@ -1028,7 +1151,6 @@ const RADARR_COLUMNS = new Set([
   "CustomFormats",
   "CustomFormatScore",
   "QualityCutoffNotMet",
-  "Languages",
 ]);
 
 
@@ -1050,11 +1172,12 @@ const TAUTULLI_COLUMNS = new Set([
   "UsersWatched",
 ]);
 const LANGUAGE_COLUMNS = new Set([
+  "OriginalLanguage",
+  "Languages",
   "AudioLanguages",
   "SubtitleLanguages",
   "AudioCodec",
   "AudioChannels",
-  "Languages",
   "AudioLanguagesMixed",
   "SubtitleLanguagesMixed",
 ]);
@@ -1103,6 +1226,7 @@ const CSV_COLUMNS_BY_APP = {
 };
 const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
 const FILTERS_COLLAPSED_KEY = "Sortarr-filters-collapsed";
+const VIEW_STATE_KEY = "Sortarr-view-state";
 const csvColumnsState = { sonarr: false, radarr: false };
 const RESET_UI_PARAM = "reset_ui";
 const RENDER_PERF_PARAM = "render_perf";
@@ -1115,6 +1239,8 @@ const renderPerfState = {
   last: null,
 };
 
+const viewStateByApp = { sonarr: null, radarr: null };
+let viewStateSaveTimer = null;
 const noticeByApp = { sonarr: "", radarr: "" };
 const fastModeByApp = { sonarr: false, radarr: false };
 const coldCacheByApp = { sonarr: false, radarr: false };
@@ -1216,7 +1342,7 @@ const HEADER_CAP_MIN_TEXT = {
   Genres: "Drama, Sci-Fi, Thriller",
   Edition: "Director Cut v",
   CustomFormats: "Custom Formats v",
-  Languages: "Languages v",
+  Languages: "Audio Languages v",
   AudioLanguages: "Audio Languages v",
   SubtitleLanguages: "Subtitle Languages v",
   VideoHDR: "Dolby Vision v",
@@ -1669,6 +1795,7 @@ function setLoading(loading, label) {
   isLoading = loading;
   updateLoadingIndicator();
   if (loadBtn) loadBtn.disabled = loading;
+  updatePrimaryRefreshButton();
   if (label) setStatus(label);
 }
 
@@ -2080,25 +2207,55 @@ function getArrRefreshInstances(app) {
   return [{ id: "", name: "" }];
 }
 
+function getAppLabel(app) {
+  return app === "sonarr" ? "Sonarr" : "Radarr";
+}
+
 function getArrRefreshSuffix(app, instance, index, total) {
   if (total <= 1) return "";
-  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const appLabel = getAppLabel(app);
   const name = String(instance?.name || "").trim();
   if (name) return name;
   return `${appLabel} ${index + 1}`;
 }
 
 function formatArrRefreshLabel(app, suffix) {
-  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const appLabel = getAppLabel(app);
   const base = `Refresh ${appLabel} metadata`;
   if (!suffix) return base;
   return `${base} (${suffix})`;
 }
 
 function formatArrRefreshStatusLabel(app, suffix) {
-  const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
+  const appLabel = getAppLabel(app);
   if (!suffix) return appLabel;
   return `${appLabel} (${suffix})`;
+}
+
+function updatePrimaryRefreshButton() {
+  if (!refreshTabBtn) return;
+  const appLabel = getAppLabel(activeApp);
+  const configured = getAppConfigured(activeApp);
+  refreshTabBtn.textContent = `Refresh ${appLabel} data`;
+  refreshTabBtn.title = `Refresh ${appLabel} metadata, reload ${appLabel} data, and update the cache.`;
+  refreshTabBtn.disabled = !configured || isLoading;
+}
+
+async function refreshActiveAppData() {
+  const app = activeApp;
+  const appLabel = getAppLabel(app);
+  if (!getAppConfigured(app)) {
+    setStatus(`${appLabel} is not configured.`);
+    return;
+  }
+  setStatus(`Refreshing ${appLabel} data...`);
+  try {
+    await requestArrRefresh(app);
+    setStatus(`${appLabel} metadata refresh queued.`);
+  } catch (e) {
+    setStatus(`Error: ${e.message}`);
+  }
+  load(true);
 }
 
 function updateArrRefreshButtons() {
@@ -2197,7 +2354,7 @@ function updateStatusPanel() {
     deepRefreshTautulliBtn.classList.toggle("hidden", !(tautulli && tautulli.configured));
     deepRefreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
   }
-  updateArrRefreshButtons();
+  updatePrimaryRefreshButton();
   updateStatusRowVisibility(appState, tautulli);
 }
 
@@ -2261,7 +2418,296 @@ function scheduleStatusPoll() {
   const interval = hasProgress && progress.processed < progress.total
     ? TAUTULLI_STATUS_POLL_INTERVAL_MS
     : TAUTULLI_POLL_INTERVAL_MS;
-  statusPollTimer = setTimeout(async () => {
+  statusPollTimer = setTimeout
+
+  function enableTablePinchZoom() {
+    const wrap = document.querySelector(".table-wrap");
+    if (!wrap) return;
+    if (wrap.dataset.pinchZoomEnabled === "1") return;
+    wrap.dataset.pinchZoomEnabled = "1";
+
+    // Allow the browser to handle page pinch-zoom everywhere else,
+    // but take over pinch gestures that start on the table area.
+    let table = wrap.querySelector("table");
+    if (!table) return;
+
+    let inner = wrap.querySelector(".table-zoom-inner");
+    if (!inner) {
+      inner = document.createElement("div");
+      inner.className = "table-zoom-inner";
+      table.parentNode.insertBefore(inner, table);
+      inner.appendChild(table);
+    }
+
+    let scale = 1;
+    let startScale = 1;
+    let startDist = 0;
+    let baseW = 0;
+    let baseH = 0;
+    let isPinching = false;
+    let measureFrame = null;
+
+    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+    const dist = (t1, t2) => {
+      const dx = t2.clientX - t1.clientX;
+      const dy = t2.clientY - t1.clientY;
+      return Math.hypot(dx, dy);
+    };
+
+    const getAnchor = (clientX, clientY) => {
+      const rect = wrap.getBoundingClientRect();
+      const offsetX = clientX - rect.left;
+      const offsetY = clientY - rect.top;
+      return {
+        offsetX,
+        offsetY,
+        contentX: (wrap.scrollLeft + offsetX) / scale,
+        contentY: (wrap.scrollTop + offsetY) / scale,
+      };
+    };
+
+    const applyScale = (nextScale, anchor = null) => {
+      scale = clamp(nextScale, 0.85, 2.75);
+      inner.style.transformOrigin = "0 0";
+      inner.style.transform = `scale(${scale})`;
+
+      // Keep the scrollable area consistent with the scaled table size.
+      if (baseW && baseH) {
+        inner.style.width = `${Math.ceil(baseW * scale)}px`;
+        inner.style.height = `${Math.ceil(baseH * scale)}px`;
+      }
+      if (anchor && baseW && baseH) {
+        const scaledW = Math.ceil(baseW * scale);
+        const scaledH = Math.ceil(baseH * scale);
+        const maxLeft = Math.max(0, scaledW - wrap.clientWidth);
+        const maxTop = Math.max(0, scaledH - wrap.clientHeight);
+        const nextLeft = anchor.contentX * scale - anchor.offsetX;
+        const nextTop = anchor.contentY * scale - anchor.offsetY;
+        wrap.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+        wrap.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
+      }
+    };
+
+    const getTouchCenter = (t1, t2) => ({
+      x: (t1.clientX + t2.clientX) / 2,
+      y: (t1.clientY + t2.clientY) / 2,
+    });
+
+    const scheduleMeasure = () => {
+      if (measureFrame) return;
+      measureFrame = requestAnimationFrame(() => {
+        measureFrame = null;
+        measureBase();
+      });
+    };
+
+    const measureBase = () => {
+      // Reset transforms to measure intrinsic size
+      inner.style.transform = "scale(1)";
+      inner.style.width = "";
+      inner.style.height = "";
+
+      // Re-find table in case the app re-rendered it
+      const newTable = wrap.querySelector("table");
+      if (newTable && newTable !== table) {
+        table = newTable;
+        inner.innerHTML = "";
+        inner.appendChild(table);
+      }
+
+      baseW = table ? table.offsetWidth : baseW;
+      baseH = table ? table.offsetHeight : baseH;
+      applyScale(scale);
+    };
+
+    // Re-measure after layout-affecting DOM updates in the table area
+    const obs = new MutationObserver(() => {
+      scheduleMeasure();
+    });
+    obs.observe(wrap, { childList: true, subtree: true });
+
+    scheduleMeasure();
+
+    // iOS Safari requires passive:false to prevent default pinch-zoom.
+    wrap.addEventListener(
+      "touchstart",
+      (e) => {
+        if (e.touches && e.touches.length === 2) {
+          e.preventDefault();
+          isPinching = true;
+          startScale = scale;
+          startDist = dist(e.touches[0], e.touches[1]);
+        }
+      },
+      { passive: false }
+    );
+
+    wrap.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!isPinching) return;
+        if (!e.touches || e.touches.length !== 2) return;
+
+        // This prevents the page from zooming when the pinch starts on the table.
+        e.preventDefault();
+
+        const d = dist(e.touches[0], e.touches[1]);
+        if (!startDist) return;
+        const center = getTouchCenter(e.touches[0], e.touches[1]);
+        const anchor = getAnchor(center.x, center.y);
+        const nextScale = startScale * (d / startDist);
+        applyScale(nextScale, anchor);
+      },
+      { passive: false }
+    );
+
+    wrap.addEventListener(
+      "touchend",
+      (e) => {
+        if (!e.touches || e.touches.length < 2) {
+          isPinching = false;
+          startDist = 0;
+        }
+      },
+      { passive: true }
+    );
+
+    if (document.documentElement.classList.contains("is-ios")) {
+      ["gesturestart", "gesturechange", "gestureend"].forEach(eventName => {
+        wrap.addEventListener(
+          eventName,
+          (e) => {
+            e.preventDefault();
+            if (eventName === "gestureend") {
+              isPinching = false;
+              startDist = 0;
+            }
+          },
+          { passive: false }
+        );
+      });
+    }
+
+    const isFirefox = document.documentElement.classList.contains("is-firefox");
+    wrap.addEventListener(
+      "wheel",
+      (e) => {
+        if (!isFirefox || !e.ctrlKey) return;
+        if (!wrap.contains(e.target)) return;
+        e.preventDefault();
+        const anchor = getAnchor(e.clientX, e.clientY);
+        const zoomFactor = Math.exp(-e.deltaY * 0.002);
+        applyScale(scale * zoomFactor, anchor);
+      },
+      { passive: false }
+    );
+
+    // Optional: double-tap to reset zoom on touch devices
+    let lastTap = 0;
+    wrap.addEventListener(
+      "touchend",
+      (e) => {
+        if (isPinching) return;
+        if (e.changedTouches && e.changedTouches.length === 1) {
+          const now = Date.now();
+          if (now - lastTap < 320) {
+            const touch = e.changedTouches[0];
+            const anchor = touch ? getAnchor(touch.clientX, touch.clientY) : null;
+            applyScale(1, anchor);
+            lastTap = 0;
+          } else {
+            lastTap = now;
+          }
+        }
+      },
+      { passive: true }
+    );
+  }
+
+  function enableTableScrollChaining() {
+    if (!tableWrapEl) return;
+    if (!document.documentElement.classList.contains("is-ios")) return;
+    let tracking = false;
+    let lastY = 0;
+    tableWrapEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (!e.touches || e.touches.length !== 1) {
+          tracking = false;
+          return;
+        }
+        tracking = true;
+        lastY = e.touches[0].clientY;
+      },
+      { passive: true }
+    );
+    tableWrapEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!tracking || !e.touches || e.touches.length !== 1) return;
+        const currentY = e.touches[0].clientY;
+        const deltaY = currentY - lastY;
+        lastY = currentY;
+        const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+        if (maxScroll <= 0) return;
+        const atTop = tableWrapEl.scrollTop <= 0;
+        const atBottom = tableWrapEl.scrollTop >= maxScroll - 1;
+        if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
+          window.scrollBy(0, -deltaY);
+        }
+      },
+      { passive: true }
+    );
+    tableWrapEl.addEventListener(
+      "touchend",
+      () => {
+        tracking = false;
+      },
+      { passive: true }
+    );
+  }
+
+  function enableStatusRowScrollChaining() {
+    if (!statusRowEl) return;
+    if (!document.documentElement.classList.contains("is-ios")) return;
+    let tracking = false;
+    let lastY = 0;
+    statusRowEl.addEventListener(
+      "touchstart",
+      (e) => {
+        if (!e.touches || e.touches.length !== 1) {
+          tracking = false;
+          return;
+        }
+        tracking = true;
+        lastY = e.touches[0].clientY;
+      },
+      { passive: true }
+    );
+    statusRowEl.addEventListener(
+      "touchmove",
+      (e) => {
+        if (!tracking || !e.touches || e.touches.length !== 1) return;
+        const currentY = e.touches[0].clientY;
+        const deltaY = currentY - lastY;
+        lastY = currentY;
+        if (!deltaY) return;
+        e.preventDefault();
+        window.scrollBy(0, -deltaY);
+      },
+      { passive: false }
+    );
+    statusRowEl.addEventListener(
+      "touchend",
+      () => {
+        tracking = false;
+      },
+      { passive: true }
+    );
+  }
+
+  (async () => {
     statusPollTimer = null;
     await fetchStatus({ silent: true, lite: true });
   }, interval);
@@ -2797,6 +3243,7 @@ function resetUiState() {
   localStorage.removeItem(COLUMN_STORAGE_KEY);
   localStorage.removeItem(CSV_COLUMNS_KEY);
   localStorage.removeItem(FILTERS_COLLAPSED_KEY);
+  localStorage.removeItem(VIEW_STATE_KEY);
   localStorage.removeItem("Sortarr-theme");
 }
 
@@ -2916,7 +3363,30 @@ function bindChipButtons(rootEl = document) {
       }
       const scrollAnchor = captureTableScrollAnchor();
       render(dataByApp[activeApp] || [], { scrollAnchor });
+      scheduleViewStateSave();
     });
+  });
+}
+
+function syncChipButtonsToQuery(rootEl = document) {
+  const tokens = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
+  rootEl.querySelectorAll(".chip").forEach(btn => {
+    const query = btn.getAttribute("data-query") || "";
+    if (!query) return;
+    const negToken = `-${query}`;
+    btn.classList.remove("chip--pos", "chip--neg");
+    if (tokens.has(query)) {
+      btn.classList.add("chip--pos");
+      btn.setAttribute("aria-pressed", "true");
+      btn.dataset.state = "pos";
+    } else if (tokens.has(negToken)) {
+      btn.classList.add("chip--neg");
+      btn.setAttribute("aria-pressed", "true");
+      btn.dataset.state = "neg";
+    } else {
+      btn.setAttribute("aria-pressed", "false");
+      btn.dataset.state = "off";
+    }
   });
 }
 
@@ -5586,6 +6056,8 @@ const NUMERIC_DISPLAY_COLUMNS = {
     "MissingCount",
     "CutoffUnmetCount",
     "AvgEpisodeSizeGB",
+    "GBPerHour",
+    "BitrateMbps",
     "PlayCount",
     "DaysSinceWatched",
     "UsersWatched",
@@ -6640,6 +7112,7 @@ function clearActiveFilters() {
       btn.dataset.state = "off";
     });
     updateAdvancedWarnings([]);
+    scheduleViewStateSave();
   }
   return changed;
 }
@@ -6764,6 +7237,7 @@ function sortData(arr) {
 }
 
 const COLUMN_STORAGE_KEY = "Sortarr-columns";
+const columnPrefsByApp = { sonarr: {}, radarr: {} };
 const DEFAULT_HIDDEN_COLUMNS = new Set([
   "Instance",
   "Status",
@@ -6969,18 +7443,45 @@ function enforceRequiredColumns() {
   });
 }
 
-function loadColumnPrefs() {
-  if (!columnsPanel) return;
+function loadColumnPrefsState() {
   let prefs = null;
   try {
     prefs = JSON.parse(localStorage.getItem(COLUMN_STORAGE_KEY) || "");
   } catch {
     prefs = null;
   }
+  if (prefs && (prefs.sonarr || prefs.radarr)) {
+    columnPrefsByApp.sonarr = { ...(prefs.sonarr || {}) };
+    columnPrefsByApp.radarr = { ...(prefs.radarr || {}) };
+    return;
+  }
+  if (prefs && typeof prefs === "object") {
+    columnPrefsByApp.sonarr = { ...prefs };
+    columnPrefsByApp.radarr = { ...prefs };
+    return;
+  }
+  columnPrefsByApp.sonarr = {};
+  columnPrefsByApp.radarr = {};
+}
+
+function storeColumnPrefs() {
+  try {
+    localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(columnPrefsByApp));
+  } catch {
+  }
+}
+
+function getColumnPrefs(app) {
+  return columnPrefsByApp[app] || {};
+}
+
+function loadColumnPrefs(app = activeApp) {
+  if (!columnsPanel) return;
+  const prefs = getColumnPrefs(app);
 
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     const col = input.getAttribute("data-col");
-    if (prefs && Object.prototype.hasOwnProperty.call(prefs, col)) {
+    if (Object.prototype.hasOwnProperty.call(prefs, col)) {
       input.checked = Boolean(prefs[col]);
     } else {
       input.checked = !DEFAULT_HIDDEN_COLUMNS.has(col);
@@ -6990,7 +7491,7 @@ function loadColumnPrefs() {
   updateColumnGroupToggles();
 }
 
-function saveColumnPrefs() {
+function saveColumnPrefs(app = activeApp) {
   if (!columnsPanel) return;
   const prefs = {};
   const seen = new Set();
@@ -7002,7 +7503,8 @@ function saveColumnPrefs() {
     syncColumnInputs(col, checked);
     seen.add(col);
   });
-  localStorage.setItem(COLUMN_STORAGE_KEY, JSON.stringify(prefs));
+  columnPrefsByApp[app] = prefs;
+  storeColumnPrefs();
 }
 
 function getHiddenColumns() {
@@ -7102,8 +7604,10 @@ function updateColumnScrollHint() {
     columnsPanel.style.height = "";
     columnsPanel.style.maxHeight = "";
     columnsPanel.style.overflow = "";
+    resetColumnsPanelPosition();
     return;
   }
+  positionColumnsPanel();
   const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
   const rect = columnsPanel.getBoundingClientRect();
   const availableHeight = Math.floor(viewportHeight - rect.top - 16);
@@ -7125,6 +7629,37 @@ function updateColumnScrollHint() {
   columnsPanel.style.overflow = canScroll ? "auto" : "hidden";
   const atBottom = columnsPanel.scrollTop + clientHeight >= scrollHeight - 1;
   columnsPanel.classList.toggle("column-panel--scrollable-down", canScroll && !atBottom);
+}
+
+function resetColumnsPanelPosition() {
+  if (!columnsPanel) return;
+  columnsPanel.style.position = "";
+  columnsPanel.style.left = "";
+  columnsPanel.style.right = "";
+  columnsPanel.style.top = "";
+  columnsPanel.style.transform = "";
+  columnsPanel.style.width = "";
+  columnsPanel.style.maxWidth = "";
+}
+
+function positionColumnsPanel() {
+  if (!columnsPanel || !columnsBtn) return;
+  const isSmall = window.innerWidth <= 700;
+  if (!isSmall) {
+    resetColumnsPanelPosition();
+    return;
+  }
+  const btnRect = columnsBtn.getBoundingClientRect();
+  const viewportWidth = window.visualViewport?.width || window.innerWidth;
+  const maxWidth = Math.round(Math.min(viewportWidth * 0.94, 360));
+  const top = Math.round(btnRect.bottom + 8);
+  columnsPanel.style.position = "fixed";
+  columnsPanel.style.left = "50%";
+  columnsPanel.style.right = "auto";
+  columnsPanel.style.top = `${top}px`;
+  columnsPanel.style.transform = "translateX(-50%)";
+  columnsPanel.style.width = `${maxWidth}px`;
+  columnsPanel.style.maxWidth = `${maxWidth}px`;
 }
 
 function updateColumnFilter() {
@@ -7183,7 +7718,8 @@ function setAllColumns(checked) {
 }
 
 function resetColumnPrefs() {
-  localStorage.removeItem(COLUMN_STORAGE_KEY);
+  columnPrefsByApp[activeApp] = {};
+  storeColumnPrefs();
   loadColumnPrefs();
   updateColumnFilter();
   markColumnVisibilityDirty();
@@ -7311,7 +7847,10 @@ function updateChipVisibility() {
 
   bindChipButtons();
 
-  if (!hiddenQueries.size) return false;
+  if (!hiddenQueries.size) {
+    syncChipButtonsToQuery();
+    return false;
+  }
   const current = new Set((chipQuery || "").split(/\s+/).filter(Boolean));
   let changed = false;
   hiddenQueries.forEach(q => {
@@ -7320,6 +7859,7 @@ function updateChipVisibility() {
   if (changed) {
     chipQuery = Array.from(current).join(" ");
   }
+  syncChipButtonsToQuery();
   return changed;
 }
 
@@ -7576,6 +8116,7 @@ function applyTitleWidth(app, _rows = null, _options = {}) {
 function setActiveTab(app) {
   if (activeApp === app) return;
 
+  flushViewStateSave(activeApp);
   activeApp = app;
 
   // Clear stale badges immediately
@@ -7611,15 +8152,9 @@ function setActiveTab(app) {
   updateBackgroundLoading();
   updateStatusPanel();
 
-  // default sorts per tab
-  if (activeApp === "sonarr") {
-    sortKey = "AvgEpisodeSizeGB";
-    sortDir = "desc";
-  } else {
-    sortKey = "GBPerHour";
-    sortDir = "desc";
-  }
-
+  loadColumnPrefs();
+  applyViewState(activeApp);
+  sortCacheByApp[activeApp] = null;
   syncCsvToggle();
   updateColumnVisibility();
   updateColumnFilter();
@@ -7628,12 +8163,10 @@ function setActiveTab(app) {
   applyTitleWidth(activeApp, null, { skipIfUnchanged: true });
   scheduleTitlePathWidthLock();
 
-  // clear filter per-tab
-  if (titleFilter) titleFilter.value = "";
-  if (pathFilter) pathFilter.value = "";
-  if (advancedFilter) advancedFilter.value = "";
-  setAdvancedMode(false);
   const chipsChanged = updateChipVisibility();
+  if (chipsChanged) {
+    scheduleViewStateSave();
+  }
 
   const activeData = dataByApp[activeApp] || [];
   if (activeData.length) {
@@ -8149,6 +8682,7 @@ function buildRow(row, app, options = {}) {
     <td data-col="DateAdded">${dateAdded}</td>
     <td data-col="Instance">${instanceName}</td>
     <td data-col="SeriesType" data-app="sonarr">${seriesType}</td>
+    <td data-col="Studio" data-app="sonarr">${studio}</td>
     <td data-col="OriginalLanguage" data-app="sonarr">${originalLanguage}</td>
     <td data-col="Genres" data-app="sonarr">${genres}</td>
     <td data-col="LastAired" data-app="sonarr">${lastAired}</td>
@@ -8159,6 +8693,8 @@ function buildRow(row, app, options = {}) {
     <td class="right" data-col="SeasonCount" data-app="sonarr">${seasonCount}</td>
     <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${avgEpisodeSize}</td>
     <td data-col="TotalSizeGB" data-app="sonarr">${totalSize}</td>
+    <td class="right" data-col="GBPerHour" data-app="sonarr">${gbPerHour}</td>
+    <td class="right" data-col="BitrateMbps" data-app="sonarr">${bitrateCell}</td>
     <td data-col="Status">${status}</td>
     <td data-col="Monitored">${monitored}</td>
     <td data-col="Tags">${tags}</td>
@@ -8170,7 +8706,6 @@ function buildRow(row, app, options = {}) {
     <td data-col="VideoHDR">${videoHdr}</td>
     <td data-col="AudioCodec" ${audioCodecAttr}>${audioCodec}</td>
     <td data-col="AudioChannels" ${audioChannelsAttr}>${audioChannels}</td>
-    <td data-col="AudioLanguages">${audioLanguages}</td>
     <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
     <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
     <td class="right" data-col="PlayCount">${playCount}</td>
@@ -9152,7 +9687,9 @@ document.querySelectorAll("th[data-sort]").forEach(th => {
       sortDir = "desc";
     }
 
+    sortCacheByApp[activeApp] = null;
     updateSortIndicators();
+    scheduleViewStateSave();
     requestAnimationFrame(() => {
       render(dataByApp[activeApp] || []);
     });
@@ -9181,7 +9718,7 @@ if (loadBtn) {
 }
 if (refreshTabBtn) {
   refreshTabBtn.addEventListener("click", () => {
-    load(true);
+    refreshActiveAppData();
   });
 }
 if (refreshSonarrBtn) {
@@ -9244,7 +9781,7 @@ if (refreshTautulliBtn) {
 }
 if (deepRefreshTautulliBtn) {
   deepRefreshTautulliBtn.addEventListener("click", async () => {
-    setStatus("Starting deep Tautulli refresh...");
+    setStatus("Refreshing Tautulli data...");
     try {
       const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
         method: "POST",
@@ -9262,7 +9799,7 @@ if (deepRefreshTautulliBtn) {
         updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus("Deep Tautulli refresh started. This can take a while.");
+      setStatus("Tautulli refresh started. This can take a while.");
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
@@ -9270,7 +9807,7 @@ if (deepRefreshTautulliBtn) {
 }
 if (clearCachesBtn) {
   clearCachesBtn.addEventListener("click", async () => {
-    if (!window.confirm("Clear cached data and reload from Sonarr/Radarr (and Tautulli if configured)?")) {
+    if (!window.confirm("Clear all Sortarr caches and rebuild from Sonarr/Radarr (and Tautulli if configured)?")) {
       return;
     }
     setStatus("Clearing caches...");
@@ -9442,6 +9979,9 @@ function setTautulliEnabled(enabled) {
   markColumnVisibilityDirty();
   updateColumnVisibility();
   updateStatusPanel();
+  if (chipsChanged) {
+    scheduleViewStateSave();
+  }
   if (chipsChanged && (dataByApp[activeApp] || []).length) {
     render(dataByApp[activeApp]);
   }
@@ -9451,9 +9991,14 @@ bindFilterInput(titleFilter);
 bindFilterInput(pathFilter);
 bindFilterInput(advancedFilter);
 
+window.addEventListener("beforeunload", () => {
+  flushViewStateSave();
+});
+
 if (advancedToggle) {
   advancedToggle.addEventListener("click", () => {
     setAdvancedMode(!advancedEnabled);
+    scheduleViewStateSave();
     render(dataByApp[activeApp] || []);
   });
 }
@@ -9716,10 +10261,20 @@ function normalizeSonarrRuntimeOrder(scope = document) {
     const runtimeHeader = headerRow.querySelector('th[data-col="ContentHours"][data-app="sonarr"]');
     const totalHeader = headerRow.querySelector('th[data-col="TotalSizeGB"][data-app="sonarr"]');
     const avgHeader = headerRow.querySelector('th[data-col="AvgEpisodeSizeGB"][data-app="sonarr"]');
+    const gbPerHourHeader = headerRow.querySelector('th[data-col="GBPerHour"][data-app="sonarr"]');
+    const bitrateHeader = headerRow.querySelector('th[data-col="BitrateMbps"][data-app="sonarr"]');
     const episodesHeader = headerRow.querySelector('th[data-col="EpisodesCounted"][data-app="sonarr"]');
     const seasonsHeader = headerRow.querySelector('th[data-col="SeasonCount"][data-app="sonarr"]');
     const radarrHeader = headerRow.querySelector('th[data-app="radarr"]');
-    const order = [runtimeHeader, episodesHeader, seasonsHeader, avgHeader, totalHeader].filter(Boolean);
+    const order = [
+      runtimeHeader,
+      episodesHeader,
+      seasonsHeader,
+      avgHeader,
+      totalHeader,
+      gbPerHourHeader,
+      bitrateHeader,
+    ].filter(Boolean);
     if (order.length && radarrHeader) {
       order.forEach(el => headerRow.insertBefore(el, radarrHeader));
       sonarrHeaderNormalized = true;
@@ -9773,7 +10328,7 @@ async function loadConfig() {
 
     buildInstanceChips();
     setTautulliEnabled(cfg.tautulli_configured);
-    updateArrRefreshButtons();
+    updatePrimaryRefreshButton();
   } catch (e) {
     console.warn("config load failed", e);
   }
@@ -9782,10 +10337,12 @@ async function loadConfig() {
 /* init */
 (async function init() {
   initPerfOverlay();
+  updatePrimaryRefreshButton();
 
   if (resetUiRequested) {
     localStorage.removeItem(COLUMN_STORAGE_KEY);
     localStorage.removeItem(CSV_COLUMNS_KEY);
+    localStorage.removeItem(VIEW_STATE_KEY);
     try {
       const url = new URL(window.location.href);
       url.searchParams.delete(RESET_UI_PARAM);
@@ -9794,8 +10351,11 @@ async function loadConfig() {
       console.warn("reset_ui replaceState failed", e);
     }
   }
+  loadColumnPrefsState();
   loadColumnPrefs();
   loadCsvColumnsState();
+  loadViewState();
+  applyViewState(activeApp);
   syncCsvToggle();
   setTautulliEnabled(false);
   updateRuntimeLabels();
@@ -9805,7 +10365,6 @@ async function loadConfig() {
   updateLastUpdatedDisplay();
   updateSortIndicators();
   if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
-  setAdvancedMode(false);
   scheduleTitlePathWidthLock();
   await loadConfig();
   fetchStatus({ silent: true, lite: true });
@@ -9851,4 +10410,7 @@ async function loadConfig() {
     queuePrefetch(otherApp, false);
   }
   await load(false);
+  enableTablePinchZoom();
+  enableTableScrollChaining();
+  enableStatusRowScrollChaining();
 })()
