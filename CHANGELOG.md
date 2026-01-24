@@ -1,3 +1,4 @@
+# Changelog
 
 ## [0.7.5] - 2026-01-24
 
@@ -33,9 +34,6 @@
 ## [0.7.2] - 2026-01-23
 - Fetch New Data now forces a Tautulli background refresh to pick up new matches
 - Include Tautulli original titles when matching by title
-
-
-# Changelog
 
 ## 0.7.2
 
