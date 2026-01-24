@@ -2,18 +2,19 @@ services:
   sortarr:
     image: ghcr.io/jaredharper1/sortarr:latest
     # Optional: set platform (e.g., linux/arm64/v8 for Apple Silicon).
-    # platform: linux/arm64/v8
+    # platform: linux/arm64/v8    
     container_name: sortarr
     ports:
       - "9595:8787"
     environment:
       - SORTARR_CONFIG_PATH=/data/Sortarr.env
-      - SORTARR_CONFIG_PATH=/data/Sortarr.env
       - CACHE_SECONDS=300
+      # Optional: Use Reverse Proxy? ie. NGINX, Cloudflare, Caddy, Traefik, Apache? Use this:
+      # eg. SORTARR_PROXY_HOPS=1
       # Optional: Map container paths to host paths for the UI
-      # - RADARR_PATH_MAP=/movies:/mnt/media/movies
+      # eg. RADARR_PATH_MAP=/movies:/mnt/media/movies
     volumes:
       - "./data:/data"
       # Optional: Mount .env for persistence if using default paths
-      # - "/path/to/config/.env:/app/.env"
+      # eg. /path/to/config/.env:/app/.env    
     restart: unless-stopped
