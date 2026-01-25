@@ -1,0 +1,210 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: Sortarr\n"
+"POT-Creation-Date: 2026-01-25 15:30+0100\n"
+"PO-Revision-Date: 2026-01-25 15:30+0100\n"
+"Last-Translator: User\n"
+"Language: de\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: Babel 2.12.1\n"
+
+# --- Dashboard ---
+msgid "Title"
+msgstr "Titel"
+
+msgid "Size (GiB)"
+msgstr "Größe (GiB)"
+
+msgid "Status"
+msgstr "Status"
+
+msgid "Quality"
+msgstr "Qualität"
+
+msgid "Video Codec"
+msgstr "Video-Codec"
+
+msgid "Bitrate (Mbps)"
+msgstr "Bitrate (Mbit/s)"
+
+msgid "Added"
+msgstr "Hinzugefügt"
+
+msgid "Settings"
+msgstr "Einstellungen"
+
+msgid "Reset UI"
+msgstr "Ansicht zurücksetzen"
+
+# --- Setup Header & Error ---
+msgid "Setup"
+msgstr "Einrichtung"
+
+msgid "Add Sonarr/Radarr details. Tautulli or Jellystat is optional for playback stats."
+msgstr "Sonarr/Radarr Details hinzufügen. Tautulli oder Jellystat sind optional für Statistiken."
+
+msgid "Provide Sonarr or Radarr URL and API key."
+msgstr "Bitte Sonarr oder Radarr URL und API-Key angeben."
+
+msgid "Save and continue"
+msgstr "Speichern und Fortfahren"
+
+# --- Sonarr ---
+msgid "Sonarr Instance 1"
+msgstr "Sonarr Instanz 1"
+
+msgid "Instance name"
+msgstr "Instanz-Name"
+
+msgid "Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)"
+msgstr "Standard / Normal (Beispielnamen; optional, außer Instanz 2 oder 3 wird genutzt)"
+
+msgid "Sonarr URL"
+msgstr "Sonarr URL"
+
+msgid "http://192.168.1.120:8989"
+msgstr "http://192.168.1.120:8989"
+
+msgid "Sonarr API key"
+msgstr "Sonarr API-Key"
+
+msgid "your-api-key"
+msgstr "dein-api-key"
+
+msgid "Path map"
+msgstr "Pfad-Mapping"
+
+msgid "/container/path:/host/path"
+msgstr "/container/pfad:/host/pfad"
+
+msgid "Add mapping"
+msgstr "Mapping hinzufügen"
+
+msgid "Test connection"
+msgstr "Verbindung testen"
+
+msgid "Advanced Sonarr instances"
+msgstr "Erweiterte Sonarr-Instanzen"
+
+msgid "4k / Anime / Cartoons"
+msgstr "4K / Anime / Zeichentrick"
+
+msgid "If you add another Sonarr instance, name all configured Sonarr instances so chips and columns stay clear."
+msgstr "Wenn Sie eine weitere Instanz hinzufügen, benennen Sie alle Instanzen für mehr Übersicht."
+
+# --- Radarr ---
+msgid "Radarr Instance 1"
+msgstr "Radarr Instanz 1"
+
+msgid "Radarr URL"
+msgstr "Radarr URL"
+
+msgid "http://192.168.1.120:7878"
+msgstr "http://192.168.1.120:7878"
+
+msgid "Radarr API key"
+msgstr "Radarr API-Key"
+
+msgid "Advanced Radarr instances"
+msgstr "Erweiterte Radarr-Instanzen"
+
+msgid "If you add another Radarr instance, name all configured Radarr instances so chips and columns stay clear."
+msgstr "Wenn Sie eine weitere Instanz hinzufügen, benennen Sie alle Instanzen für mehr Übersicht."
+
+# --- Jellystat & Tautulli ---
+msgid "Jellystat (optional)"
+msgstr "Jellystat (optional)"
+
+msgid "http://192.168.1.120:3000"
+msgstr "http://192.168.1.120:3000"
+
+msgid "Jellystat API key"
+msgstr "Jellystat API-Key"
+
+msgid "optional"
+msgstr "optional"
+
+msgid "Jellystat library IDs (Sonarr)"
+msgstr "Jellystat Library-IDs (Sonarr)"
+
+msgid "optional, comma-separated"
+msgstr "optional, durch Komma getrennt"
+
+msgid "Jellystat library IDs (Radarr)"
+msgstr "Jellystat Library-IDs (Radarr)"
+
+msgid "Leave library IDs blank to auto-detect by library type."
+msgstr "IDs leer lassen für automatische Erkennung nach Typ."
+
+msgid "Configure either Jellystat or Tautulli for playback stats. If both are set, Jellystat is used."
+msgstr "Nutzen Sie Jellystat oder Tautulli für Statistiken. Falls beide aktiv, wird Jellystat genutzt."
+
+msgid "Tautulli (optional)"
+msgstr "Tautulli (optional)"
+
+msgid "http://192.168.1.120:8181"
+msgstr "http://192.168.1.120:8181"
+
+# --- Sicherheit ---
+msgid "Security"
+msgstr "Sicherheit"
+
+msgid "Basic auth username"
+msgstr "Benutzername (Basic Auth)"
+
+msgid "Basic auth password"
+msgstr "Passwort (Basic Auth)"
+
+msgid "Clear existing password"
+msgstr "Bestehendes Passwort löschen"
+
+msgid "Leave blank to keep current password."
+msgstr "Leer lassen, um das aktuelle Passwort zu behalten."
+
+msgid "Credentials are stored in the env file; keep it private."
+msgstr "Zugangsdaten werden in der .env gespeichert; bitte geheim halten."
+
+# --- Advanced ---
+msgid "Advanced settings"
+msgstr "Erweiterte Einstellungen"
+
+msgid "Arr performance"
+msgstr "Arr Leistung"
+
+msgid "Sonarr timeout seconds"
+msgstr "Sonarr Timeout (Sekunden)"
+
+msgid "Sonarr episode file workers"
+msgstr "Sonarr Episoden-Datei-Worker"
+
+msgid "Radarr timeout seconds"
+msgstr "Radarr Timeout (Sekunden)"
+
+msgid "Radarr wanted workers"
+msgstr "Radarr Wanted-Worker"
+
+msgid "Radarr instance workers"
+msgstr "Radarr Instanz-Worker"
+
+msgid "Leave fields blank for defaults. Timeout seconds accept 0 to disable. Radarr wanted workers are capped at 4."
+msgstr "Felder leer lassen für Standardwerte. 0 deaktiviert den Timeout. Radarr Wanted-Worker sind auf 4 begrenzt."
+
+msgid "Tautulli performance"
+msgstr "Tautulli Leistung"
+
+msgid "Tautulli timeout seconds"
+msgstr "Tautulli Timeout (Sekunden)"
+
+msgid "Tautulli fetch seconds"
+msgstr "Tautulli Abruf-Intervall (Sekunden)"
+
+msgid "Tautulli metadata workers"
+msgstr "Tautulli Metadaten-Worker"
+
+msgid "Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for defaults; seconds fields accept 0 for no time limit."
+msgstr "Metadaten-Abfragen sind für die Genauigkeit unbegrenzt. Leer lassen für Standardwerte; 0 deaktiviert das Zeitlimit."
+
+msgid "Env file path: "
+msgstr "Pfad zur .env Datei: "

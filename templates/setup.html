@@ -5,407 +5,411 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="csrf-token" content="{{ csrf_token }}" />
-  <title>{{ app_name }} Setup</title>
+  <title>{{ app_name }} {{ _('Setup') }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
   <link rel="stylesheet" href="/static/setup.css?v={{ app_version }}" />
+  <style>
+    .lang-switch { position: absolute; top: 10px; right: 10px; font-size: 0.8em; }
+    .lang-switch a { color: var(--text-muted); text-decoration: none; margin-left: 10px; }
+    .lang-switch a:hover { color: var(--text-main); }
+  </style>
 </head>
 
 <body>
+  <div class="lang-switch">
+    <a href="?lang=de">Deutsch</a>
+    <a href="?lang=en">English</a>
+  </div>
   <div class="setup-wrap">
     <div class="setup-card">
       <div class="setup-header">
         <img class="setup-logo" src="/static/logo.svg" alt="{{ app_name }}" />
         <div>
-          <div class="setup-title">{{ app_name }} Setup v{{ app_version }}</div>
-          <div class="setup-sub">Add Sonarr/Radarr details. Tautulli or Jellystat is optional for playback stats.</div>
+          <div class="setup-title">{{ app_name }} {{ _('Setup') }} v{{ app_version }}</div>
+          <div class="setup-sub">{{ _('Add Sonarr/Radarr details. Tautulli or Jellystat is optional for playback stats.') }}</div>
         </div>
       </div>
 
-      {% if error %}
-      <div class="setup-error">{{ error }}</div>
-      {% endif %}
+{% if error %}
+<div class="setup-error">{{ _(error) }}</div>
+{% endif %}
 
       <form method="post" class="setup-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-        <div class="setup-section-title">Sonarr Instance 1</div>
+        <div class="setup-section-title">{{ _('Sonarr Instance 1') }}</div>
         <label>
-          Instance name
+          {{ _('Instance name') }}
           <input name="sonarr_name"
-            placeholder="Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)"
+            placeholder="{{ _('Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)') }}"
             value="{{ values.sonarr_name }}" />
         </label>
         <label>
-          Sonarr URL
-          <input name="sonarr_url" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url }}" />
+          {{ _('Sonarr URL') }}
+          <input name="sonarr_url" placeholder="{{ _('http://192.168.1.120:8989') }}" value="{{ values.sonarr_url }}" />
         </label>
         <label>
-          Sonarr API key
-          <input name="sonarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key"
+          {{ _('Sonarr API key') }}
+          <input name="sonarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ _('your-api-key') }}"
             value="{{ values.sonarr_api_key }}" />
         </label>
         <label>
-          Path map
+          {{ _('Path map') }}
           <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map"
-            data-path-map-placeholder="/container/path:/host/path">
+            data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
             <div class="setup-path-map-list" data-path-map-list>
               {% for entry in values.sonarr_path_maps or [""] %}
-              <input name="sonarr_path_map" placeholder="/container/path:/host/path" value="{{ entry }}"
-                aria-label="Path map" />
+              <input name="sonarr_path_map" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                aria-label="{{ _('Path map') }}" />
               {% endfor %}
             </div>
             <button class="setup-path-map-add" type="button" data-path-map-add>
               <span class="setup-path-map-add-icon">+</span>
-              <span class="setup-path-map-add-text">Add mapping</span>
+              <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
             </button>
           </div>
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url"
             data-key-id="sonarr_api_key" data-inline-key="sonarr_1">
-            Test connection
+            {{ _('Test connection') }}
           </button>
           <span class="setup-inline-message{% if field_errors.get('sonarr_1') %} is-error{% else %} hidden{% endif %}"
             data-inline="sonarr_1">{{ field_errors.get('sonarr_1', '') }}</span>
         </div>
 
         <details class="setup-advanced">
-          <summary>Advanced Sonarr instances</summary>
+          <summary>{{ _('Advanced Sonarr instances') }}</summary>
           <div class="setup-advanced-body">
-            <div class="setup-section-title">Sonarr Instance 2 (optional)</div>
+            <div class="setup-section-title">{{ _('Sonarr Instance 2 (optional)') }}</div>
             <label>
-              Instance name
-              <input name="sonarr_name_2" placeholder="4k / Anime / Cartoons" value="{{ values.sonarr_name_2 }}" />
+              {{ _('Instance name') }}
+              <input name="sonarr_name_2" placeholder="{{ _('4k / Anime / Cartoons') }}" value="{{ values.sonarr_name_2 }}" />
             </label>
             <label>
-              Sonarr URL
-              <input name="sonarr_url_2" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url_2 }}" />
+              {{ _('Sonarr URL') }}
+              <input name="sonarr_url_2" placeholder="{{ _('http://192.168.1.120:8989') }}" value="{{ values.sonarr_url_2 }}" />
             </label>
             <label>
-              Sonarr API key
+              {{ _('Sonarr API key') }}
               <input name="sonarr_api_key_2" type="password" autocomplete="off" spellcheck="false"
-                placeholder="your-api-key" value="{{ values.sonarr_api_key_2 }}" />
+                placeholder="{{ _('your-api-key') }}" value="{{ values.sonarr_api_key_2 }}" />
             </label>
             <label>
-              Path map
+              {{ _('Path map') }}
               <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_2"
-                data-path-map-placeholder="/container/path:/host/path">
+                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
                 <div class="setup-path-map-list" data-path-map-list>
                   {% for entry in values.sonarr_path_maps_2 or [""] %}
-                  <input name="sonarr_path_map_2" placeholder="/container/path:/host/path" value="{{ entry }}"
-                    aria-label="Path map" />
+                  <input name="sonarr_path_map_2" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                    aria-label="{{ _('Path map') }}" />
                   {% endfor %}
                 </div>
                 <button class="setup-path-map-add" type="button" data-path-map-add>
                   <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">Add mapping</span>
+                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
                 </button>
               </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_2"
                 data-key-id="sonarr_api_key_2" data-inline-key="sonarr_2">
-                Test connection
+                {{ _('Test connection') }}
               </button>
               <span
                 class="setup-inline-message{% if field_errors.get('sonarr_2') %} is-error{% else %} hidden{% endif %}"
                 data-inline="sonarr_2">{{ field_errors.get('sonarr_2', '') }}</span>
             </div>
 
-            <div class="setup-section-title">Sonarr Instance 3 (optional)</div>
+            <div class="setup-section-title">{{ _('Sonarr Instance 3 (optional)') }}</div>
             <label>
-              Instance name
-              <input name="sonarr_name_3" placeholder="4k / Anime / Cartoons" value="{{ values.sonarr_name_3 }}" />
+              {{ _('Instance name') }}
+              <input name="sonarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}" value="{{ values.sonarr_name_3 }}" />
             </label>
             <label>
-              Sonarr URL
-              <input name="sonarr_url_3" placeholder="http://192.168.1.120:8989" value="{{ values.sonarr_url_3 }}" />
+              {{ _('Sonarr URL') }}
+              <input name="sonarr_url_3" placeholder="{{ _('http://192.168.1.120:8989') }}" value="{{ values.sonarr_url_3 }}" />
             </label>
             <label>
-              Sonarr API key
+              {{ _('Sonarr API key') }}
               <input name="sonarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
-                placeholder="your-api-key" value="{{ values.sonarr_api_key_3 }}" />
+                placeholder="{{ _('your-api-key') }}" value="{{ values.sonarr_api_key_3 }}" />
             </label>
             <label>
-              Path map
+              {{ _('Path map') }}
               <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_3"
-                data-path-map-placeholder="/container/path:/host/path">
+                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
                 <div class="setup-path-map-list" data-path-map-list>
                   {% for entry in values.sonarr_path_maps_3 or [""] %}
-                  <input name="sonarr_path_map_3" placeholder="/container/path:/host/path" value="{{ entry }}"
-                    aria-label="Path map" />
+                  <input name="sonarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                    aria-label="{{ _('Path map') }}" />
                   {% endfor %}
                 </div>
                 <button class="setup-path-map-add" type="button" data-path-map-add>
                   <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">Add mapping</span>
+                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
                 </button>
               </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_3"
                 data-key-id="sonarr_api_key_3" data-inline-key="sonarr_3">
-                Test connection
+                {{ _('Test connection') }}
               </button>
               <span
                 class="setup-inline-message{% if field_errors.get('sonarr_3') %} is-error{% else %} hidden{% endif %}"
                 data-inline="sonarr_3">{{ field_errors.get('sonarr_3', '') }}</span>
             </div>
-            <div class="setup-hint">If you add another Sonarr instance, name all configured Sonarr instances so chips
-              and columns stay clear.</div>
+            <div class="setup-hint">{{ _('If you add another Sonarr instance, name all configured Sonarr instances so chips and columns stay clear.') }}</div>
           </div>
         </details>
 
-        <div class="setup-section-title">Radarr Instance 1</div>
+        <div class="setup-section-title">{{ _('Radarr Instance 1') }}</div>
         <label>
-          Instance name
+          {{ _('Instance name') }}
           <input name="radarr_name"
-            placeholder="Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)"
+            placeholder="{{ _('Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)') }}"
             value="{{ values.radarr_name }}" />
         </label>
         <label>
-          Radarr URL
-          <input name="radarr_url" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url }}" />
+          {{ _('Radarr URL') }}
+          <input name="radarr_url" placeholder="{{ _('http://192.168.1.120:7878') }}" value="{{ values.radarr_url }}" />
         </label>
         <label>
-          Radarr API key
-          <input name="radarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="your-api-key"
+          {{ _('Radarr API key') }}
+          <input name="radarr_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ _('your-api-key') }}"
             value="{{ values.radarr_api_key }}" />
         </label>
         <label>
-          Path map
+          {{ _('Path map') }}
           <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map"
-            data-path-map-placeholder="/container/path:/host/path">
+            data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
             <div class="setup-path-map-list" data-path-map-list>
               {% for entry in values.radarr_path_maps or [""] %}
-              <input name="radarr_path_map" placeholder="/container/path:/host/path" value="{{ entry }}"
-                aria-label="Path map" />
+              <input name="radarr_path_map" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                aria-label="{{ _('Path map') }}" />
               {% endfor %}
             </div>
             <button class="setup-path-map-add" type="button" data-path-map-add>
               <span class="setup-path-map-add-icon">+</span>
-              <span class="setup-path-map-add-text">Add mapping</span>
+              <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
             </button>
           </div>
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url"
             data-key-id="radarr_api_key" data-inline-key="radarr_1">
-            Test connection
+            {{ _('Test connection') }}
           </button>
           <span class="setup-inline-message{% if field_errors.get('radarr_1') %} is-error{% else %} hidden{% endif %}"
             data-inline="radarr_1">{{ field_errors.get('radarr_1', '') }}</span>
         </div>
 
         <details class="setup-advanced">
-          <summary>Advanced Radarr instances</summary>
+          <summary>{{ _('Advanced Radarr instances') }}</summary>
           <div class="setup-advanced-body">
-            <div class="setup-section-title">Radarr Instance 2 (optional)</div>
+            <div class="setup-section-title">{{ _('Radarr Instance 2 (optional)') }}</div>
             <label>
-              Instance name
-              <input name="radarr_name_2" placeholder="4k / Anime / Cartoons" value="{{ values.radarr_name_2 }}" />
+              {{ _('Instance name') }}
+              <input name="radarr_name_2" placeholder="{{ _('4k / Anime / Cartoons') }}" value="{{ values.radarr_name_2 }}" />
             </label>
             <label>
-              Radarr URL
-              <input name="radarr_url_2" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url_2 }}" />
+              {{ _('Radarr URL') }}
+              <input name="radarr_url_2" placeholder="{{ _('http://192.168.1.120:7878') }}" value="{{ values.radarr_url_2 }}" />
             </label>
             <label>
-              Radarr API key
+              {{ _('Radarr API key') }}
               <input name="radarr_api_key_2" type="password" autocomplete="off" spellcheck="false"
-                placeholder="your-api-key" value="{{ values.radarr_api_key_2 }}" />
+                placeholder="{{ _('your-api-key') }}" value="{{ values.radarr_api_key_2 }}" />
             </label>
             <label>
-              Path map
+              {{ _('Path map') }}
               <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_2"
-                data-path-map-placeholder="/container/path:/host/path">
+                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
                 <div class="setup-path-map-list" data-path-map-list>
                   {% for entry in values.radarr_path_maps_2 or [""] %}
-                  <input name="radarr_path_map_2" placeholder="/container/path:/host/path" value="{{ entry }}"
-                    aria-label="Path map" />
+                  <input name="radarr_path_map_2" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                    aria-label="{{ _('Path map') }}" />
                   {% endfor %}
                 </div>
                 <button class="setup-path-map-add" type="button" data-path-map-add>
                   <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">Add mapping</span>
+                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
                 </button>
               </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_2"
                 data-key-id="radarr_api_key_2" data-inline-key="radarr_2">
-                Test connection
+                {{ _('Test connection') }}
               </button>
               <span
                 class="setup-inline-message{% if field_errors.get('radarr_2') %} is-error{% else %} hidden{% endif %}"
                 data-inline="radarr_2">{{ field_errors.get('radarr_2', '') }}</span>
             </div>
 
-            <div class="setup-section-title">Radarr Instance 3 (optional)</div>
+            <div class="setup-section-title">{{ _('Radarr Instance 3 (optional)') }}</div>
             <label>
-              Instance name
-              <input name="radarr_name_3" placeholder="4k / Anime / Cartoons" value="{{ values.radarr_name_3 }}" />
+              {{ _('Instance name') }}
+              <input name="radarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}" value="{{ values.radarr_name_3 }}" />
             </label>
             <label>
-              Radarr URL
-              <input name="radarr_url_3" placeholder="http://192.168.1.120:7878" value="{{ values.radarr_url_3 }}" />
+              {{ _('Radarr URL') }}
+              <input name="radarr_url_3" placeholder="{{ _('http://192.168.1.120:7878') }}" value="{{ values.radarr_url_3 }}" />
             </label>
             <label>
-              Radarr API key
+              {{ _('Radarr API key') }}
               <input name="radarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
-                placeholder="your-api-key" value="{{ values.radarr_api_key_3 }}" />
+                placeholder="{{ _('your-api-key') }}" value="{{ values.radarr_api_key_3 }}" />
             </label>
             <label>
-              Path map
+              {{ _('Path map') }}
               <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_3"
-                data-path-map-placeholder="/container/path:/host/path">
+                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
                 <div class="setup-path-map-list" data-path-map-list>
                   {% for entry in values.radarr_path_maps_3 or [""] %}
-                  <input name="radarr_path_map_3" placeholder="/container/path:/host/path" value="{{ entry }}"
-                    aria-label="Path map" />
+                  <input name="radarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}" value="{{ entry }}"
+                    aria-label="{{ _('Path map') }}" />
                   {% endfor %}
                 </div>
                 <button class="setup-path-map-add" type="button" data-path-map-add>
                   <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">Add mapping</span>
+                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
                 </button>
               </div>
             </label>
             <div class="setup-inline">
               <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_3"
                 data-key-id="radarr_api_key_3" data-inline-key="radarr_3">
-                Test connection
+                {{ _('Test connection') }}
               </button>
               <span
                 class="setup-inline-message{% if field_errors.get('radarr_3') %} is-error{% else %} hidden{% endif %}"
                 data-inline="radarr_3">{{ field_errors.get('radarr_3', '') }}</span>
             </div>
-            <div class="setup-hint">If you add another Radarr instance, name all configured Radarr instances so chips
-              and columns stay clear.</div>
+            <div class="setup-hint">{{ _('If you add another Radarr instance, name all configured Radarr instances so chips and columns stay clear.') }}</div>
           </div>
         </details>
 
-        <div class="setup-section-title">Jellystat (optional)</div>
+        <div class="setup-section-title">{{ _('Jellystat (optional)') }}</div>
         <label>
-          Jellystat URL
-          <input name="jellystat_url" placeholder="http://192.168.1.120:3000" value="{{ values.jellystat_url }}" />
+          {{ _('Jellystat URL') }}
+          <input name="jellystat_url" placeholder="{{ _('http://192.168.1.120:3000') }}" value="{{ values.jellystat_url }}" />
         </label>
         <label>
-          Jellystat API key
-          <input name="jellystat_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="optional"
+          {{ _('Jellystat API key') }}
+          <input name="jellystat_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ _('optional') }}"
             value="{{ values.jellystat_api_key }}" />
         </label>
         <label>
-          Jellystat library IDs (Sonarr)
-          <input name="jellystat_library_ids_sonarr" placeholder="optional, comma-separated"
+          {{ _('Jellystat library IDs (Sonarr)') }}
+          <input name="jellystat_library_ids_sonarr" placeholder="{{ _('optional, comma-separated') }}"
             value="{{ values.jellystat_library_ids_sonarr }}" />
         </label>
         <label>
-          Jellystat library IDs (Radarr)
-          <input name="jellystat_library_ids_radarr" placeholder="optional, comma-separated"
+          {{ _('Jellystat library IDs (Radarr)') }}
+          <input name="jellystat_library_ids_radarr" placeholder="{{ _('optional, comma-separated') }}"
             value="{{ values.jellystat_library_ids_radarr }}" />
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="jellystat" data-url-id="jellystat_url"
             data-key-id="jellystat_api_key" data-inline-key="jellystat">
-            Test connection
+            {{ _('Test connection') }}
           </button>
           <span class="setup-inline-message{% if field_errors.get('jellystat') %} is-error{% else %} hidden{% endif %}"
             data-inline="jellystat">{{ field_errors.get('jellystat', '') }}</span>
         </div>
-        <div class="setup-hint">Leave library IDs blank to auto-detect by library type.</div>
-        <div class="setup-hint">Configure either Jellystat or Tautulli for playback stats. If both are set, Jellystat
-          is used.</div>
+        <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
+        <div class="setup-hint">{{ _('Configure either Jellystat or Tautulli for playback stats. If both are set, Jellystat is used.') }}</div>
 
-        <div class="setup-section-title">Tautulli (optional)</div>
+        <div class="setup-section-title">{{ _('Tautulli (optional)') }}</div>
         <label>
-          Tautulli URL
-          <input name="tautulli_url" placeholder="http://192.168.1.120:8181" value="{{ values.tautulli_url }}" />
+          {{ _('Tautulli URL') }}
+          <input name="tautulli_url" placeholder="{{ _('http://192.168.1.120:8181') }}" value="{{ values.tautulli_url }}" />
         </label>
         <label>
-          Tautulli API key
-          <input name="tautulli_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="optional"
+          {{ _('Tautulli API key') }}
+          <input name="tautulli_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="{{ _('optional') }}"
             value="{{ values.tautulli_api_key }}" />
         </label>
         <div class="setup-inline">
           <button class="setup-test" type="button" data-kind="tautulli" data-url-id="tautulli_url"
             data-key-id="tautulli_api_key" data-inline-key="tautulli">
-            Test connection
+            {{ _('Test connection') }}
           </button>
           <span class="setup-inline-message{% if field_errors.get('tautulli') %} is-error{% else %} hidden{% endif %}"
             data-inline="tautulli">{{ field_errors.get('tautulli', '') }}</span>
         </div>
 
-        <div class="setup-section-title">Security</div>
+        <div class="setup-section-title">{{ _('Security') }}</div>
         <label>
-          Basic auth username
-          <input name="basic_auth_user" placeholder="optional" value="{{ values.basic_auth_user }}" />
+          {{ _('Basic auth username') }}
+          <input name="basic_auth_user" placeholder="{{ _('optional') }}" value="{{ values.basic_auth_user }}" />
         </label>
         <label>
-          Basic auth password
-          <input name="basic_auth_pass" type="password" placeholder="optional" value="" autocomplete="new-password" />
+          {{ _('Basic auth password') }}
+          <input name="basic_auth_pass" type="password" placeholder="{{ _('optional') }}" value="" autocomplete="new-password" />
         </label>
         <label class="setup-checkbox">
           <input type="checkbox" name="clear_basic_auth_pass" value="1" />
-          <span>Clear existing password</span>
+          <span>{{ _('Clear existing password') }}</span>
         </label>
-        <div class="setup-hint">Leave blank to keep current password.</div>
-        <div class="setup-hint">Credentials are stored in the env file; keep it private.</div>
+        <div class="setup-hint">{{ _('Leave blank to keep current password.') }}</div>
+        <div class="setup-hint">{{ _('Credentials are stored in the env file; keep it private.') }}</div>
 
         <details class="setup-advanced">
-          <summary>Advanced settings</summary>
+          <summary>{{ _('Advanced settings') }}</summary>
           <div class="setup-advanced-body">
-            <div class="setup-section-title">Arr performance</div>
+            <div class="setup-section-title">{{ _('Arr performance') }}</div>
             <label>
-              Sonarr timeout seconds
+              {{ _('Sonarr timeout seconds') }}
               <input name="sonarr_timeout_seconds" type="number" min="0" step="1"
                 value="{{ values.sonarr_timeout_seconds }}" />
             </label>
             <label>
-              Sonarr episode file workers
+              {{ _('Sonarr episode file workers') }}
               <input name="sonarr_episodefile_workers" type="number" min="1" step="1"
                 value="{{ values.sonarr_episodefile_workers }}" />
             </label>
             <label>
-              Radarr timeout seconds
+              {{ _('Radarr timeout seconds') }}
               <input name="radarr_timeout_seconds" type="number" min="0" step="1"
                 value="{{ values.radarr_timeout_seconds }}" />
             </label>
             <label>
-              Radarr wanted workers
+              {{ _('Radarr wanted workers') }}
               <input name="radarr_wanted_workers" type="number" min="1" max="4" step="1"
                 value="{{ values.radarr_wanted_workers }}" />
             </label>
             <label>
-              Radarr instance workers
+              {{ _('Radarr instance workers') }}
               <input name="radarr_instance_workers" type="number" min="1" step="1"
                 value="{{ values.radarr_instance_workers }}" />
             </label>
-            <div class="setup-hint">Leave fields blank for defaults. Timeout seconds accept 0 to disable. Radarr wanted
-              workers are capped at 4.</div>
+            <div class="setup-hint">{{ _('Leave fields blank for defaults. Timeout seconds accept 0 to disable. Radarr wanted workers are capped at 4.') }}</div>
 
-            <div class="setup-section-title">Tautulli performance</div>
+            <div class="setup-section-title">{{ _('Tautulli performance') }}</div>
             <label>
-              Tautulli timeout seconds
+              {{ _('Tautulli timeout seconds') }}
               <input name="tautulli_timeout_seconds" type="number" min="0" step="1"
                 value="{{ values.tautulli_timeout_seconds }}" />
             </label>
             <label>
-              Tautulli fetch seconds
+              {{ _('Tautulli fetch seconds') }}
               <input name="tautulli_fetch_seconds" type="number" min="0" step="1"
                 value="{{ values.tautulli_fetch_seconds }}" />
             </label>
             <label>
-              Tautulli metadata workers
+              {{ _('Tautulli metadata workers') }}
               <input name="tautulli_metadata_workers" type="number" min="1" step="1"
                 value="{{ values.tautulli_metadata_workers }}" />
             </label>
-            <div class="setup-hint">Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for
-              defaults; seconds fields accept 0 for no time limit.</div>
+            <div class="setup-hint">{{ _('Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for defaults; seconds fields accept 0 for no time limit.') }}</div>
           </div>
         </details>
 
-        <div class="setup-hint">Env file path: {{ env_path }}</div>
-        <button class="setup-submit" type="submit">Save and continue</button>
+        <div class="setup-hint">{{ _('Env file path:') }} {{ env_path }}</div>
+        <button class="setup-submit" type="submit">{{ _('Save and continue') }}</button>
       </form>
     </div>
   </div>
