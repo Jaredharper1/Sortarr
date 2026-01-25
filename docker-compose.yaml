@@ -17,8 +17,4 @@ services:
       - "./data:/data"
       # Optional: Mount .env for persistence if using default paths
       # eg. /path/to/config/.env:/app/.env    
-<<<<<<< HEAD
     restart: unless-stopped
-=======
-    restart: unless-stopped
->>>>>>> e7db8ec (Prep 0.7.9 changes)
