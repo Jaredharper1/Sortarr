@@ -274,16 +274,23 @@ const API_ORIGIN = window.location && window.location.host
 
 let tableWrapLayoutPending = false;
 const FILTER_RENDER_DEBOUNCE_MS = 140;
+const FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
 let filterRenderTimer = null;
+const CHIP_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
+let chipRenderTimer = null;
+let chipRenderAnchor = null;
 
 function scheduleFilterRender() {
   if (filterRenderTimer) {
     window.clearTimeout(filterRenderTimer);
   }
+  const debounce = (IS_MOBILE && activeApp === "radarr")
+    ? FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR
+    : FILTER_RENDER_DEBOUNCE_MS;
   filterRenderTimer = window.setTimeout(() => {
     filterRenderTimer = null;
     render(dataByApp[activeApp] || []);
-  }, FILTER_RENDER_DEBOUNCE_MS);
+  }, debounce);
 }
 
 function flushFilterRender() {
@@ -292,6 +299,24 @@ function flushFilterRender() {
     filterRenderTimer = null;
   }
   render(dataByApp[activeApp] || []);
+}
+
+function scheduleChipRender(anchor) {
+  if (chipRenderTimer) {
+    window.clearTimeout(chipRenderTimer);
+  }
+  if (anchor) {
+    chipRenderAnchor = anchor;
+  }
+  const debounce = (IS_MOBILE && activeApp === "radarr")
+    ? CHIP_RENDER_DEBOUNCE_MS_MOBILE_RADARR
+    : 0;
+  chipRenderTimer = window.setTimeout(() => {
+    chipRenderTimer = null;
+    const scrollAnchor = chipRenderAnchor;
+    chipRenderAnchor = null;
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  }, debounce);
 }
 
 function bindFilterInput(input) {
@@ -1419,12 +1444,35 @@ const BENCH_PARAMS = (() => {
   }
 })()
 
+const IS_MOBILE = (() => {
+  try {
+    const mq = window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
+    const ua = navigator.userAgent || "";
+    const touch = /iPhone|iPad|iPod|Android/i.test(ua);
+    return Boolean(mq || touch);
+  } catch {
+    return false;
+  }
+})();
+
 const IMAGES_ENABLED = (() => {
   try {
     const sp = new URLSearchParams(window.location.search || "");
     return sp.get("images") !== "0";
   } catch (err) {
     return true;
+  }
+})();
+
+const RADARR_IMAGES_ENABLED = (() => {
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    if (sp.get("radarr_images") === "0") return false;
+    // Disable Radarr posters on mobile to avoid heavy DOM/memory
+    if (IS_MOBILE) return false;
+    return IMAGES_ENABLED;
+  } catch {
+    return IMAGES_ENABLED && !IS_MOBILE;
   }
 })();
 ;
@@ -2472,7 +2520,7 @@ function positionRadarrPosterTooltip(anchorRect) {
 }
 
 function setupRadarrPosterTooltipDelegation() {
-  if (!IMAGES_ENABLED) return;
+  if (!RADARR_IMAGES_ENABLED) return;
   if (setupRadarrPosterTooltipDelegation._done) return;
   setupRadarrPosterTooltipDelegation._done = true;
 
@@ -4464,7 +4512,7 @@ function bindChipButtons(rootEl = document) {
         pendingStabilizeByApp[activeApp] = true;
       }
       const scrollAnchor = captureTableScrollAnchor();
-      render(dataByApp[activeApp] || [], { scrollAnchor });
+      scheduleChipRender(scrollAnchor);
       scheduleViewStateSave();
     });
   });
@@ -5890,8 +5938,10 @@ function buildEpisodeGridRow(episode, columns, index) {
   const ordered = Array.isArray(columns) && columns.length
     ? columns
     : EPISODE_GRID_COLUMNS;
+  const historyButton = buildEpisodeHistoryButton(episode);
   const cells = [
     `<div class="series-episode-main">
+      ${historyButton}
       <span class="series-episode-code"${overviewAttr}>${escapeHtml(code)}</span>
       <span class="series-episode-title"${overviewAttr}>${escapeHtml(episode.title || "Untitled")}</span>
     </div>`,
@@ -9738,7 +9788,8 @@ function buildRow(row, app, options = {}) {
   const titleLink = displayCache.titleLink;
   const matchOrb = buildMatchOrb(row);
   const seriesExpander = app === "sonarr" ? buildSeriesExpanderButton(row) : "";
-  const titleCell = `${seriesExpander}${ROW_REFRESH_BUTTON_HTML}<span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
+  const historyButton = app === "radarr" ? buildHistoryButton(row, app) : "";
+  const titleCell = `${seriesExpander}<span class="title-control-wrap">${ROW_REFRESH_BUTTON_HTML}${historyButton}</span><span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
   const dateAdded = formatDateAdded(row.DateAdded);
   const videoQuality = videoQualityState.value;
   const resolution = resolutionState.value;
@@ -10548,9 +10599,10 @@ function render(data, options = {}) {
   const hiddenColumns = getHiddenColumns();
   const allowDeferred = resolveRenderFlag("deferHeavy", app);
   // Radarr large lists: render light rows first, hydrate heavy cells after.
+  const forceMobileVirtual = IS_MOBILE && app === "radarr";
   const virtualizeRadarr = app === "radarr" &&
     resolveRenderFlag("virtualize", app) &&
-    sorted.length >= RADARR_VIRTUAL_MIN_ROWS;
+    (forceMobileVirtual || sorted.length >= RADARR_VIRTUAL_MIN_ROWS);
   const deferredColumns = allowDeferred
     ? getDeferredColumns(app, hiddenColumns, { virtualize: virtualizeRadarr })
     : new Set();
@@ -10589,7 +10641,9 @@ function render(data, options = {}) {
     };
   setBatching(shouldBatch);
 
-  const virtualizeRows = app === "radarr" && resolveRenderFlag("virtualRows", app) && sorted.length >= VIRTUAL_MIN_ROWS;
+  const virtualizeRows = app === "radarr" &&
+    resolveRenderFlag("virtualRows", app) &&
+    (forceMobileVirtual || sorted.length >= VIRTUAL_MIN_ROWS);
   if (virtualizeRows) {
     const ok = enableVirtualRows(sorted, app, rowOptions, token, perf);
     if (ok) {
@@ -11602,6 +11656,337 @@ async function loadConfig() {
     console.warn("config load failed", e);
   }
 }
+
+// History drawer state and helpers
+const historyDrawerState = {
+  open: false,
+  expanded: false,
+  loading: false,
+  data: null,
+  target: null,
+};
+let historyOverlayEl = null;
+let historyDrawerEl = null;
+let historyBodyEl = null;
+let historySummaryEl = null;
+let historyExpandBtn = null;
+let historyExportBtn = null;
+let historyTitleEl = null;
+
+function buildHistoryButton(row, app) {
+  if (app === "radarr") {
+    const movieId = row.MovieId ?? row.movieId;
+    if (!movieId) return "";
+    const instanceId = escapeHtml(String(row.InstanceId ?? row.instanceId ?? ""));
+    const title = escapeHtml(formatRowTitle(row, app) || "");
+    return `<button class="history-btn" type="button" data-history-btn="1" data-app="radarr" data-instance-id="${instanceId}" data-movie-id="${escapeHtml(String(movieId))}" data-history-title="${title}" aria-label="History">H</button>`;
+  }
+  return "";
+}
+
+function buildEpisodeHistoryButton(episode) {
+  const episodeId = episode.id ?? episode.episodeId ?? "";
+  if (!episodeId) return "";
+  const seriesId = episode.seriesId ?? episode.SeriesId ?? "";
+  const instanceId = episode.instanceId ?? episode.InstanceId ?? "";
+  const title = escapeHtml(String(episode.title || "Episode"));
+  return `<button class="history-btn history-btn--episode" type="button" data-history-btn="1" data-app="sonarr" data-series-id="${escapeHtml(String(seriesId))}" data-episode-id="${escapeHtml(String(episodeId))}" data-instance-id="${escapeHtml(String(instanceId))}" data-history-title="${title}" aria-label="History">H</button>`;
+}
+
+function ensureHistoryDrawer() {
+  if (historyOverlayEl && historyDrawerEl) return;
+  historyOverlayEl = document.createElement("div");
+  historyOverlayEl.className = "history-overlay hidden";
+  historyOverlayEl.innerHTML = `
+    <div class="history-scrim" data-history-close="1"></div>
+    <div class="history-drawer glass-panel">
+      <div class="history-header">
+        <div class="history-title" data-role="history-title">History</div>
+        <div class="history-actions">
+          <button class="history-btn-text" type="button" data-role="history-export">Export CSV</button>
+          <button class="history-close" type="button" aria-label="Close" data-history-close="1">\u00d7</button>
+        </div>
+      </div>
+      <div class="history-summary" data-role="history-summary"></div>
+      <button class="history-expand" type="button" data-role="history-expand">Show all events</button>
+      <div class="history-body" data-role="history-body"></div>
+    </div>
+  `;
+  historyDrawerEl = historyOverlayEl.querySelector(".history-drawer");
+  historyBodyEl = historyOverlayEl.querySelector('[data-role="history-body"]');
+  historySummaryEl = historyOverlayEl.querySelector('[data-role="history-summary"]');
+  historyExpandBtn = historyOverlayEl.querySelector('[data-role="history-expand"]');
+  historyExportBtn = historyOverlayEl.querySelector('[data-role="history-export"]');
+  historyTitleEl = historyOverlayEl.querySelector('[data-role="history-title"]');
+  document.body.appendChild(historyOverlayEl);
+}
+
+function setHistoryExpanded(expanded) {
+  historyDrawerState.expanded = expanded;
+  if (historyExpandBtn) {
+    historyExpandBtn.textContent = expanded ? "Show latest vs previous" : "Show all events";
+    historyExpandBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+  renderHistoryContent();
+}
+
+function formatHistorySize(bytes) {
+  const size = Number(bytes || 0);
+  if (!size || size < 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = size;
+  let idx = 0;
+  while (v >= 1024 && idx < units.length - 1) {
+    v /= 1024;
+    idx += 1;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[idx]}`;
+}
+
+function formatHistoryEventLabel(eventType) {
+  const map = {
+    grabbed: "Grabbed",
+    downloadFolderImported: "Imported",
+    movieFolderImported: "Imported",
+    seriesFolderImported: "Imported",
+    episodeFileRenamed: "Renamed",
+    movieFileRenamed: "Renamed",
+    downloadFailed: "Failed",
+    downloadIgnored: "Ignored",
+    episodeFileDeleted: "Deleted",
+    movieFileDeleted: "Deleted",
+  };
+  return map[eventType] || (eventType ? eventType : "Unknown");
+}
+
+function summarizeQuality(ev) {
+  const name = ev?.qualityName || "";
+  const res = ev?.qualityResolution ? `${ev.qualityResolution}p` : "";
+  const source = ev?.qualitySource || "";
+  return [name, res, source].filter(Boolean).join(" · ");
+}
+
+function renderHistorySummaryContent(data) {
+  if (!historySummaryEl) return;
+  if (!data || !data.all) {
+    historySummaryEl.textContent = "No history yet—will populate on next grab/import.";
+    return;
+  }
+  const latest = data.latest;
+  const previous = data.previous;
+  if (!latest && !previous) {
+    historySummaryEl.textContent = "No file history yet—will populate on next grab/import.";
+    return;
+  }
+  const buildRow = (label, ev) => {
+    if (!ev) return `<div class="history-summary-row"><div class="history-summary-label">${escapeHtml(label)}</div><div class="history-summary-empty">No data</div></div>`;
+    const size = formatHistorySize(ev.size);
+    const score = Number(ev.customFormatScore || 0);
+    const deltaScore = previous && label === "Latest" ? score - Number(previous.customFormatScore || 0) : null;
+    const sizeDelta = previous && label === "Latest" && ev.size && previous.size ? ev.size - previous.size : null;
+    const deltaParts = [];
+    if (deltaScore !== null) deltaParts.push(`CF ${deltaScore >= 0 ? "+" : ""}${deltaScore}`);
+    if (sizeDelta !== null) deltaParts.push(`${sizeDelta >= 0 ? "+" : ""}${formatHistorySize(sizeDelta)}`);
+    const deltas = deltaParts.length ? `<div class="history-summary-delta">${deltaParts.join(" / ")}</div>` : "";
+    return `
+      <div class="history-summary-row">
+        <div class="history-summary-label">${escapeHtml(label)}</div>
+        <div class="history-summary-main">
+          <div class="history-summary-line">
+            <span class="history-event">${escapeHtml(formatHistoryEventLabel(ev.eventType))}</span>
+            <span class="history-quality">${escapeHtml(summarizeQuality(ev))}</span>
+            ${size ? `<span class="history-size">${escapeHtml(size)}</span>` : ""}
+          </div>
+          <div class="history-summary-sub">
+            <span>${escapeHtml(ev.date || "")}</span>
+            ${ev.sourceTitle ? `<span class="muted">${escapeHtml(ev.sourceTitle)}</span>` : ""}
+          </div>
+        </div>
+        ${deltas}
+      </div>
+    `;
+  };
+  historySummaryEl.innerHTML = buildRow("Latest", latest) + buildRow("Previous", previous);
+}
+
+function renderHistoryTimeline(data) {
+  if (!historyBodyEl) return;
+  if (!data || !Array.isArray(data.all) || !data.all.length) {
+    historyBodyEl.textContent = "No events available.";
+    return;
+  }
+  const items = historyDrawerState.expanded ? data.all : (data.latest ? [data.latest] : []);
+  const timeline = items.map(ev => {
+    const size = formatHistorySize(ev.size);
+    const quality = summarizeQuality(ev);
+    const languages = (ev.languages || []).join(", ");
+    return `
+      <div class="history-row">
+        <div class="history-row-primary">
+          <span class="history-event">${escapeHtml(formatHistoryEventLabel(ev.eventType))}</span>
+          <span class="history-quality">${escapeHtml(quality)}</span>
+          ${size ? `<span class="history-size">${escapeHtml(size)}</span>` : ""}
+          ${ev.customFormatScore ? `<span class="history-cf">CF ${escapeHtml(String(ev.customFormatScore))}</span>` : ""}
+        </div>
+        <div class="history-row-meta">
+          <span>${escapeHtml(ev.date || "")}</span>
+          ${ev.sourceTitle ? `<span class="muted">${escapeHtml(ev.sourceTitle)}</span>` : ""}
+          ${languages ? `<span class="muted">${escapeHtml(languages)}</span>` : ""}
+          ${ev.releaseGroup ? `<span class="muted">RG: ${escapeHtml(ev.releaseGroup)}</span>` : ""}
+          ${ev.downloadId ? `<span class="muted">DL: ${escapeHtml(ev.downloadId)}</span>` : ""}
+        </div>
+      </div>
+    `;
+  });
+  historyBodyEl.innerHTML = timeline.join("") || "No events available.";
+}
+
+function renderHistoryContent() {
+  if (historyDrawerState.loading) {
+    if (historySummaryEl) historySummaryEl.textContent = "Fetching history...";
+    if (historyBodyEl) historyBodyEl.textContent = "";
+    return;
+  }
+  renderHistorySummaryContent(historyDrawerState.data);
+  renderHistoryTimeline(historyDrawerState.data);
+  if (historyDrawerState.data && historyDrawerState.data.historyStart && historyBodyEl) {
+    historyBodyEl.insertAdjacentHTML(
+      "beforeend",
+      `<div class="history-note muted">History begins ${escapeHtml(historyDrawerState.data.historyStart)} (from Arr)</div>`
+    );
+  }
+}
+
+function closeHistoryDrawer() {
+  historyDrawerState.open = false;
+  historyDrawerState.data = null;
+  historyDrawerState.loading = false;
+  if (historyOverlayEl) historyOverlayEl.classList.add("hidden");
+  document.body.classList.remove("history-open");
+}
+
+async function fetchHistoryData(target) {
+  const params = new URLSearchParams();
+  params.set("app", target.app);
+  if (target.instanceId) params.set("instance_id", target.instanceId);
+  if (target.app === "radarr") {
+    params.set("movieId", target.movieId);
+  } else {
+    params.set("seriesId", target.seriesId);
+    params.set("episodeId", target.episodeId);
+  }
+  const res = await fetch(apiUrl(`/api/history?${params.toString()}`));
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "History request failed");
+  }
+  return res.json();
+}
+
+function exportHistoryCsv(data, target) {
+  if (!data || !Array.isArray(data.all) || !data.all.length) return;
+  const rows = data.all.map(ev => ({
+    title: target?.title || "",
+    instance: target?.instanceId || "",
+    app: target?.app || "",
+    seriesId: ev.seriesId || "",
+    episodeId: ev.episodeId || "",
+    movieId: ev.movieId || "",
+    eventDate: ev.date || "",
+    eventType: ev.eventType || "",
+    sourceTitle: ev.sourceTitle || "",
+    qualityName: ev.qualityName || "",
+    qualityResolution: ev.qualityResolution || "",
+    qualitySource: ev.qualitySource || "",
+    customFormats: (ev.customFormats || []).join("|"),
+    customFormatScore: ev.customFormatScore || "",
+    qualityCutoffNotMet: ev.qualityCutoffNotMet ? "1" : "0",
+    size: ev.size || "",
+    languages: (ev.languages || []).join("|"),
+    releaseGroup: ev.releaseGroup || "",
+    downloadId: ev.downloadId || "",
+    rawDataJson: ev.data ? JSON.stringify(ev.data) : "",
+  }));
+  const header = Object.keys(rows[0]);
+  const csv = [header.join(",")].concat(
+    rows.map(r => header.map(h => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(","))
+  ).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `history_${target?.app || "arr"}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  }, 100);
+}
+
+async function openHistoryFromButton(btn) {
+  const app = (btn.dataset.app || "").toLowerCase();
+  if (!app) return;
+  ensureHistoryDrawer();
+  const title = btn.dataset.historyTitle || "";
+  const target = {
+    app,
+    instanceId: btn.dataset.instanceId || "",
+    seriesId: btn.dataset.seriesId || "",
+    episodeId: btn.dataset.episodeId || "",
+    movieId: btn.dataset.movieId || "",
+    title,
+  };
+  if (app === "sonarr" && (!target.seriesId || !target.episodeId)) {
+    const expansion = btn.closest(".series-expansion");
+    if (expansion) {
+      target.seriesId = target.seriesId || expansion.dataset.seriesId || "";
+      target.instanceId = target.instanceId || expansion.dataset.instanceId || "";
+    }
+  }
+  historyDrawerState.target = target;
+  historyDrawerState.loading = true;
+  historyDrawerState.expanded = false;
+  historyDrawerState.data = null;
+  if (historyTitleEl) historyTitleEl.textContent = title || "History";
+  if (historyOverlayEl) historyOverlayEl.classList.remove("hidden");
+  document.body.classList.add("history-open");
+  renderHistoryContent();
+  try {
+    const data = await fetchHistoryData(target);
+    historyDrawerState.data = data;
+  } catch (err) {
+    if (historySummaryEl) historySummaryEl.textContent = err.message || "Failed to load history.";
+    if (historyBodyEl) historyBodyEl.textContent = "";
+    historyDrawerState.loading = false;
+    return;
+  }
+  historyDrawerState.loading = false;
+  renderHistoryContent();
+}
+
+document.addEventListener("click", event => {
+  const historyBtn = event.target.closest("[data-history-btn]");
+  if (historyBtn) {
+    event.preventDefault();
+    openHistoryFromButton(historyBtn);
+    return;
+  }
+  if (historyOverlayEl && !historyOverlayEl.classList.contains("hidden")) {
+    if (event.target.matches("[data-history-close]")) {
+      closeHistoryDrawer();
+    } else if (historyExpandBtn && event.target === historyExpandBtn) {
+      setHistoryExpanded(!historyDrawerState.expanded);
+    } else if (historyExportBtn && event.target === historyExportBtn) {
+      exportHistoryCsv(historyDrawerState.data, historyDrawerState.target);
+    }
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && historyOverlayEl && !historyOverlayEl.classList.contains("hidden")) {
+    closeHistoryDrawer();
+  }
+});
 
 /* init */
 (async function init() {

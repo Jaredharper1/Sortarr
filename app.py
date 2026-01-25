@@ -482,6 +482,9 @@ def _read_bool_env(key: str, default: bool = False) -> bool:
     return default
 
 
+_HISTORY_CACHE_TTL_SECONDS = max(_read_int_env("ARR_HISTORY_CACHE_TTL_SECONDS", 180), 30)
+
+
 def _read_query_bool(*keys: str, default: bool = False) -> bool:
     for key in keys:
         raw = str(request.args.get(key) or "").strip().lower()
@@ -1863,6 +1866,54 @@ def _invalidate_cache():
             os.remove(path)
         except OSError:
             pass
+    _history_cache_clear()
+
+
+# History cache (per app/instance/item)
+_history_cache: dict[tuple, tuple[float, dict]] = {}
+_history_cache_lock = threading.Lock()
+
+
+def _history_cache_key(app: str, instance_id: str, series_id: int, episode_id: int, movie_id: int, include_raw: bool) -> tuple:
+    return (
+        app.lower().strip(),
+        str(instance_id or ""),
+        int(series_id or 0),
+        int(episode_id or 0),
+        int(movie_id or 0),
+        bool(include_raw),
+    )
+
+
+def _history_cache_get(key: tuple) -> dict | None:
+    now = time.time()
+    with _history_cache_lock:
+        entry = _history_cache.get(key)
+        if not entry:
+            return None
+        expires_at, payload = entry
+        if expires_at <= now:
+            _history_cache.pop(key, None)
+            return None
+        return copy.deepcopy(payload)
+
+
+def _history_cache_set(key: tuple, payload: dict) -> None:
+    ttl = _HISTORY_CACHE_TTL_SECONDS
+    expires_at = time.time() + ttl
+    with _history_cache_lock:
+        _history_cache[key] = (expires_at, copy.deepcopy(payload))
+
+
+def _history_cache_clear(key_prefix: tuple | None = None) -> None:
+    with _history_cache_lock:
+        if key_prefix is None:
+            _history_cache.clear()
+            return
+        keys = list(_history_cache.keys())
+        for k in keys:
+            if k[: len(key_prefix)] == key_prefix:
+                _history_cache.pop(k, None)
 
 
 def _collect_cached_rows(app_name: str) -> tuple[list[dict], int]:
@@ -2322,6 +2373,192 @@ def _arr_error_hint(app_name: str, exc: Exception) -> str:
     if isinstance(exc, requests.RequestException):
         return f"{label} request failed."
     return f"{label} request failed."
+
+
+def _unwrap_history_records(payload) -> list:
+    if isinstance(payload, dict):
+        records = payload.get("records")
+        if isinstance(records, list):
+            return records
+    if isinstance(payload, list):
+        return payload
+    return []
+
+
+def _extract_history_size(data: dict) -> int:
+    if not isinstance(data, dict):
+        return 0
+    for key in ("size", "sizebytes", "sizeBytes", "downloadSize"):
+        if key in data:
+            size_val = _safe_int(data.get(key))
+            if size_val:
+                return size_val
+    return 0
+
+
+def _extract_release_group(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in ("releaseGroup", "releasegroup", "release_group"):
+        val = str(data.get(key) or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _normalize_languages(langs) -> list[str]:
+    out: list[str] = []
+    if not isinstance(langs, list):
+        return out
+    for lang in langs:
+        if isinstance(lang, dict):
+            name = str(lang.get("name") or lang.get("Name") or "").strip()
+            if name:
+                out.append(name)
+                continue
+        text = str(lang or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _normalize_history_event(item: dict, app_name: str, instance_id: str, include_raw: bool = False) -> dict:
+    if not isinstance(item, dict):
+        return {}
+    quality = item.get("quality") or {}
+    quality_meta = quality.get("quality") or {}
+    revision = quality.get("revision") or {}
+    data = item.get("data") or {}
+    languages = _normalize_languages(item.get("languages"))
+    date_raw = str(item.get("date") or "").strip()
+    date_ts = _parse_iso_epoch(date_raw)
+    custom_formats = []
+    for cf in item.get("customFormats") or []:
+        if isinstance(cf, dict):
+            name = str(cf.get("name") or cf.get("label") or "").strip()
+            if name:
+                custom_formats.append(name)
+                continue
+        text = str(cf or "").strip()
+        if text:
+            custom_formats.append(text)
+    release_group = _extract_release_group(data)
+    size = _extract_history_size(data)
+    event_type = str(item.get("eventType") or "").strip()
+    normalized = {
+        "app": app_name,
+        "instanceId": instance_id,
+        "date": date_raw,
+        "date_ts": date_ts,
+        "eventType": event_type,
+        "sourceTitle": item.get("sourceTitle") or "",
+        "qualityName": quality_meta.get("name") or "",
+        "qualityResolution": _safe_int(quality_meta.get("resolution")),
+        "qualitySource": quality_meta.get("source") or "",
+        "revision": {
+            "version": _safe_int(revision.get("version")),
+            "real": _safe_int(revision.get("real")),
+            "isRepack": bool(revision.get("isRepack")),
+        },
+        "customFormats": custom_formats,
+        "customFormatScore": _safe_int(item.get("customFormatScore")),
+        "qualityCutoffNotMet": bool(item.get("qualityCutoffNotMet")),
+        "languages": languages,
+        "size": size,
+        "releaseGroup": release_group,
+        "downloadId": item.get("downloadId") or "",
+        "data": data if include_raw else None,
+        "seriesId": item.get("seriesId") if app_name == "sonarr" else None,
+        "episodeId": item.get("episodeId") if app_name == "sonarr" else None,
+        "movieId": item.get("movieId") if app_name == "radarr" else None,
+    }
+    return normalized
+
+
+def _select_history_latest(events: list[dict], app_name: str) -> tuple[dict | None, dict | None]:
+    if not events:
+        return None, None
+    success_events = {
+        "sonarr": {"seriesFolderImported", "downloadFolderImported", "episodeFileRenamed"},
+        "radarr": {"downloadFolderImported", "movieFolderImported", "movieFileRenamed"},
+    }
+    selected = []
+    allowed = success_events.get(app_name, set())
+    for ev in events:
+        if not isinstance(ev, dict):
+            continue
+        etype = str(ev.get("eventType") or "").strip()
+        if etype in allowed:
+            selected.append(ev)
+    if not selected:
+        return None, None
+    selected.sort(key=lambda e: _safe_int(e.get("date_ts")), reverse=True)
+    latest = selected[0] if selected else None
+    previous = selected[1] if len(selected) > 1 else None
+    return latest, previous
+
+
+def _fetch_arr_history(
+    app_name: str,
+    instance: dict,
+    series_id: int | None = None,
+    episode_id: int | None = None,
+    movie_id: int | None = None,
+    include_raw: bool = False,
+) -> dict:
+    base_url = instance.get("url") or ""
+    api_key = instance.get("api_key") or ""
+    instance_id = instance.get("id") or ""
+    params = {"pageSize": 250, "page": 1}
+    if app_name == "sonarr":
+        if not series_id:
+            raise RuntimeError("seriesId is required.")
+        params.update({"seriesId": int(series_id), "includeEpisode": True, "includeSeries": False})
+        payload = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/history/series",
+            params=params,
+            app_name=app_name,
+            circuit_group="history",
+        )
+    else:
+        if not movie_id:
+            raise RuntimeError("movieId is required.")
+        params.update({"movieId": int(movie_id), "includeMovie": False})
+        payload = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/history/movie",
+            params=params,
+            app_name=app_name,
+            circuit_group="history",
+        )
+
+    records = _unwrap_history_records(payload)
+    normalized: list[dict] = []
+    for item in records:
+        norm = _normalize_history_event(item, app_name, instance_id, include_raw)
+        if app_name == "sonarr" and episode_id:
+            if _safe_int(norm.get("episodeId")) != _safe_int(episode_id):
+                continue
+        normalized.append(norm)
+
+    normalized.sort(key=lambda e: _safe_int(e.get("date_ts")), reverse=True)
+    history_start_ts = min(
+        (_safe_int(e.get("date_ts")) for e in normalized if _safe_int(e.get("date_ts")) > 0),
+        default=0,
+    )
+    latest, previous = _select_history_latest(normalized, app_name)
+    response = {
+        "app": app_name,
+        "instance_id": instance_id,
+        "latest": latest,
+        "previous": previous,
+        "all": normalized,
+        "historyStart": _iso_from_epoch(history_start_ts) if history_start_ts else "",
+    }
+    return response
 
 
 def _arr_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str | None:
@@ -7896,6 +8133,7 @@ def api_sonarr_refresh():
             return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
         try:
             _arr_command_refresh_item("sonarr", instance, item_id)
+            _history_cache_clear(("sonarr", instance.get("id") or ""))
         except Exception as exc:
             resp = jsonify({"error": "Sonarr refresh failed."})
             resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
@@ -8080,6 +8318,7 @@ def api_radarr_refresh():
             return jsonify({"error": "instance_id is required for multiple Radarr instances."}), 400
         try:
             _arr_command_refresh_item("radarr", instance, item_id)
+            _history_cache_clear(("radarr", instance.get("id") or ""))
         except Exception as exc:
             resp = jsonify({"error": "Radarr refresh failed."})
             resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
@@ -8152,6 +8391,76 @@ def api_radarr_item():
         _attach_timing_headers(resp, timing)
         return resp
     return jsonify(row)
+
+
+@app.route("/api/history")
+@_auth_required
+def api_history():
+    cfg = _get_config()
+    app_name = (request.args.get("app") or "").strip().lower()
+    if app_name not in ("sonarr", "radarr"):
+        return jsonify({"error": "app must be sonarr or radarr"}), 400
+    instances = cfg.get(f"{app_name}_instances") or []
+    if not instances:
+        return jsonify({"error": f"{app_name} is not configured."}), 503
+    instance_id = request.args.get("instance_id") or request.args.get("instanceId")
+    include_raw = _read_query_bool("include_raw", "includeRaw", default=False)
+    if app_name == "sonarr":
+        series_id = _parse_arr_item_id(request.args.get("seriesId") or request.args.get("series_id"))
+        episode_id = _parse_arr_item_id(request.args.get("episodeId") or request.args.get("episode_id"))
+        if not series_id:
+            return jsonify({"error": "seriesId is required."}), 400
+        if not episode_id:
+            return jsonify({"error": "episodeId is required."}), 400
+        instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+        if not instance:
+            if instance_id:
+                return jsonify({"error": "Unknown Sonarr instance."}), 400
+            return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+        cache_key = _history_cache_key(app_name, instance.get("id") or "", series_id, episode_id, 0, include_raw)
+        cached = _history_cache_get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            payload = _fetch_arr_history(
+                "sonarr",
+                instance,
+                series_id=series_id,
+                episode_id=episode_id,
+                include_raw=include_raw,
+            )
+        except Exception as exc:
+            resp = jsonify({"error": "Sonarr history request failed."})
+            resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+            return resp, 502
+        _history_cache_set(cache_key, payload)
+        return jsonify(payload)
+    else:
+        movie_id = _parse_arr_item_id(request.args.get("movieId") or request.args.get("movie_id"))
+        if not movie_id:
+            return jsonify({"error": "movieId is required."}), 400
+        instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+        if not instance:
+            if instance_id:
+                return jsonify({"error": "Unknown Radarr instance."}), 400
+            return jsonify({"error": "instance_id is required for multiple Radarr instances."}), 400
+        cache_key = _history_cache_key(app_name, instance.get("id") or "", 0, 0, movie_id, include_raw)
+        cached = _history_cache_get(cache_key)
+        if cached:
+            return jsonify(cached)
+        try:
+            payload = _fetch_arr_history(
+                "radarr",
+                instance,
+                movie_id=movie_id,
+                include_raw=include_raw,
+            )
+        except Exception as exc:
+            resp = jsonify({"error": "Radarr history request failed."})
+            resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+            return resp, 502
+        _history_cache_set(cache_key, payload)
+        return jsonify(payload)
 
 
 @app.route("/api/tautulli/refresh_item", methods=["POST"])
