@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 import os
 import copy
 import sys
@@ -18,7 +17,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 
 import requests
-from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g
+# Session hinzugefügt für die dauerhafte Sprachwahl
+from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g, session
+from flask_babel import Babel, _
 from flask_compress import Compress
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -37,6 +38,32 @@ SAFE_TAUTULLI_REFRESH_BUCKETS = {
 }
 
 app = Flask(__name__)
+# Secret Key ermöglicht das Speichern der Sprachwahl im Browser-Cookie
+app.secret_key = secrets.token_hex(16)
+
+# --- SPRACHSTEUERUNG (i18n) START ---
+def get_locale():
+    # 1. Priorität: Sprache über URL-Parameter setzen (?lang=de)
+    lang = request.args.get('lang')
+    if lang in ['en', 'de']:
+        session['language'] = lang
+        return lang
+    
+    # 2. Priorität: Bereits gewählte Sprache aus der Session laden
+    if 'language' in session:
+        return session['language']
+    
+    # 3. Priorität: Automatische Erkennung durch den Browser
+    return request.accept_languages.best_match(['en', 'de']) or 'en'
+
+# In Babel 3.x wird die Funktion über init_app oder direkt im Konstruktor übergeben
+babel = Babel(app, locale_selector=get_locale)
+# --- SPRACHSTEUERUNG (i18n) ENDE ---
+
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Then extensions
+Compress(app)
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -399,7 +426,7 @@ def _csrf_protect():
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
     if origin and not _origin_matches_request(origin):
-        return jsonify({"error": "CSRF origin mismatch."}), 403
+        return jsonify({"error": _("CSRF origin mismatch.")}), 403
     if referer and not _origin_matches_request(referer):
         return jsonify({"error": "CSRF referer mismatch."}), 403
     cookie_token = request.cookies.get(CSRF_COOKIE_NAME) or ""
