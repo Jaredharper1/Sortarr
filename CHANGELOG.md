@@ -3,6 +3,8 @@
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-01-25
+
 - Add filter builder dropdowns with active filter bubbles and make the Chips toggle switch between builder and classic filters.
 - Hide the Instance filter category unless multiple instances are configured for the active app.
 - Recalculate table height after filter/chip UI changes to avoid empty gaps below the table.
@@ -355,3 +357,4 @@
 - Validate Tautulli connection during setup when configured
 - Add per-instance test buttons with inline setup errors
 - Add advanced UI columns for CSV-only fields, include TMDB ID in Sonarr CSV exports, and surface Content Hours in the Sonarr columns
+

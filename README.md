@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.7.8-blue)
+![Version](https://img.shields.io/badge/version-0.7.9-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
 
@@ -60,11 +60,8 @@ Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, 
 
 Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
-<<<<<<< HEAD
-=======
 The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
 
->>>>>>> e7db8ec (Prep 0.7.9 changes)
 The Docker image runs Gunicorn with a single worker and 4 threads to keep refresh state and cache progress consistent. If you need to change worker or thread counts, override the container command (and be aware that multiple workers require shared state).
 
 ## Deployment (Unraid)
