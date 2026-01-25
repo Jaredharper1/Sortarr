@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 import os
+import copy
 import sys
 import re
 import time
@@ -82,6 +83,7 @@ class CacheManager:
             "sonarr": {},
             "radarr": {},
             "tautulli": {"ts": 0, "data": {}},
+            "jellystat": {"ts": 0, "data": {}},
         }
 
     @staticmethod
@@ -122,6 +124,7 @@ class CacheManager:
             self._store["sonarr"].clear()
             self._store["radarr"].clear()
             self._store["tautulli"] = {"ts": 0, "data": {}}
+            self._store["jellystat"] = {"ts": 0, "data": {}}
 
     def get_app_snapshot(self, app_name: str) -> dict[str, dict]:
         with self._lock:
@@ -191,6 +194,20 @@ class CacheManager:
                 "data": data or {},
             }
 
+    def get_jellystat_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["jellystat"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
+    def set_jellystat(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            self._store["jellystat"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
+
     def snapshot_app_for_save(self, app_name: str) -> dict[str, dict]:
         with self._lock:
             store = self._store.get(app_name, {})
@@ -252,6 +269,7 @@ RADARR_LITE_FIELDS = {
     "BitrateEstimated",
     "Airing",
     "Scene",
+    "RootFolder",
     "Path",
     "InstanceId",
     "InstanceName",
@@ -269,6 +287,13 @@ _env_mtime = None
 _env_lock = threading.Lock()
 _startup_migrated = False
 _tautulli_refresh_seen = None
+_jellystat_refresh_seen = None
+_jellystat_refresh_state = {
+    "lock": threading.Lock(),
+    "in_progress": False,
+    "history_in_progress": False,
+    "started_ts": 0,
+}
 _arr_refresh_state = {
     "sonarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
     "radarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
@@ -1185,6 +1210,19 @@ def _safe_log_path(path: str) -> str:
     return os.path.basename(path)
 
 
+def _derive_root_folder(path: str) -> str:
+    if not path:
+        return ""
+    raw = str(path).strip()
+    if not raw:
+        return ""
+    stripped = raw.rstrip("/\\")
+    if not stripped:
+        return raw
+    root = os.path.dirname(stripped)
+    return root or raw
+
+
 def _age_seconds(ts: float | int | None) -> int | None:
     if not ts:
         return None
@@ -1334,6 +1372,14 @@ def _write_env_file(path: str, values: dict):
         "RADARR_PATH_MAP_3",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
+        "JELLYSTAT_URL",
+        "JELLYSTAT_API_KEY",
+        "JELLYSTAT_LIBRARY_IDS_SONARR",
+        "JELLYSTAT_LIBRARY_IDS_RADARR",
+        "JELLYSTAT_TIMEOUT_SECONDS",
+        "JELLYSTAT_STATS_PAGE_SIZE",
+        "JELLYSTAT_HISTORY_PAGE_SIZE",
+        "JELLYSTAT_REFRESH_STALE_SECONDS",
         "TAUTULLI_METADATA_LOOKUP_LIMIT",
         "TAUTULLI_METADATA_LOOKUP_SECONDS",
         "TAUTULLI_TIMEOUT_SECONDS",
@@ -1494,8 +1540,11 @@ def _wipe_cache_files() -> None:
         os.environ.get("SONARR_CACHE_PATH", _default_arr_cache_path("sonarr")),
         os.environ.get("RADARR_CACHE_PATH", _default_arr_cache_path("radarr")),
         os.environ.get("TAUTULLI_METADATA_CACHE", _default_tautulli_metadata_cache_path()),
+        os.environ.get("JELLYSTAT_CACHE_PATH", _default_jellystat_cache_path()),
         _tautulli_refresh_lock_path(),
         _tautulli_refresh_marker_path(),
+        _jellystat_refresh_lock_path(),
+        _jellystat_refresh_marker_path(),
     ]
     for path in cache_paths:
         if not path:
@@ -1557,6 +1606,7 @@ def _instance_error_key(prefix: str, idx: int) -> str:
 
 
 _PATH_MAP_SPLIT_RE = re.compile(r"\s*[|,;]\s*")
+_CSV_SPLIT_RE = re.compile(r"\s*[,;]\s*")
 
 
 def _split_path_map_entries(raw: str) -> list[str]:
@@ -1567,6 +1617,14 @@ def _split_path_map_entries(raw: str) -> list[str]:
         parts = [part.strip() for part in _PATH_MAP_SPLIT_RE.split(raw)]
     else:
         parts = [raw]
+    return [part for part in parts if part]
+
+
+def _split_csv_values(raw: str) -> list[str]:
+    raw = str(raw or "").strip()
+    if not raw:
+        return []
+    parts = [part.strip() for part in _CSV_SPLIT_RE.split(raw)]
     return [part for part in parts if part]
 
 
@@ -1650,6 +1708,9 @@ def _get_config():
         tautulli_fetch_seconds = default_fetch_seconds
     else:
         tautulli_fetch_seconds = _read_int_env("TAUTULLI_FETCH_SECONDS", default_fetch_seconds)
+    jellystat_timeout_seconds = _read_int_env("JELLYSTAT_TIMEOUT_SECONDS", 60)
+    jellystat_stats_page_size = _read_int_env("JELLYSTAT_STATS_PAGE_SIZE", 500)
+    jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
     return {
         "sonarr_url": sonarr_primary["url"] if sonarr_primary else _normalize_url(os.environ.get("SONARR_URL", "")),
         "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else os.environ.get("SONARR_API_KEY", ""),
@@ -1685,6 +1746,14 @@ def _get_config():
         "radarr_instances": radarr_instances,
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
         "tautulli_api_key": os.environ.get("TAUTULLI_API_KEY", ""),
+        "jellystat_url": _normalize_url(os.environ.get("JELLYSTAT_URL", "")),
+        "jellystat_api_key": os.environ.get("JELLYSTAT_API_KEY", ""),
+        "jellystat_cache_path": os.environ.get(
+            "JELLYSTAT_CACHE_PATH",
+            _default_jellystat_cache_path(),
+        ),
+        "jellystat_library_ids_sonarr": os.environ.get("JELLYSTAT_LIBRARY_IDS_SONARR", "").strip(),
+        "jellystat_library_ids_radarr": os.environ.get("JELLYSTAT_LIBRARY_IDS_RADARR", "").strip(),
         "tautulli_metadata_cache": os.environ.get(
             "TAUTULLI_METADATA_CACHE",
             _default_tautulli_metadata_cache_path(),
@@ -1704,6 +1773,10 @@ def _get_config():
         "tautulli_refresh_stale_seconds": _read_int_env("TAUTULLI_REFRESH_STALE_SECONDS", 3600),
         "tautulli_timeout_seconds": tautulli_timeout_seconds,
         "tautulli_fetch_seconds": tautulli_fetch_seconds,
+        "jellystat_timeout_seconds": jellystat_timeout_seconds,
+        "jellystat_stats_page_size": jellystat_stats_page_size,
+        "jellystat_history_page_size": jellystat_history_page_size,
+        "jellystat_refresh_stale_seconds": _read_int_env("JELLYSTAT_REFRESH_STALE_SECONDS", 3600),
         "sonarr_timeout_seconds": _read_int_env("SONARR_TIMEOUT_SECONDS", 90),
         "radarr_timeout_seconds": _read_int_env("RADARR_TIMEOUT_SECONDS", 90),
         "sonarr_episodefile_workers": max(_read_int_env("SONARR_EPISODEFILE_WORKERS", 8), 1),
@@ -1726,6 +1799,45 @@ def _config_complete(cfg: dict) -> bool:
     return bool(cfg.get("sonarr_instances") or cfg.get("radarr_instances"))
 
 
+def _playback_provider(cfg: dict) -> str:
+    if cfg.get("jellystat_url") and cfg.get("jellystat_api_key"):
+        return "jellystat"
+    if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+        return "tautulli"
+    return ""
+
+
+def _playback_label(provider: str) -> str:
+    if provider == "jellystat":
+        return "Jellystat"
+    if provider == "tautulli":
+        return "Tautulli"
+    return "Playback"
+
+
+def _playback_enabled(cfg: dict) -> bool:
+    return bool(_playback_provider(cfg))
+
+
+def _get_playback_index_state(cfg: dict) -> tuple[str, dict | None, int]:
+    provider = _playback_provider(cfg)
+    if provider == "jellystat":
+        data, ts = _cache.get_jellystat_state()
+    elif provider == "tautulli":
+        data, ts = _cache.get_tautulli_state()
+    else:
+        data, ts = None, 0
+    return provider, data, ts
+
+
+def _playback_refresh_in_progress(cfg: dict, provider: str | None = None) -> bool:
+    provider = provider or _playback_provider(cfg)
+    if provider == "tautulli":
+        return _tautulli_refresh_in_progress(cfg)
+    if provider == "jellystat":
+        return _jellystat_refresh_in_progress(cfg)
+    return False
+
 
 def _invalidate_cache():
     _cache.clear_all()
@@ -1740,7 +1852,11 @@ def _invalidate_cache():
     with _radarr_wanted_cache_lock:
         _radarr_wanted_cache.clear()
     cfg = _get_config()
-    for path in (cfg.get("sonarr_cache_path"), cfg.get("radarr_cache_path")):
+    for path in (
+        cfg.get("sonarr_cache_path"),
+        cfg.get("radarr_cache_path"),
+        cfg.get("jellystat_cache_path"),
+    ):
         if not path:
             continue
         try:
@@ -2271,6 +2387,28 @@ def _normalize_epoch(value) -> int:
     return ts
 
 
+def _parse_iso_epoch(value) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, (int, float)):
+        return _normalize_epoch(value)
+    text = str(value).strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return _normalize_epoch(text)
+    cleaned = text.replace("Z", "+00:00")
+    if " " in cleaned and "T" not in cleaned:
+        cleaned = cleaned.replace(" ", "T", 1)
+    try:
+        dt = datetime.datetime.fromisoformat(cleaned)
+    except ValueError:
+        return 0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+    return int(dt.timestamp())
+
+
 def _iso_from_epoch(ts: int) -> str:
     if not ts:
         return ""
@@ -2443,12 +2581,18 @@ def _build_strict_title_year_id_map(
 
 
 TAUTULLI_METADATA_CACHE_VERSION = 1
+JELLYSTAT_CACHE_VERSION = 1
 ARR_CACHE_VERSION = 1
 
 
 def _default_tautulli_metadata_cache_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH)
     return os.path.join(base_dir, "Sortarr.tautulli_cache.json")
+
+
+def _default_jellystat_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.jellystat_cache.json")
 
 
 def _default_arr_cache_path(app_name: str) -> str:
@@ -2503,6 +2647,52 @@ def _save_tautulli_metadata_cache(path: str, cache: dict[str, dict]) -> None:
         os.replace(tmp_path, path)
     except OSError:
         logger.warning("Failed to write Tautulli metadata cache (path redacted).")
+
+
+def _load_jellystat_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
+        index = payload.get("index")
+        ts = _safe_int(payload.get("ts"))
+        meta = index.get("meta") if isinstance(index, dict) else None
+        if not isinstance(meta, dict):
+            meta = {}
+        history_ts = _safe_int(payload.get("history_ts"))
+        if history_ts and "history_ts" not in meta:
+            meta["history_ts"] = history_ts
+        if meta:
+            index = dict(index)
+            index["meta"] = meta
+        return {"index": index, "ts": ts}
+
+    if isinstance(payload, dict):
+        return {"index": payload, "ts": 0}
+    return None
+
+
+def _save_jellystat_cache(path: str, index: dict, ts: float | int) -> None:
+    if not path:
+        return
+    payload = {
+        "version": JELLYSTAT_CACHE_VERSION,
+        "ts": _safe_int(ts),
+        "index": index,
+    }
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.warning("Failed to write Jellystat cache (path redacted).")
 
 
 def _load_arr_cache(path: str) -> dict[str, dict]:
@@ -2662,6 +2852,88 @@ def _tautulli_get(
         message = response.get("message") or "Tautulli request failed"
         raise RuntimeError(message)
     return response.get("data")
+
+
+def _jellystat_request(
+    base_url: str,
+    api_key: str,
+    path: str,
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    method: str = "GET",
+):
+    if not base_url:
+        raise RuntimeError("Jellystat base URL is not set")
+    if not api_key:
+        raise RuntimeError("Jellystat API key is not set")
+
+    route = path if path.startswith("/") else f"/{path}"
+    url = f"{base_url.rstrip('/')}{route}"
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
+    http = session or _http
+    headers = {"x-api-token": api_key}
+    if method == "POST":
+        r = http.post(url, params=params, json=payload or {}, headers=headers, timeout=request_timeout)
+    else:
+        r = http.get(url, params=params, headers=headers, timeout=request_timeout)
+    r.raise_for_status()
+    try:
+        data = r.json()
+    except ValueError as exc:
+        raise RuntimeError("Jellystat response was not JSON") from exc
+    if isinstance(data, dict) and data.get("error"):
+        raise RuntimeError(data.get("error") or "Jellystat request failed")
+    return data
+
+
+def _jellystat_get(
+    base_url: str,
+    api_key: str,
+    path: str,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    return _jellystat_request(
+        base_url,
+        api_key,
+        path,
+        params=params,
+        timeout=timeout,
+        session=session,
+        method="GET",
+    )
+
+
+def _jellystat_post(
+    base_url: str,
+    api_key: str,
+    path: str,
+    payload: dict | None = None,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    return _jellystat_request(
+        base_url,
+        api_key,
+        path,
+        params=params,
+        payload=payload,
+        timeout=timeout,
+        session=session,
+        method="POST",
+    )
+
+
+def _jellystat_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str | None:
+    try:
+        _jellystat_get(base_url, api_key, "/api/getLibraries", timeout=timeout)
+        return None
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        return str(exc)
 
 
 def _tautulli_metadata_ids_uncached(
@@ -2963,6 +3235,143 @@ def _tautulli_raw_history_stats_from_item(item: dict) -> dict:
     }
 
 
+def _jellystat_item_year(item: dict) -> str:
+    year = str(item.get("ProductionYear") or "").strip()
+    if year and year.isdigit():
+        return year
+    date_value = item.get("PremiereDate") or item.get("DateCreated") or ""
+    date_text = str(date_value or "").strip()
+    if len(date_text) >= 4 and date_text[:4].isdigit():
+        return date_text[:4]
+    return ""
+
+
+def _jellystat_raw_stats_from_item(item: dict) -> dict:
+    play_count = _safe_int(
+        item.get("times_played")
+        or item.get("TimesPlayed")
+        or item.get("play_count")
+        or item.get("plays")
+    )
+    total_seconds = _normalize_duration_seconds(
+        item.get("total_play_time")
+        or item.get("TotalPlayTime")
+        or item.get("total_seconds")
+        or item.get("total_duration")
+    )
+    total_source = "stats_total" if total_seconds > 0 else ""
+    return {
+        "play_count": play_count,
+        "users_watched": 0,
+        "last_epoch": 0,
+        "total_seconds": total_seconds,
+        "duration_seconds": 0,
+        "total_seconds_source": total_source,
+    }
+
+
+def _jellystat_raw_history_stats_from_item(item: dict) -> dict:
+    play_count = _safe_int(item.get("TotalPlays") or item.get("total_plays") or item.get("plays"))
+    if play_count <= 0:
+        play_count = 1
+    duration = _normalize_duration_seconds(
+        item.get("TotalDuration")
+        or item.get("PlaybackDuration")
+        or item.get("playback_duration")
+    )
+    played_at = _parse_iso_epoch(item.get("ActivityDateInserted") or item.get("played_at"))
+    user_id = item.get("UserId") or item.get("user_id") or item.get("UserName")
+    return {
+        "play_count": play_count,
+        "users_watched": 0,
+        "total_seconds": duration,
+        "last_epoch": played_at,
+        "user_ids": [str(user_id)] if user_id else [],
+        "total_seconds_source": "history_total",
+    }
+
+
+def _jellystat_build_id_map(items: list[dict]) -> dict[str, dict]:
+    id_map: dict[str, dict] = {}
+    for item in items or []:
+        item_id = str(item.get("Id") or "").strip()
+        if not item_id:
+            continue
+        item_type = str(item.get("Type") or "").strip().lower()
+        if item_type in ("series", "show"):
+            media_type = "show"
+        elif item_type == "movie":
+            media_type = "movie"
+        else:
+            continue
+        title = item.get("Name") or ""
+        year = _jellystat_item_year(item)
+        id_map[item_id] = {"title": title, "year": year, "media_type": media_type}
+    return id_map
+
+
+def _jellystat_build_index(items: list[dict], media_type: str) -> dict:
+    index = {
+        "tvdb": {},
+        "tmdb": {},
+        "imdb": {},
+        "title_year": {},
+        "title": {},
+        "title_year_relaxed": {},
+        "title_relaxed": {},
+        "title_year_variant": {},
+        "title_variant": {},
+    }
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    for item in items or []:
+        item_type = str(item.get("Type") or "").strip().lower()
+        if media_type == "show" and item_type not in ("series", "show"):
+            continue
+        if media_type == "movie" and item_type != "movie":
+            continue
+        raw = _jellystat_raw_stats_from_item(item)
+        title_candidates = _tautulli_title_candidates(item.get("Name"))
+        year = _jellystat_item_year(item)
+        seen = set()
+        for title in title_candidates:
+            _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
+    return index
+
+
+def _jellystat_build_history_index(
+    items: list[dict],
+    media_type: str,
+    id_map: dict[str, dict],
+) -> dict:
+    index = {
+        "tvdb": {},
+        "tmdb": {},
+        "imdb": {},
+        "title_year": {},
+        "title": {},
+        "title_year_relaxed": {},
+        "title_relaxed": {},
+        "title_year_variant": {},
+        "title_variant": {},
+    }
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    for item in items or []:
+        item_id = str(item.get("NowPlayingItemId") or "").strip()
+        if not item_id:
+            continue
+        meta = id_map.get(item_id)
+        if not meta:
+            continue
+        if meta.get("media_type") != media_type:
+            continue
+        raw = _jellystat_raw_history_stats_from_item(item)
+        title = meta.get("title") or ""
+        year = str(meta.get("year") or "").strip()
+        seen = set()
+        _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
+    return index
+
+
 def _tautulli_fetch_library_items(
     base_url: str,
     api_key: str,
@@ -3060,6 +3469,118 @@ def _tautulli_fetch_history(
         start += length
 
     return items
+
+
+def _jellystat_fetch_libraries(
+    base_url: str,
+    api_key: str,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    data = _jellystat_get(base_url, api_key, "/api/getLibraries", timeout=timeout)
+    return data if isinstance(data, list) else []
+
+
+def _jellystat_library_ids_for_media(cfg: dict, libraries: list[dict], media_type: str) -> list[str]:
+    if media_type == "show":
+        raw = cfg.get("jellystat_library_ids_sonarr") or ""
+        allowed_types = {"tvshows", "tvshow", "series", "show"}
+    else:
+        raw = cfg.get("jellystat_library_ids_radarr") or ""
+        allowed_types = {"movies", "movie"}
+
+    override = _split_csv_values(raw)
+    if override:
+        return override
+
+    ids: list[str] = []
+    for lib in libraries or []:
+        if lib.get("archived") is True:
+            continue
+        lib_id = str(lib.get("Id") or "").strip()
+        if not lib_id:
+            continue
+        collection = str(lib.get("CollectionType") or lib.get("Type") or "").strip().lower()
+        if collection in allowed_types:
+            ids.append(lib_id)
+    return ids
+
+
+def _jellystat_fetch_library_items(
+    base_url: str,
+    api_key: str,
+    library_id: str,
+    page_size: int,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    items: list[dict] = []
+    page = 1
+    pages = 1
+    size = max(_safe_int(page_size), 1)
+    while page <= pages:
+        data = _jellystat_post(
+            base_url,
+            api_key,
+            "/stats/getLibraryItemsWithStats",
+            payload={"libraryid": library_id},
+            params={"size": size, "page": page},
+            timeout=timeout,
+        )
+        if not isinstance(data, dict):
+            break
+        chunk = data.get("results") or []
+        if isinstance(chunk, list):
+            items.extend(chunk)
+        pages = max(_safe_int(data.get("pages")), page)
+        if not chunk or page >= pages:
+            break
+        page += 1
+    return items
+
+
+def _jellystat_fetch_history(
+    base_url: str,
+    api_key: str,
+    page_size: int,
+    cutoff_ts: int = 0,
+    timeout: int | float | None = None,
+) -> tuple[list[dict], int]:
+    items: list[dict] = []
+    page = 1
+    pages = 1
+    size = max(_safe_int(page_size), 1)
+    max_ts = 0
+    while page <= pages:
+        data = _jellystat_get(
+            base_url,
+            api_key,
+            "/api/getHistory",
+            params={
+                "size": size,
+                "page": page,
+                "sort": "ActivityDateInserted",
+                "desc": "true",
+            },
+            timeout=timeout,
+        )
+        if not isinstance(data, dict):
+            break
+        chunk = data.get("results") or []
+        if not isinstance(chunk, list):
+            break
+        stop = False
+        for item in chunk:
+            ts = _parse_iso_epoch(item.get("ActivityDateInserted"))
+            if ts:
+                max_ts = max(max_ts, ts)
+            if cutoff_ts and ts and ts <= cutoff_ts:
+                stop = True
+                break
+            items.append(item)
+        pages = max(_safe_int(data.get("pages")), page)
+        if stop or not chunk or page >= pages:
+            break
+        page += 1
+    return items, max_ts
 
 
 def _tautulli_refresh_library_media_info(
@@ -3774,6 +4295,163 @@ def _get_tautulli_index_state() -> tuple[dict | None, int]:
     return _cache.get_tautulli_state()
 
 
+def _get_jellystat_index_state() -> tuple[dict | None, int]:
+    return _cache.get_jellystat_state()
+
+
+def _get_jellystat_index(
+    cfg: dict,
+    force: bool = False,
+    include_history: bool = True,
+) -> dict | None:
+    if not (cfg.get("jellystat_url") and cfg.get("jellystat_api_key")):
+        return None
+
+    cached_data, _ = _cache.get_jellystat_state()
+    if not force and cached_data:
+        return cached_data
+
+    cache_path = cfg.get("jellystat_cache_path") or ""
+    disk_cache = None if force else _load_jellystat_cache(cache_path)
+    if not force and disk_cache and disk_cache.get("index"):
+        index = disk_cache.get("index")
+        ts = _safe_int(disk_cache.get("ts")) or time.time()
+        _cache.set_jellystat(index, ts)
+        return index
+
+    base_url = cfg.get("jellystat_url") or ""
+    api_key = cfg.get("jellystat_api_key") or ""
+    request_timeout = _safe_int(cfg.get("jellystat_timeout_seconds"))
+    if request_timeout <= 0:
+        request_timeout = 45
+    page_size = _safe_int(cfg.get("jellystat_stats_page_size"))
+    if page_size <= 0:
+        page_size = 500
+
+    libraries = _jellystat_fetch_libraries(base_url, api_key, timeout=request_timeout)
+    show_lib_ids = _jellystat_library_ids_for_media(cfg, libraries, "show")
+    movie_lib_ids = _jellystat_library_ids_for_media(cfg, libraries, "movie")
+
+    shows_items = []
+    for lib_id in show_lib_ids:
+        shows_items.extend(
+            _jellystat_fetch_library_items(
+                base_url,
+                api_key,
+                lib_id,
+                page_size,
+                timeout=request_timeout,
+            )
+        )
+
+    movies_items = []
+    for lib_id in movie_lib_ids:
+        movies_items.extend(
+            _jellystat_fetch_library_items(
+                base_url,
+                api_key,
+                lib_id,
+                page_size,
+                timeout=request_timeout,
+            )
+        )
+
+    id_map = _jellystat_build_id_map(shows_items + movies_items)
+    shows_index = _jellystat_build_index(shows_items, "show")
+    movies_index = _jellystat_build_index(movies_items, "movie")
+    meta: dict = {
+        "history_ts": 0,
+        "id_map": id_map,
+        "library_ids": {"shows": show_lib_ids, "movies": movie_lib_ids},
+    }
+    prior_meta = None
+    if cached_data and isinstance(cached_data.get("meta"), dict):
+        prior_meta = cached_data.get("meta")
+    elif disk_cache and isinstance(disk_cache.get("index"), dict):
+        prior_meta = disk_cache.get("index", {}).get("meta")
+    if isinstance(prior_meta, dict):
+        prior_history_ts = _safe_int(prior_meta.get("history_ts"))
+        if prior_history_ts:
+            meta["history_ts"] = prior_history_ts
+
+    index = {"shows": shows_index, "movies": movies_index, "meta": meta}
+    now = time.time()
+
+    if include_history:
+        updated = _jellystat_refresh_history(cfg, index)
+        if updated:
+            index = updated
+        now = time.time()
+        _save_jellystat_cache(cache_path, index, now)
+
+    _cache.set_jellystat(index, now)
+    return index
+
+
+def _get_jellystat_index_cached() -> dict | None:
+    data, _ = _cache.get_jellystat_state()
+    return data
+
+
+def _jellystat_refresh_history(cfg: dict, index: dict | None) -> dict | None:
+    if not index or not isinstance(index, dict):
+        return None
+    meta = index.get("meta") if isinstance(index.get("meta"), dict) else {}
+    id_map = meta.get("id_map") if isinstance(meta.get("id_map"), dict) else {}
+    if not id_map:
+        return None
+
+    base_url = cfg.get("jellystat_url") or ""
+    api_key = cfg.get("jellystat_api_key") or ""
+    request_timeout = _safe_int(cfg.get("jellystat_timeout_seconds"))
+    if request_timeout <= 0:
+        request_timeout = 45
+    page_size = _safe_int(cfg.get("jellystat_history_page_size"))
+    if page_size <= 0:
+        page_size = 250
+    cutoff_ts = _safe_int(meta.get("history_ts"))
+
+    history_items, history_ts = _jellystat_fetch_history(
+        base_url,
+        api_key,
+        page_size,
+        cutoff_ts=cutoff_ts,
+        timeout=request_timeout,
+    )
+    if not history_items and history_ts <= cutoff_ts:
+        return None
+
+    refreshed = copy.deepcopy(index)
+    refreshed_meta = refreshed.get("meta") if isinstance(refreshed.get("meta"), dict) else {}
+    refreshed_meta["history_ts"] = max(cutoff_ts, history_ts)
+    refreshed["meta"] = refreshed_meta
+
+    history_shows = _jellystat_build_history_index(history_items, "show", id_map)
+    history_movies = _jellystat_build_history_index(history_items, "movie", id_map)
+    for bucket in [
+        "tvdb",
+        "tmdb",
+        "imdb",
+        "title_year",
+        "title",
+        "title_year_relaxed",
+        "title_relaxed",
+        "title_year_variant",
+        "title_variant",
+    ]:
+        for key, raw in history_shows[bucket].items():
+            if key in refreshed["shows"][bucket]:
+                _tautulli_apply_history(refreshed["shows"][bucket][key], raw)
+            else:
+                refreshed["shows"][bucket][key] = raw
+        for key, raw in history_movies[bucket].items():
+            if key in refreshed["movies"][bucket]:
+                _tautulli_apply_history(refreshed["movies"][bucket][key], raw)
+            else:
+                refreshed["movies"][bucket][key] = raw
+    return refreshed
+
+
 def _tautulli_refresh_lock_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
     return os.path.join(base_dir, "Sortarr.tautulli_refresh.lock")
@@ -3794,6 +4472,26 @@ def _touch_tautulli_refresh_marker() -> None:
         logger.warning("Failed to write Tautulli refresh marker (path redacted).")
 
 
+def _jellystat_refresh_lock_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.jellystat_refresh.lock")
+
+
+def _jellystat_refresh_marker_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.jellystat_refresh.done")
+
+
+def _touch_jellystat_refresh_marker() -> None:
+    path = _jellystat_refresh_marker_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        logger.warning("Failed to write Jellystat refresh marker (path redacted).")
+
+
 def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
     global _tautulli_refresh_seen
     marker_path = _tautulli_refresh_marker_path()
@@ -3807,7 +4505,36 @@ def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
         _cache.clear_app("radarr")
 
 
+def _maybe_bust_arr_cache_on_jellystat_refresh() -> None:
+    global _jellystat_refresh_seen
+    marker_path = _jellystat_refresh_marker_path()
+    try:
+        mtime = os.path.getmtime(marker_path)
+    except OSError:
+        return
+    if _jellystat_refresh_seen is None or mtime > _jellystat_refresh_seen:
+        _jellystat_refresh_seen = mtime
+        _cache.clear_app("sonarr")
+        _cache.clear_app("radarr")
+
+
+def _maybe_bust_arr_cache_on_playback_refresh(cfg: dict) -> None:
+    provider = _playback_provider(cfg)
+    if provider == "jellystat":
+        _maybe_bust_arr_cache_on_jellystat_refresh()
+    elif provider == "tautulli":
+        _maybe_bust_arr_cache_on_tautulli_refresh()
+
+
 def _tautulli_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def _jellystat_refresh_lock_age(lock_path: str) -> float | None:
     try:
         mtime = os.path.getmtime(lock_path)
     except OSError:
@@ -3826,6 +4553,17 @@ def _clear_stale_tautulli_refresh_lock(lock_path: str, stale_seconds: int) -> bo
     return True
 
 
+def _clear_stale_jellystat_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if stale_seconds <= 0:
+        return False
+    age = _jellystat_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Jellystat refresh lock detected (age %.0fs); clearing.", age)
+    _release_jellystat_refresh_lock(lock_path, None)
+    return True
+
+
 def _tautulli_refresh_in_progress(cfg: dict | None = None) -> bool:
     lock_path = _tautulli_refresh_lock_path()
     if not os.path.exists(lock_path):
@@ -3835,6 +4573,19 @@ def _tautulli_refresh_in_progress(cfg: dict | None = None) -> bool:
     else:
         stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
     if _clear_stale_tautulli_refresh_lock(lock_path, stale_seconds):
+        return False
+    return os.path.exists(lock_path)
+
+
+def _jellystat_refresh_in_progress(cfg: dict | None = None) -> bool:
+    lock_path = _jellystat_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    if cfg is None:
+        stale_seconds = _read_int_env("JELLYSTAT_REFRESH_STALE_SECONDS", 3600)
+    else:
+        stale_seconds = _safe_int(cfg.get("jellystat_refresh_stale_seconds"))
+    if _clear_stale_jellystat_refresh_lock(lock_path, stale_seconds):
         return False
     return os.path.exists(lock_path)
 
@@ -3854,7 +4605,34 @@ def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
     return fd
 
 
+def _acquire_jellystat_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_jellystat_refresh_lock(lock_path, stale_seconds)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        return None
+    try:
+        os.write(fd, str(os.getpid()).encode("utf-8"))
+    except OSError:
+        pass
+    return fd
+
+
 def _release_tautulli_refresh_lock(lock_path: str, fd) -> None:
+    try:
+        if fd is not None:
+            os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
+def _release_jellystat_refresh_lock(lock_path: str, fd) -> None:
     try:
         if fd is not None:
             os.close(fd)
@@ -4067,6 +4845,148 @@ def _start_tautulli_deep_refresh(cfg: dict) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-tautulli-deep-refresh", daemon=True)
+    thread.start()
+    return True
+
+
+def _apply_jellystat_to_caches(cfg: dict, index: dict) -> None:
+    _, index_ts = _cache.get_jellystat_state()
+    totals = {"shows": 0, "movies": 0}
+    progress_instances: dict[str, dict[str, set[str]]] = {}
+    disk_caches: dict[str, dict[str, dict]] = {}
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        memory_snapshot = _cache.get_app_snapshot(app_name)
+        memory_ids: set[str] = set()
+        memory_total = 0
+        for instance_id, entry in memory_snapshot.items():
+            data = entry.get("data")
+            if isinstance(data, list) and data:
+                memory_ids.add(str(instance_id))
+                memory_total += len(data)
+
+        cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
+        disk_cache = _load_arr_cache(cache_path)
+        disk_caches[app_name] = {"path": cache_path, "cache": disk_cache}
+
+        disk_only_ids: set[str] = set()
+        disk_only_total = 0
+        for instance_id, cached_entry in disk_cache.items():
+            if str(instance_id) in memory_ids:
+                continue
+            data = cached_entry.get("data")
+            if isinstance(data, list) and data:
+                disk_only_ids.add(str(instance_id))
+                disk_only_total += len(data)
+
+        totals[media_type] = memory_total + disk_only_total
+        progress_instances[app_name] = {
+            "disk_only": disk_only_ids,
+            "memory_ids": memory_ids,
+        }
+
+    _init_tautulli_match_progress(totals)
+    provider_label = _playback_label("jellystat")
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        disk_only_ids = progress_instances.get(app_name, {}).get("disk_only", set())
+        memory_ids = progress_instances.get(app_name, {}).get("memory_ids", set())
+
+        for instance_id in memory_ids:
+            entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+            if not entry:
+                continue
+            if _apply_tautulli_stats_once(
+                entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=media_type,
+                provider_label=provider_label,
+            ):
+                _cache.update_app_entry(
+                    app_name,
+                    instance_id,
+                    data=entry.get("data") or [],
+                    ts=entry.get("ts") or 0,
+                    tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                )
+
+        cache_info = disk_caches.get(app_name, {})
+        cache_path = cache_info.get("path")
+        disk_cache = cache_info.get("cache", {})
+        updated = False
+        for instance_id, cached_entry in disk_cache.items():
+            progress_media = media_type if str(instance_id) in disk_only_ids else None
+            if _apply_tautulli_stats_once(
+                cached_entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=progress_media,
+                provider_label=provider_label,
+            ):
+                updated = True
+        if updated:
+            _queue_arr_cache_save(app_name, cache_path, disk_cache, "jellystat_refresh")
+
+
+def _start_jellystat_background_apply(cfg: dict, index: dict | None) -> bool:
+    if not index:
+        return False
+    lock_path = _jellystat_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("jellystat_refresh_stale_seconds"))
+    fd = _acquire_jellystat_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            _apply_jellystat_to_caches(cfg, index)
+        except Exception as exc:
+            logger.warning("Jellystat background apply failed: %s", exc)
+        finally:
+            _release_jellystat_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-jellystat-apply", daemon=True)
+    thread.start()
+    return True
+
+
+def _start_jellystat_background_refresh(cfg: dict) -> bool:
+    if not (cfg.get("jellystat_url") and cfg.get("jellystat_api_key")):
+        return False
+    lock_path = _jellystat_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("jellystat_refresh_stale_seconds"))
+    fd = _acquire_jellystat_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    cache_path = cfg.get("jellystat_cache_path") or ""
+    existing_cache = _load_jellystat_cache(cache_path)
+
+    def worker():
+        try:
+            index = _get_jellystat_index(cfg, force=True, include_history=False)
+            if index:
+                _apply_jellystat_to_caches(cfg, index)
+                updated_index = _jellystat_refresh_history(cfg, index)
+                if updated_index:
+                    index = updated_index
+                    _cache.set_jellystat(index, time.time())
+                    _apply_jellystat_to_caches(cfg, index)
+                    _save_jellystat_cache(cache_path, index, time.time())
+                elif not existing_cache:
+                    _save_jellystat_cache(cache_path, index, time.time())
+                _touch_jellystat_refresh_marker()
+        except Exception as exc:
+            logger.warning("Jellystat refresh failed: %s", exc)
+        finally:
+            _release_jellystat_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-jellystat-refresh", daemon=True)
     thread.start()
     return True
 
@@ -4388,6 +5308,7 @@ def _apply_tautulli_stats_once(
     media_type: str,
     index_ts: int,
     progress_media_type: str | None = None,
+    provider_label: str = "Tautulli",
 ) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -4398,7 +5319,13 @@ def _apply_tautulli_stats_once(
         sample = data[0]
         if isinstance(sample, dict) and "TautulliMatchStatus" in sample:
             return False
-    _apply_tautulli_stats(data, index, media_type, progress_media_type=progress_media_type)
+    _apply_tautulli_stats(
+        data,
+        index,
+        media_type,
+        progress_media_type=progress_media_type,
+        provider_label=provider_label,
+    )
     if index_ts:
         entry["tautulli_index_ts"] = index_ts
     return True
@@ -4409,14 +5336,16 @@ def _apply_tautulli_stats(
     index: dict,
     media_type: str,
     progress_media_type: str | None = None,
+    provider_label: str = "Tautulli",
 ):
     now_ts = time.time()
     data = index.get(media_type) if index else None
     has_index_data = bool(data) and any(bucket for bucket in data.values() if bucket)
+    provider_label = provider_label or "Tautulli"
     for row in rows:
         row["TautulliMatched"] = False
         row["TautulliMatchStatus"] = "unavailable"
-        row["TautulliMatchReason"] = "Tautulli data unavailable"
+        row["TautulliMatchReason"] = f"{provider_label} data unavailable"
         row["WatchContentRatio"] = ""
         row["TautulliRatingKey"] = ""
         row["TautulliSectionId"] = ""
@@ -4437,14 +5366,18 @@ def _apply_tautulli_stats(
             row.update(_tautulli_finalize_stats(raw, now_ts))
             row["TautulliMatched"] = True
             row["TautulliMatchStatus"] = "matched"
-            row["TautulliMatchReason"] = f"Matched by {bucket}" if bucket else "Matched by Tautulli"
+            if bucket:
+                row["TautulliMatchReason"] = f"Matched by {bucket}"
+            else:
+                row["TautulliMatchReason"] = f"Matched by {provider_label}"
             status = "matched"
-            rating_key = str(raw.get("rating_key") or "").strip()
-            section_id = str(raw.get("section_id") or "").strip()
-            if section_id:
-                row["TautulliSectionId"] = section_id
-            if rating_key and bucket in SAFE_TAUTULLI_REFRESH_BUCKETS:
-                row["TautulliRatingKey"] = rating_key
+            if provider_label == "Tautulli":
+                rating_key = str(raw.get("rating_key") or "").strip()
+                section_id = str(raw.get("section_id") or "").strip()
+                if section_id:
+                    row["TautulliSectionId"] = section_id
+                if rating_key and bucket in SAFE_TAUTULLI_REFRESH_BUCKETS:
+                    row["TautulliRatingKey"] = rating_key
             content_hours = row.get("ContentHours")
             try:
                 content_hours_val = float(content_hours)
@@ -4455,7 +5388,7 @@ def _apply_tautulli_stats(
                 row["WatchContentRatio"] = round(watch_hours_val / content_hours_val, 4)
         else:
             row["TautulliMatchStatus"] = "unmatched"
-            row["TautulliMatchReason"] = "No Tautulli match for IDs or title"
+            row["TautulliMatchReason"] = f"No {provider_label} match for IDs or title"
             status = "unmatched"
         _advance_tautulli_match_progress(progress_media_type, status)
 
@@ -4700,6 +5633,7 @@ def _build_sonarr_row(
     date_added = series.get("added") or ""
     title_slug = series.get("titleSlug") or ""  # IMPORTANT for Sonarr UI links
     path = series.get("path") or ""
+    root_folder = series.get("rootFolderPath") or _derive_root_folder(path)
     year = series.get("year") or ""
     tvdb_id = series.get("tvdbId") or ""
     imdb_id = series.get("imdbId") or ""
@@ -4864,6 +5798,7 @@ def _build_sonarr_row(
         "VideoCodecMixed": video_codec_mixed,
         "VideoCodecAll": video_codec_all,
         "VideoHDR": video_hdr,
+        "RootFolder": root_folder,
         "Path": path,
     }
 
@@ -5513,6 +6448,7 @@ def _build_radarr_row(
     title = movie.get("title") or ""
     date_added = movie.get("added") or ""
     path = movie.get("path") or ""
+    root_folder = movie.get("rootFolderPath") or _derive_root_folder(path)
     runtime = int(movie.get("runtime") or 0)
     content_hours = round(runtime / 60.0, 2) if runtime > 0 else ""
     year = movie.get("year") or ""
@@ -5659,6 +6595,7 @@ def _build_radarr_row(
         "SubtitleLanguagesMixed": subtitle_languages_mixed,
         "VideoCodec": video_codec,
         "VideoHDR": video_hdr,
+        "RootFolder": root_folder,
         "Path": path,
     }
 
@@ -5820,16 +6757,23 @@ def _apply_instance_meta(rows: list[dict], instance: dict):
     if path_maps is None:
         path_map = instance.get("path_map")
         path_maps = [path_map] if path_map else []
+    def apply_path_map(value: str | None) -> str | None:
+        if not value:
+            return value
+        for src, dst in path_maps:
+            if value.startswith(src):
+                return value.replace(src, dst, 1)
+        return value
     for row in rows:
         row["InstanceId"] = instance.get("id", "")
         row["InstanceName"] = instance.get("name", "")
         if path_maps:
-            path = row.get("Path")
-            if path:
-                for src, dst in path_maps:
-                    if path.startswith(src):
-                        row["Path"] = path.replace(src, dst, 1)
-                        break
+            mapped_path = apply_path_map(row.get("Path"))
+            if mapped_path:
+                row["Path"] = mapped_path
+            mapped_root = apply_path_map(row.get("RootFolder"))
+            if mapped_root:
+                row["RootFolder"] = mapped_root
 
 
 def _cache_entry_has_data(entry: dict | None) -> bool:
@@ -5892,7 +6836,8 @@ def _start_arr_background_refresh(
         try:
             cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
             disk_cache = _load_arr_cache(cache_path)
-            cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
+            _, cached_playback, cached_playback_ts = _get_playback_index_state(cfg)
+            playback_label = _playback_label(_playback_provider(cfg))
             for instance in instances:
                 _, refreshed = _get_cached_instance(
                     app_name,
@@ -5900,8 +6845,9 @@ def _start_arr_background_refresh(
                     disk_cache,
                     cache_path,
                     force=True,
-                    tautulli_index=cached_tautulli,
-                    tautulli_index_ts=cached_tautulli_ts,
+                    tautulli_index=cached_playback,
+                    tautulli_index_ts=cached_playback_ts,
+                    playback_label=playback_label,
                 )
                 updated = updated or refreshed
             if updated:
@@ -5944,6 +6890,7 @@ def _get_cached_instance(
     tautulli_index_ts: int = 0,
     log_cold_start: bool = False,
     defer_tautulli_overlay: bool = False,
+    playback_label: str = "Tautulli",
 ) -> tuple[list[dict], bool]:
     instance_id = instance["id"]
     entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_id)
@@ -5964,9 +6911,21 @@ def _get_cached_instance(
         }
         if tautulli_index:
             if app_name == "sonarr":
-                _apply_tautulli_stats_once(temp_entry, tautulli_index, "shows", tautulli_index_ts)
+                _apply_tautulli_stats_once(
+                    temp_entry,
+                    tautulli_index,
+                    "shows",
+                    tautulli_index_ts,
+                    provider_label=playback_label,
+                )
             else:
-                _apply_tautulli_stats_once(temp_entry, tautulli_index, "movies", tautulli_index_ts)
+                _apply_tautulli_stats_once(
+                    temp_entry,
+                    tautulli_index,
+                    "movies",
+                    tautulli_index_ts,
+                    provider_label=playback_label,
+                )
         _cache.set_app_entry(
             app_name,
             instance_id,
@@ -6020,20 +6979,34 @@ def _get_cached_instance(
         if defer_tautulli_overlay:
             if log_cold_start:
                 logger.info(
-                    "Cold start %s deferring Tautulli overlay (background matching).",
+                    "Cold start %s deferring %s overlay (background matching).",
                     app_name,
+                    playback_label,
                 )
         else:
             overlay_start = time.perf_counter()
             if app_name == "sonarr":
-                applied = _apply_tautulli_stats_once(temp_entry, tautulli_index, "shows", tautulli_index_ts)
+                applied = _apply_tautulli_stats_once(
+                    temp_entry,
+                    tautulli_index,
+                    "shows",
+                    tautulli_index_ts,
+                    provider_label=playback_label,
+                )
             else:
-                applied = _apply_tautulli_stats_once(temp_entry, tautulli_index, "movies", tautulli_index_ts)
+                applied = _apply_tautulli_stats_once(
+                    temp_entry,
+                    tautulli_index,
+                    "movies",
+                    tautulli_index_ts,
+                    provider_label=playback_label,
+                )
             overlay_elapsed = time.perf_counter() - overlay_start
             if log_cold_start:
                 logger.info(
-                    "Cold start %s Tautulli overlay in %.2fs (applied=%s)",
+                    "Cold start %s %s overlay in %.2fs (applied=%s)",
                     app_name,
+                    playback_label,
                     overlay_elapsed,
                     applied,
                 )
@@ -6111,24 +7084,31 @@ def _refresh_arr_item_cache(
         cache_key = _sonarr_episodefile_cache_key(instance.get("id"), base_url)
         _clear_sonarr_series_cache(cache_key, item_id)
 
-    cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
-    if force_tautulli and cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+    provider, cached_playback, cached_playback_ts = _get_playback_index_state(cfg)
+    playback_label = _playback_label(provider)
+    if force_tautulli and provider == "tautulli" and cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
         start = time.perf_counter()
         try:
             _get_tautulli_index(cfg, force=True, timing=timing)
-            cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
+            _, cached_playback, cached_playback_ts = _get_playback_index_state(cfg)
         except Exception as exc:
             logger.warning("Tautulli item refresh index fetch failed: %s", exc)
         _record_timing(timing, "tautulli_index_ms", start)
-    tautulli_index_ts = 0
-    if cached_tautulli and cached_tautulli_ts:
+    playback_index_ts = 0
+    if cached_playback and cached_playback_ts:
         temp_entry = {"data": [row], "tautulli_index_ts": 0}
         start = time.perf_counter()
-        _apply_tautulli_stats_once(temp_entry, cached_tautulli, media_type, cached_tautulli_ts)
+        _apply_tautulli_stats_once(
+            temp_entry,
+            cached_playback,
+            media_type,
+            cached_playback_ts,
+            provider_label=playback_label,
+        )
         _record_timing(timing, "tautulli_overlay_ms", start)
         if temp_entry.get("data"):
             row = temp_entry["data"][0]
-        tautulli_index_ts = _safe_int(temp_entry.get("tautulli_index_ts"))
+        playback_index_ts = _safe_int(temp_entry.get("tautulli_index_ts"))
 
     now = time.time()
     instance_id = str(instance.get("id") or "")
@@ -6142,7 +7122,7 @@ def _refresh_arr_item_cache(
         instance_id,
         entry_rows,
         ts=now,
-        tautulli_index_ts=tautulli_index_ts,
+        tautulli_index_ts=playback_index_ts,
     )
 
     cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
@@ -6153,7 +7133,7 @@ def _refresh_arr_item_cache(
     _sort_arr_rows(app_name, disk_rows)
     disk_cache[instance_id] = {
         "ts": now,
-        "tautulli_index_ts": tautulli_index_ts,
+        "tautulli_index_ts": playback_index_ts,
         "data": disk_rows,
     }
     _queue_arr_cache_save(app_name, cache_path, disk_cache, "item_refresh")
@@ -6168,7 +7148,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     if not instances:
         return [], "", "", False
 
-    _maybe_bust_arr_cache_on_tautulli_refresh()
+    _maybe_bust_arr_cache_on_playback_refresh(cfg)
 
     tautulli_warning = ""
     tautulli_notice = ""
@@ -6183,8 +7163,9 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     instance_errors: list[dict] = []
     strict_instance_errors = _read_bool_env("SORTARR_STRICT_INSTANCE_ERRORS", False)
     media_type = "shows" if app_name == "sonarr" else "movies"
-    cached_tautulli, cached_tautulli_ts = _get_tautulli_index_state()
-    defer_tautulli_overlay = False
+    provider, cached_playback, cached_playback_ts = _get_playback_index_state(cfg)
+    playback_label = _playback_label(provider)
+    defer_playback_overlay = False
     for instance in instances:
         instance_id = instance["id"]
         entry = _cache.get_app_entry_snapshot(app_name, instance_id)
@@ -6192,8 +7173,14 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
             _cache.update_app_entry(app_name, instance_id, data=[], tautulli_index_ts=0)
             entry = None
         if not force and entry and entry.get("data"):
-            if cached_tautulli and cached_tautulli_ts:
-                if _apply_tautulli_stats_once(entry, cached_tautulli, media_type, cached_tautulli_ts):
+            if cached_playback and cached_playback_ts:
+                if _apply_tautulli_stats_once(
+                    entry,
+                    cached_playback,
+                    media_type,
+                    cached_playback_ts,
+                    provider_label=playback_label,
+                ):
                     _cache.update_app_entry(
                         app_name,
                         instance_id,
@@ -6214,8 +7201,14 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 "tautulli_index_ts": entry_index_ts,
                 "data": _clone_rows(cached_entry.get("data") or []),
             }
-            if cached_tautulli and cached_tautulli_ts:
-                if _apply_tautulli_stats_once(temp_entry, cached_tautulli, media_type, cached_tautulli_ts):
+            if cached_playback and cached_playback_ts:
+                if _apply_tautulli_stats_once(
+                    temp_entry,
+                    cached_playback,
+                    media_type,
+                    cached_playback_ts,
+                    provider_label=playback_label,
+                ):
                     cached_entry["tautulli_index_ts"] = _safe_int(temp_entry.get("tautulli_index_ts"))
                     cached_entry["data"] = temp_entry.get("data") or []
                     disk_dirty = True
@@ -6234,7 +7227,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
 
     if not force and missing_instances:
         cold_cache = True
-        defer_tautulli_overlay = bool(cached_tautulli and cached_tautulli_ts)
+        defer_playback_overlay = bool(cached_playback and cached_playback_ts)
     if missing_instances:
         instance_workers = 1
         if app_name == "radarr":
@@ -6252,10 +7245,11 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     local_cache,
                     cache_path,
                     force=True,
-                    tautulli_index=cached_tautulli,
-                    tautulli_index_ts=cached_tautulli_ts,
+                    tautulli_index=cached_playback,
+                    tautulli_index_ts=cached_playback_ts,
                     log_cold_start=cold_cache,
-                    defer_tautulli_overlay=defer_tautulli_overlay,
+                    defer_tautulli_overlay=defer_playback_overlay,
+                    playback_label=playback_label,
                 )
                 instance_key = str(instance.get("id") or "")
                 entry = local_cache.get(instance_key) or local_cache.get(instance.get("id"))
@@ -6296,12 +7290,13 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                         instance,
                         disk_cache,
                         cache_path,
-                        force=True,
-                        tautulli_index=cached_tautulli,
-                        tautulli_index_ts=cached_tautulli_ts,
-                        log_cold_start=cold_cache,
-                        defer_tautulli_overlay=defer_tautulli_overlay,
-                    )
+                    force=True,
+                    tautulli_index=cached_playback,
+                    tautulli_index_ts=cached_playback_ts,
+                    log_cold_start=cold_cache,
+                    defer_tautulli_overlay=defer_playback_overlay,
+                    playback_label=playback_label,
+                )
                     results.extend(data)
                     disk_dirty = disk_dirty or updated
                 except Exception as exc:
@@ -6346,16 +7341,28 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
             "Sonarr fast mode enabled (episode file detail metrics reduced).",
         )
 
-    if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+    if provider:
         apply_started = False
-        if defer_tautulli_overlay:
-            apply_started = _start_tautulli_background_apply(cfg, cached_tautulli)
-        refresh_needed = force or not cached_tautulli
+        if defer_playback_overlay:
+            if provider == "tautulli":
+                apply_started = _start_tautulli_background_apply(cfg, cached_playback)
+            elif provider == "jellystat":
+                apply_started = _start_jellystat_background_apply(cfg, cached_playback)
+        refresh_needed = force or not cached_playback
         started = False
         if refresh_needed:
-            started = _start_tautulli_background_refresh(cfg)
-        if apply_started or started or _tautulli_refresh_in_progress(cfg):
-            tautulli_notice = "Tautulli matching in progress."
+            if provider == "tautulli":
+                started = _start_tautulli_background_refresh(cfg)
+            elif provider == "jellystat":
+                started = _start_jellystat_background_refresh(cfg)
+        if provider == "tautulli":
+            in_progress = _tautulli_refresh_in_progress(cfg)
+        elif provider == "jellystat":
+            in_progress = _jellystat_refresh_in_progress(cfg)
+        else:
+            in_progress = False
+        if apply_started or started or in_progress:
+            tautulli_notice = f"{playback_label} matching in progress."
 
     return results, tautulli_warning, tautulli_notice, cold_cache
 
@@ -6518,6 +7525,10 @@ def setup():
             "RADARR_PATH_MAP_3": radarr_path_map_3,
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
+            "JELLYSTAT_URL": _normalize_url(request.form.get("jellystat_url", "")),
+            "JELLYSTAT_API_KEY": request.form.get("jellystat_api_key", "").strip(),
+            "JELLYSTAT_LIBRARY_IDS_SONARR": request.form.get("jellystat_library_ids_sonarr", "").strip(),
+            "JELLYSTAT_LIBRARY_IDS_RADARR": request.form.get("jellystat_library_ids_radarr", "").strip(),
             "TAUTULLI_METADATA_LOOKUP_LIMIT": tautulli_lookup_limit,
             "TAUTULLI_METADATA_LOOKUP_SECONDS": tautulli_lookup_seconds,
             "TAUTULLI_TIMEOUT_SECONDS": tautulli_timeout_seconds,
@@ -6607,6 +7618,12 @@ def setup():
                         failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
                         if failure:
                             connection_errors["tautulli"] = failure
+                    jellystat_url = data.get("JELLYSTAT_URL") or ""
+                    jellystat_api_key = data.get("JELLYSTAT_API_KEY") or ""
+                    if jellystat_url and jellystat_api_key:
+                        failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
+                        if failure:
+                            connection_errors["jellystat"] = failure
                     if connection_errors:
                         field_errors.update(connection_errors)
                         error = "Fix the highlighted connection errors."
@@ -6637,6 +7654,8 @@ def setup():
 @_auth_required
 def api_config():
     cfg = _get_config()
+    provider = _playback_provider(cfg)
+    playback_enabled = bool(provider)
     return jsonify(
         {
             "app_name": APP_NAME,
@@ -6645,7 +7664,9 @@ def api_config():
             "radarr_url": cfg["radarr_url"],
             "sonarr_instances": _public_instances(cfg.get("sonarr_instances", [])),
             "radarr_instances": _public_instances(cfg.get("radarr_instances", [])),
-            "tautulli_configured": bool(cfg["tautulli_url"] and cfg["tautulli_api_key"]),
+            "tautulli_configured": playback_enabled,
+            "playback_configured": playback_enabled,
+            "playback_provider": provider,
             "configured": _config_complete(cfg),
         }
     )
@@ -6657,8 +7678,9 @@ def api_status():
     cfg = _get_config()
     lite_raw = str(request.args.get("lite") or "").strip().lower()
     lite = lite_raw in {"1", "true", "yes"}
-    tautulli_enabled = bool(cfg.get("tautulli_url") and cfg.get("tautulli_api_key"))
-    refresh_in_progress = _tautulli_refresh_in_progress(cfg) if tautulli_enabled else False
+    provider = _playback_provider(cfg)
+    playback_enabled = bool(provider)
+    refresh_in_progress = _playback_refresh_in_progress(cfg, provider) if playback_enabled else False
     apps = {}
     for app_name in ("sonarr", "radarr"):
         instances = cfg.get(f"{app_name}_instances") or []
@@ -6671,7 +7693,7 @@ def api_status():
         cache_path = cfg.get(f"{app_name}_cache_path")
         disk_info = _cache_file_info(cache_path)
         progress_meta = None
-        if refresh_in_progress and tautulli_enabled:
+        if refresh_in_progress and playback_enabled:
             media_type = "shows" if app_name == "sonarr" else "movies"
             progress = _get_tautulli_match_progress(media_type)
             if progress and progress.get("total") is not None and not lite:
@@ -6720,27 +7742,29 @@ def api_status():
             app_payload["counts"] = counts
         apps[app_name] = app_payload
 
-    _, tautulli_ts = _cache.get_tautulli_state()
-    if not tautulli_enabled:
+    _, _, playback_ts = _get_playback_index_state(cfg)
+    if not playback_enabled:
         tautulli_status = "disabled"
     elif refresh_in_progress:
         tautulli_status = "refreshing"
-    elif tautulli_ts <= 0:
+    elif playback_ts <= 0:
         tautulli_status = "stale"
     else:
         tautulli_status = "ready"
-    tautulli_partial = tautulli_enabled and (refresh_in_progress or tautulli_ts <= 0)
+    tautulli_partial = playback_enabled and (refresh_in_progress or playback_ts <= 0)
 
     return jsonify(
         {
             "apps": apps,
             "tautulli": {
-                "configured": tautulli_enabled,
+                "configured": playback_enabled,
+                "provider": provider,
+                "label": _playback_label(provider),
                 "status": tautulli_status,
                 "partial": tautulli_partial,
                 "refresh_in_progress": refresh_in_progress,
-                "index_ts": tautulli_ts,
-                "index_age_seconds": _age_seconds(tautulli_ts),
+                "index_ts": playback_ts,
+                "index_age_seconds": _age_seconds(playback_ts),
             },
         }
     )
@@ -6792,6 +7816,8 @@ def api_setup_test():
         failure = _arr_test_connection(url, api_key, timeout=10)
     elif kind == "tautulli":
         failure = _tautulli_test_connection(url, api_key, timeout=10)
+    elif kind == "jellystat":
+        failure = _jellystat_test_connection(url, api_key, timeout=10)
     else:
         return jsonify({"ok": False, "error": "Unknown test target."}), 400
 
@@ -6804,13 +7830,20 @@ def api_setup_test():
 @_auth_required
 def api_tautulli_refresh():
     cfg = _get_config()
-    if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
-        return jsonify({"error": "Tautulli is not configured."}), 503
-    started = _start_tautulli_background_refresh(cfg)
+    provider = _playback_provider(cfg)
+    if provider == "tautulli":
+        started = _start_tautulli_background_refresh(cfg)
+        refresh_in_progress = _tautulli_refresh_in_progress(cfg)
+    elif provider == "jellystat":
+        started = _start_jellystat_background_refresh(cfg)
+        refresh_in_progress = _jellystat_refresh_in_progress(cfg)
+    else:
+        return jsonify({"error": "Playback provider is not configured."}), 503
     return jsonify(
         {
             "started": started,
-            "refresh_in_progress": _tautulli_refresh_in_progress(cfg),
+            "refresh_in_progress": refresh_in_progress,
+            "provider": provider,
         }
     )
 
@@ -6819,13 +7852,20 @@ def api_tautulli_refresh():
 @_auth_required
 def api_tautulli_deep_refresh():
     cfg = _get_config()
-    if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
-        return jsonify({"error": "Tautulli is not configured."}), 503
-    started = _start_tautulli_deep_refresh(cfg)
+    provider = _playback_provider(cfg)
+    if provider == "tautulli":
+        started = _start_tautulli_deep_refresh(cfg)
+        refresh_in_progress = _tautulli_refresh_in_progress(cfg)
+    elif provider == "jellystat":
+        started = _start_jellystat_background_refresh(cfg)
+        refresh_in_progress = _jellystat_refresh_in_progress(cfg)
+    else:
+        return jsonify({"error": "Playback provider is not configured."}), 503
     return jsonify(
         {
             "started": started,
-            "refresh_in_progress": _tautulli_refresh_in_progress(cfg),
+            "refresh_in_progress": refresh_in_progress,
+            "provider": provider,
         }
     )
 
@@ -7118,6 +8158,15 @@ def api_radarr_item():
 @_auth_required
 def api_tautulli_refresh_item():
     cfg = _get_config()
+    provider = _playback_provider(cfg)
+    if provider != "tautulli":
+        return jsonify(
+            {
+                "ok": False,
+                "skipped": True,
+                "reason": "Playback provider does not support item refresh.",
+            }
+        )
     if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
         return jsonify({"error": "Tautulli is not configured."}), 503
     payload = request.get_json(silent=True) or {}
@@ -7236,12 +8285,24 @@ def api_clear_caches():
     cfg = _get_config()
     global _tautulli_refresh_seen
     _tautulli_refresh_seen = None
+    global _jellystat_refresh_seen
+    _jellystat_refresh_seen = None
     _invalidate_cache()
     _wipe_cache_files()
     started = False
-    if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
+    provider = _playback_provider(cfg)
+    if provider == "tautulli":
         started = _start_tautulli_background_refresh(cfg)
-    return jsonify({"ok": True, "tautulli_refresh_started": started})
+    elif provider == "jellystat":
+        started = _start_jellystat_background_refresh(cfg)
+    return jsonify(
+        {
+            "ok": True,
+            "tautulli_refresh_started": started,
+            "playback_refresh_started": started,
+            "playback_provider": provider,
+        }
+    )
 
 class _TTLFilenameCache:
     def __init__(self, ttl_seconds: int = 1800, max_entries: int = 5000):
@@ -7423,6 +8484,9 @@ def api_tautulli_match_diagnostics():
         return jsonify({"error": "Unknown app target."}), 400
 
     cfg = _get_config()
+    provider = _playback_provider(cfg)
+    if provider != "tautulli":
+        return jsonify({"error": "Diagnostics are only available for Tautulli."}), 503
     if not (cfg.get("tautulli_url") and cfg.get("tautulli_api_key")):
         return jsonify({"error": "Tautulli is not configured."}), 503
 
@@ -7776,7 +8840,7 @@ def api_movies():
 def shows_csv():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    tautulli_enabled = bool(cfg.get("tautulli_url") and cfg.get("tautulli_api_key"))
+    playback_enabled = _playback_enabled(cfg)
     if not instances:
         return jsonify({"error": "Sonarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
@@ -7839,11 +8903,12 @@ def shows_csv():
             "UsersWatched",
             "TautulliMatchStatus",
             "TautulliMatchReason",
+            "RootFolder",
             "Path",
         ]
     )
 
-    if not tautulli_enabled:
+    if not playback_enabled:
         fieldnames = [field for field in fieldnames if field not in TAUTULLI_CSV_FIELDS]
 
     out = io.StringIO()
@@ -7867,7 +8932,7 @@ def shows_csv():
 def movies_csv():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    tautulli_enabled = bool(cfg.get("tautulli_url") and cfg.get("tautulli_api_key"))
+    playback_enabled = _playback_enabled(cfg)
     if not instances:
         return jsonify({"error": "Radarr is not configured"}), 503
     force = request.args.get("refresh") == "1"
@@ -7932,11 +8997,12 @@ def movies_csv():
             "UsersWatched",
             "TautulliMatchStatus",
             "TautulliMatchReason",
+            "RootFolder",
             "Path",
         ]
     )
 
-    if not tautulli_enabled:
+    if not playback_enabled:
         fieldnames = [field for field in fieldnames if field not in TAUTULLI_CSV_FIELDS]
 
     out = io.StringIO()

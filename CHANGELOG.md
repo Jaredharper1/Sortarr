@@ -1,9 +1,17 @@
 # Changelog
 
 
+## [Unreleased]
+
+- Add filter builder dropdowns with active filter bubbles and make the Chips toggle switch between builder and classic filters.
+- Hide the Instance filter category unless multiple instances are configured for the active app.
+- Recalculate table height after filter/chip UI changes to avoid empty gaps below the table.
+- Disable iOS status-panel scroll chaining so swiping the status panel does not move the table.
+
 ## [0.7.8] - 2026-01-25
 
 - Fix CSRF behind reverse proxy. See README if you run Sortarr behind a reverse proxy. Search for "CSRF".
+- Add Root Folder column for Sonarr and Radarr rows, including CSV export and advanced filter support.
 
 ## [0.7.7] - 2026-01-25
 

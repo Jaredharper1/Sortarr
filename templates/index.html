@@ -47,6 +47,7 @@
             <label class="column-row"><input type="checkbox" data-col="Title" /> Title</label>
             <label class="column-row"><input type="checkbox" data-col="DateAdded" /> Date Added</label>
             <label class="column-row"><input type="checkbox" data-col="Instance" /> Instance</label>
+            <label class="column-row"><input type="checkbox" data-col="RootFolder" /> Root Folder</label>
             <label class="column-row"><input type="checkbox" data-col="Path" /> Path</label>
           </div>
 
@@ -161,7 +162,7 @@
 
 
           <div class="column-group">
-            <div class="column-group-title">Playback (Tautulli)</div>
+            <div class="column-group-title" data-playback-title>Playback</div>
             <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> Playback
               columns</label>
             <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> Diagnostics</label>
@@ -202,19 +203,39 @@
               <input id="pathFilter" placeholder="Filter path (supports * and ?)" />
             </div>
             <input id="advancedFilter" class="advanced-filter"
-              placeholder="Advanced filtering examples: path:C:\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2" />
+              placeholder="Advanced filtering examples: path:C:\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2" />
           </div>
           <div class="filter-controls">
             <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">Advanced</button>
+            <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">Chips</button>
             <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
           </div>
+        </div>
+        <div class="filter-builder" id="filterBuilder">
+          <div class="filter-builder-row">
+            <div class="filter-builder-field">
+              <label for="filterCategory">Category</label>
+              <select id="filterCategory"></select>
+            </div>
+            <div class="filter-builder-field">
+              <label for="filterCondition">Condition</label>
+              <select id="filterCondition"></select>
+            </div>
+            <div class="filter-builder-field">
+              <label for="filterValueInput">Value</label>
+              <select id="filterValueSelect" class="hidden" aria-label="Value"></select>
+              <input id="filterValueInput" placeholder="Value" />
+            </div>
+            <button id="filterAddBtn" class="filter-add-btn" type="button">Add</button>
+          </div>
+          <div class="active-filters hidden" id="activeFilters" aria-live="polite"></div>
         </div>
         <div id="advancedHelp" class="advanced-help hidden">
           Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact).
           gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples:
           dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb
           seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true
-          Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags,
+          Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags,
           releasegroup, seriestype, originallanguage, genres, lastaired, videoquality, videocodec, videohdr, resolution,
           audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang,
           subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes,
@@ -256,7 +277,7 @@
               </div>
             </div>
             <div class="chip-group" data-tautulli="true">
-              <div class="chip-group-title">Match (Tautulli)</div>
+              <div class="chip-group-title" data-playback-match-title>Match</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-tautulli="true"
                   data-query="matchstatus:matched">Matched</button>
@@ -273,7 +294,7 @@
               </div>
             </div>
             <div class="chip-group" data-tautulli="true">
-              <div class="chip-group-title">Playback (Tautulli)</div>
+              <div class="chip-group-title" data-playback-title>Playback</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never
                   Watched</button>
@@ -368,7 +389,7 @@
         <div class="status-value" id="progressStatus">--</div>
       </div>
       <div class="status-block">
-        <div class="status-label">Tautulli</div>
+        <div class="status-label" data-playback-label>Playback</div>
         <div class="status-value" id="tautulliStatus">--</div>
       </div>
       <div class="status-block">
@@ -379,7 +400,7 @@
         <div class="status-actions-group">
           <button id="refreshTabBtn"
             title="Refresh the active app metadata, reload its data, and update the cache">Refresh Sonarr data</button>
-          <button id="deepRefreshTautulliBtn" title="Refresh Tautulli library data and rebuild matches">Refresh Tautulli
+          <button id="deepRefreshTautulliBtn" title="Refresh playback library data and rebuild matches">Refresh playback
             data</button>
           <button id="clearCachesBtn" title="Clear all Sortarr cache files and rebuild everything from scratch">Clear
             caches & rebuild</button>
@@ -389,7 +410,7 @@
     </div>
 
     <div class="status-banner hidden" id="partialBanner">
-      Partial Tautulli data loaded. Matching will continue in the background.
+      Partial playback data loaded. Matching will continue in the background.
     </div>
     <div class="status-banner hidden" id="fastModeBanner">
       Sonarr fast mode enabled. Codec and language details may be missing.
@@ -508,6 +529,7 @@
             <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">Subtitle Languages Mixed <span
                 class="sort-indicator"></span></th>
 
+            <th data-sort="RootFolder" data-col="RootFolder">Root Folder <span class="sort-indicator"></span></th>
             <th data-sort="Path" data-col="Path">Path <span class="sort-indicator"></span></th>
           </tr>
         </thead>

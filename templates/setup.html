@@ -18,7 +18,7 @@
         <img class="setup-logo" src="/static/logo.svg" alt="{{ app_name }}" />
         <div>
           <div class="setup-title">{{ app_name }} Setup v{{ app_version }}</div>
-          <div class="setup-sub">Add Sonarr/Radarr details. Tautulli is optional for playback stats.</div>
+          <div class="setup-sub">Add Sonarr/Radarr details. Tautulli or Jellystat is optional for playback stats.</div>
         </div>
       </div>
 
@@ -283,6 +283,38 @@
               and columns stay clear.</div>
           </div>
         </details>
+
+        <div class="setup-section-title">Jellystat (optional)</div>
+        <label>
+          Jellystat URL
+          <input name="jellystat_url" placeholder="http://192.168.1.120:3000" value="{{ values.jellystat_url }}" />
+        </label>
+        <label>
+          Jellystat API key
+          <input name="jellystat_api_key" type="password" autocomplete="off" spellcheck="false" placeholder="optional"
+            value="{{ values.jellystat_api_key }}" />
+        </label>
+        <label>
+          Jellystat library IDs (Sonarr)
+          <input name="jellystat_library_ids_sonarr" placeholder="optional, comma-separated"
+            value="{{ values.jellystat_library_ids_sonarr }}" />
+        </label>
+        <label>
+          Jellystat library IDs (Radarr)
+          <input name="jellystat_library_ids_radarr" placeholder="optional, comma-separated"
+            value="{{ values.jellystat_library_ids_radarr }}" />
+        </label>
+        <div class="setup-inline">
+          <button class="setup-test" type="button" data-kind="jellystat" data-url-id="jellystat_url"
+            data-key-id="jellystat_api_key" data-inline-key="jellystat">
+            Test connection
+          </button>
+          <span class="setup-inline-message{% if field_errors.get('jellystat') %} is-error{% else %} hidden{% endif %}"
+            data-inline="jellystat">{{ field_errors.get('jellystat', '') }}</span>
+        </div>
+        <div class="setup-hint">Leave library IDs blank to auto-detect by library type.</div>
+        <div class="setup-hint">Configure either Jellystat or Tautulli for playback stats. If both are set, Jellystat
+          is used.</div>
 
         <div class="setup-section-title">Tautulli (optional)</div>
         <label>

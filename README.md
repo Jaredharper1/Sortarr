@@ -16,6 +16,7 @@ Core functionality is complete. Current work focuses on performance improvements
 
 Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency metrics, caches results for performance, and serves a small read-only UI and HTTP API. It does not modify files or take any actions against your media.
 
+
 ## Features
 
 - Sonarr series size stats (total includes specials; averages exclude specials)
@@ -23,20 +24,21 @@ Sortarr connects to the Sonarr and Radarr APIs, computes size and efficiency met
 - Radarr movie size stats (file size and GiB per hour)
 - Radarr bitrate metric with estimated fallback indicator
 - Sorting, filtering, and column toggles
+- Filter builder dropdowns with active filter bubbles (quick chips optional)
 - Optional Arr metadata columns (status, monitored, quality profile, tags, release group)
 - Sonarr series metadata and wanted columns (series type, original language, genres, last aired, missing/cutoff counts)
 - Sonarr chips for missing, cutoff unmet, recently grabbed, scene numbering, and airing
 - Fixed-width Title column with CSS ellipsis to keep large tables stable
-- CSV export for Sonarr and Radarr (Tautulli playback columns appear only when configured)
+- CSV export for Sonarr and Radarr (playback columns appear only when a playback provider is configured)
 - Date added column for Sonarr and Radarr views
 - Compressed JSON/CSV API responses for large payloads
 - Multiple Sonarr/Radarr instances with optional friendly names
 - Optional basic auth and configurable cache
-- Optional Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
-- Tautulli match status orbs beside titles to flag potential mismatches
-- Status pill distinguishes receiving Tautulli data vs matching during refresh
-- Refresh all Sonarr/Radarr items from the status bar and per-row refresh actions that reload the refreshed item after a short delay (Tautulli refreshes when configured)
-- Defer Tautulli overlay on cold starts and backfill in the background with an in-app progress notice (live processed counts + last update time)
+- Optional Jellystat or Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
+- Playback match status orbs beside titles to flag potential mismatches
+- Status pill distinguishes receiving playback data vs matching during refresh
+- Refresh all Sonarr/Radarr items from the status bar and per-row refresh actions that reload the refreshed item after a short delay (playback refreshes when configured; per-item playback refreshes only for Tautulli)
+- Defer playback overlay on cold starts and backfill in the background with an in-app progress notice (live processed counts + last update time)
 - Audio/subtitle language columns with filters and quick chips
 
 ## Screenshots
@@ -58,6 +60,11 @@ Images are published for `linux/amd64` and `linux/arm64/v8` on both registries, 
 
 Open `http://<host>:9595`. The first visit redirects to `/setup`, where you can enter Sonarr/Radarr URLs and API keys. The setup page writes a `.env` file at `ENV_FILE_PATH` (defaults to `./data/Sortarr.env` in `docker-compose.yaml`). URLs can be entered with or without a scheme; duplicate schemes are normalized. Additional instances are under the Advanced sections, and instance names surface in the Instance column/chips when configured.
 
+<<<<<<< HEAD
+=======
+The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
+
+>>>>>>> e7db8ec (Prep 0.7.9 changes)
 The Docker image runs Gunicorn with a single worker and 4 threads to keep refresh state and cache progress consistent. If you need to change worker or thread counts, override the container command (and be aware that multiple workers require shared state).
 
 ## Deployment (Unraid)
@@ -149,6 +156,14 @@ Runtime overrides (optional):
 
 Requirements and notes:
 
+
+
+- Static assets are cache-busted using the app version, so UI updates should load immediately after upgrades.
+- SortarrReset UI clears local UI settings and reloads using the cached data.
+Data status panel actions:
+- Refresh Sonarr/Radarr data reloads only the active tab's data and updates the persistent cache.
+- Refresh playback data reloads both Sonarr and Radarr (and playback if configured) and updates the persistent cache, then rebuilds playback matching using cached provider data (Tautulli) or starts a playback refresh (Jellystat).
+- Clear caches & rebuild clears all cache files and starts a full rebuild, similar to a cold start.
 - Sonarr/Radarr API keys are required (read-only keys recommended)
 - Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
 - Tautulli metadata lookups are cached to disk for faster matching; adjust lookup limits/workers and save cadence as needed
@@ -200,11 +215,13 @@ After the rebuild, the show page totals should align with History totals (and wi
 
 ## Advanced filtering
 
+Use the filter builder row to add Category/Condition/Value filters and build chips; active filters appear as bubbles and can be removed with a click. Use the Chips button to switch back to the classic Title/Path + Advanced filters and quick chips.
+
 Use `field:value` for wildcards and comparisons. Numeric fields treat `field:value` as `>=` (use `=` for exact). `gbperhour` and `totalsize` with integer values use whole-number buckets (e.g., `gbperhour:1` matches 1.0-1.99).
 
 Examples: `audio:Atmos` `audiocodec:eac3` `audiolang:eng` `sublang:eng` `nosubs:true` `studio:pixar` `seriestype:anime` `missing:true` `cutoff:true` `airing:true` `isavailable:true` `playcount>=5` `neverwatched:true` `mismatch:true` `dayssincewatched>=365` `watchtime>=10 contenthours>=10` `gbperhour:1` `totalsize:10` `videocodec:x265` `videohdr:hdr`
 
-Fields: `title`, `titleslug`, `tmdbid`, `path`, `instance`, `status`, `monitored`, `qualityprofile`, `tags`, `releasegroup`, `studio`, `seriestype`, `originallanguage`, `genres`, `lastaired`, `hasfile`, `isavailable`, `incinemas`, `lastsearchtime`, `edition`, `customformats`, `customformatscore`, `qualitycutoffnotmet`, `languages`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audiocodecmixed`, `audiochannels`, `audiolang`, `audiolanguagesmixed`, `sublang`, `subtitlelanguagesmixed`, `nosubs`, `missing`, `cutoff`, `cutoffunmet`, `recentlygrabbed`, `scene`, `airing`, `matchstatus`, `mismatch`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `contenthours`, `watchratio`, `users`, `episodes`, `seasons`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`, `bitrate`.
+Fields: `title`, `titleslug`, `tmdbid`, `path`, `rootfolder`, `instance`, `status`, `monitored`, `qualityprofile`, `tags`, `releasegroup`, `studio`, `seriestype`, `originallanguage`, `genres`, `lastaired`, `hasfile`, `isavailable`, `incinemas`, `lastsearchtime`, `edition`, `customformats`, `customformatscore`, `qualitycutoffnotmet`, `languages`, `videoquality`, `videocodec`, `videohdr`, `resolution`, `audio`, `audiocodec`, `audiocodecmixed`, `audiochannels`, `audiolang`, `audiolanguagesmixed`, `sublang`, `subtitlelanguagesmixed`, `nosubs`, `missing`, `cutoff`, `cutoffunmet`, `recentlygrabbed`, `scene`, `airing`, `matchstatus`, `mismatch`, `playcount`, `lastwatched`, `dayssincewatched`, `watchtime`, `contenthours`, `watchratio`, `users`, `episodes`, `seasons`, `totalsize`, `avgepisode`, `runtime`, `filesize`, `gbperhour`, `bitrate`.
 
 Match status values: `matched`, `unmatched`, `skipped`, `unavailable`, plus `future`, `nodisk`, and `notchecked` for skipped reasons.
 

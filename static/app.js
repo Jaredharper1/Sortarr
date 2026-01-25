@@ -30,6 +30,9 @@ const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
 const statusPillEl = document.getElementById("statusPill");
 const partialBannerEl = document.getElementById("partialBanner");
 const fastModeBannerEl = document.getElementById("fastModeBanner");
+const playbackLabelEls = document.querySelectorAll("[data-playback-label]");
+const playbackTitleEls = document.querySelectorAll("[data-playback-title]");
+const playbackMatchTitleEls = document.querySelectorAll("[data-playback-match-title]");
 const refreshTautulliBtn = document.getElementById("refreshTautulliBtn");
 const deepRefreshTautulliBtn = document.getElementById("deepRefreshTautulliBtn");
 const refreshSonarrBtn = document.getElementById("refreshSonarrBtn");
@@ -47,9 +50,17 @@ const advancedFilter = document.getElementById("advancedFilter");
 const advancedHelpBtn = document.getElementById("advancedHelpBtn");
 const advancedHelp = document.getElementById("advancedHelp");
 const advancedWarnings = document.getElementById("advancedWarnings");
+const filterBuilder = document.getElementById("filterBuilder");
 const instanceChipsSonarr = document.getElementById("instanceChipsSonarr");
 const instanceChipsRadarr = document.getElementById("instanceChipsRadarr");
 const chipWrapEl = document.querySelector(".chip-wrap");
+const chipsToggle = document.getElementById("chipsToggle");
+const filterCategory = document.getElementById("filterCategory");
+const filterCondition = document.getElementById("filterCondition");
+const filterValueInput = document.getElementById("filterValueInput");
+const filterValueSelect = document.getElementById("filterValueSelect");
+const filterAddBtn = document.getElementById("filterAddBtn");
+const activeFiltersEl = document.getElementById("activeFilters");
 
 const tabSonarr = document.getElementById("tabSonarr");
 const tabRadarr = document.getElementById("tabRadarr");
@@ -67,6 +78,7 @@ const filtersEl = document.getElementById("filtersPanel");
 const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
 const root = document.documentElement; // <html>
+const IS_IOS = root.classList.contains("is-ios");
 const tableEl = document.querySelector("table");
 const tableWrapEl = document.getElementById("tableWrap");
 const TABLE_SCROLL_SNAP_IDLE_MS = 140;
@@ -298,6 +310,506 @@ function bindFilterInput(input) {
       flushViewStateSave();
     }
   });
+}
+
+function getFilterBuilderFields() {
+  return FILTER_BUILDER_FIELDS.filter(field => {
+    if (field.tautulli && !tautulliEnabled) return false;
+    if (field.id === "instance") {
+      const instances = instanceConfig[activeApp] || [];
+      if (instances.length <= 1) return false;
+    }
+    if (!field.app) return true;
+    if (Array.isArray(field.app)) return field.app.includes(activeApp);
+    return field.app === activeApp;
+  });
+}
+
+function shouldUseNativeSelects() {
+  try {
+    return window.matchMedia("(pointer: coarse)").matches;
+  } catch {
+    return false;
+  }
+}
+
+let activeCustomSelectState = null;
+let customSelectPositionPending = false;
+
+function ensureCustomSelectPortal(state) {
+  if (!state?.menu || !document.body) return;
+  if (state.menu.parentNode !== document.body) {
+    document.body.appendChild(state.menu);
+  }
+}
+
+function positionCustomSelectMenu(state) {
+  if (!state?.menu || state.menu.classList.contains("hidden")) return;
+  const rect = state.trigger?.getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)) return;
+
+  const menu = state.menu;
+  const padding = 8;
+  const gap = 6;
+  const viewportWidth = window.innerWidth || 0;
+  const viewportHeight = window.innerHeight || 0;
+
+  let width = rect.width;
+  let left = rect.left;
+  if (left + width > viewportWidth - padding) {
+    left = Math.max(padding, viewportWidth - padding - width);
+  }
+  if (left < padding) {
+    left = padding;
+  }
+
+  let top = rect.bottom + gap;
+  let maxHeight = viewportHeight - padding - top;
+  if (maxHeight < 160) {
+    const aboveSpace = rect.top - gap - padding;
+    if (aboveSpace > maxHeight) {
+      maxHeight = aboveSpace;
+      top = rect.top - gap - Math.min(menu.scrollHeight, maxHeight);
+    }
+  }
+
+  menu.style.width = `${Math.round(width)}px`;
+  menu.style.left = `${Math.round(left)}px`;
+  menu.style.top = `${Math.round(Math.max(padding, top))}px`;
+  menu.style.maxHeight = `${Math.round(Math.max(120, Math.min(240, maxHeight)))}px`;
+}
+
+function scheduleCustomSelectPosition() {
+  if (!activeCustomSelectState || customSelectPositionPending) return;
+  customSelectPositionPending = true;
+  window.requestAnimationFrame(() => {
+    customSelectPositionPending = false;
+    if (activeCustomSelectState) {
+      positionCustomSelectMenu(activeCustomSelectState);
+    }
+  });
+}
+
+function closeAllCustomSelects() {
+  CUSTOM_SELECTS.forEach(state => {
+    state.menu.classList.add("hidden");
+    state.trigger.setAttribute("aria-expanded", "false");
+    state.wrapper.classList.remove("custom-select--open");
+  });
+  activeCustomSelectState = null;
+}
+
+function openCustomSelect(state) {
+  if (!state || state.trigger.disabled) return;
+  closeAllCustomSelects();
+  ensureCustomSelectPortal(state);
+  state.menu.classList.remove("hidden");
+  state.trigger.setAttribute("aria-expanded", "true");
+  state.wrapper.classList.add("custom-select--open");
+  activeCustomSelectState = state;
+  scheduleCustomSelectPosition();
+  window.requestAnimationFrame(scheduleCustomSelectPosition);
+  const selected = state.menu.querySelector(".custom-select-option.is-selected");
+  const target = selected || state.menu.querySelector(".custom-select-option");
+  if (target) {
+    try { target.focus({ preventScroll: true }); } catch { target.focus(); }
+  }
+}
+
+function updateCustomSelect(selectEl) {
+  const state = CUSTOM_SELECTS.get(selectEl);
+  if (!state) return;
+  const isHidden = selectEl.classList.contains("hidden");
+  state.wrapper.classList.toggle("hidden", isHidden);
+  if (isHidden) {
+    closeAllCustomSelects();
+    return;
+  }
+  state.trigger.disabled = selectEl.disabled;
+  const options = Array.from(selectEl.options || []);
+  const selectedOption = options.find(opt => opt.value === selectEl.value) || options[0];
+  state.label.textContent = selectedOption ? selectedOption.textContent : "Select";
+  state.menu.textContent = "";
+  options.forEach(option => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "custom-select-option";
+    btn.textContent = option.textContent;
+    btn.setAttribute("role", "option");
+    if (option.disabled) {
+      btn.disabled = true;
+    }
+    if (option.value === selectEl.value) {
+      btn.classList.add("is-selected");
+      btn.setAttribute("aria-selected", "true");
+    }
+    btn.addEventListener("click", () => {
+      if (option.disabled) return;
+      if (selectEl.value !== option.value) {
+        selectEl.value = option.value;
+        selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      closeAllCustomSelects();
+      try { state.trigger.focus({ preventScroll: true }); } catch { state.trigger.focus(); }
+    });
+    state.menu.appendChild(btn);
+  });
+  if (state === activeCustomSelectState) {
+    ensureCustomSelectPortal(state);
+    scheduleCustomSelectPosition();
+  }
+}
+
+function initCustomSelect(selectEl) {
+  if (!selectEl || CUSTOM_SELECTS.has(selectEl)) return;
+  const wrapper = document.createElement("div");
+  wrapper.className = "custom-select";
+  selectEl.parentNode.insertBefore(wrapper, selectEl);
+  wrapper.appendChild(selectEl);
+  selectEl.classList.add("custom-select-native");
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "custom-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  trigger.id = `${selectEl.id}-trigger`;
+
+  const label = document.createElement("span");
+  label.className = "custom-select-label";
+  trigger.appendChild(label);
+
+  const caret = document.createElement("span");
+  caret.className = "custom-select-caret";
+  caret.setAttribute("aria-hidden", "true");
+  trigger.appendChild(caret);
+
+  const menu = document.createElement("div");
+  menu.className = "custom-select-menu hidden";
+  menu.setAttribute("role", "listbox");
+  menu.id = `${selectEl.id}-menu`;
+
+  trigger.setAttribute("aria-controls", menu.id);
+
+  wrapper.appendChild(trigger);
+  wrapper.appendChild(menu);
+
+  const labelEl = document.querySelector(`label[for="${selectEl.id}"]`);
+  if (labelEl) {
+    labelEl.setAttribute("for", trigger.id);
+  }
+
+  const state = { select: selectEl, wrapper, trigger, label, menu };
+  CUSTOM_SELECTS.set(selectEl, state);
+
+  menu.addEventListener(
+    "wheel",
+    e => {
+      if (menu.classList.contains("hidden")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY || e.deltaX;
+      if (delta) {
+        menu.scrollTop += delta;
+      }
+    },
+    { passive: false }
+  );
+
+  trigger.addEventListener("click", () => {
+    if (!state.menu.classList.contains("hidden")) {
+      closeAllCustomSelects();
+      return;
+    }
+    openCustomSelect(state);
+  });
+  trigger.addEventListener("keydown", e => {
+    if (e.key === "Enter" || e.key === " " || e.key === "ArrowDown") {
+      e.preventDefault();
+      openCustomSelect(state);
+      return;
+    }
+    if (e.key === "Escape") {
+      closeAllCustomSelects();
+    }
+  });
+  selectEl.addEventListener("change", () => updateCustomSelect(selectEl));
+  updateCustomSelect(selectEl);
+}
+
+function initFilterCustomSelects() {
+  if (customSelectsEnabled || shouldUseNativeSelects()) return;
+  customSelectsEnabled = true;
+  root.classList.add("custom-selects");
+  [filterCategory, filterCondition, filterValueSelect].forEach(initCustomSelect);
+  document.addEventListener("click", e => {
+    const target = e.target;
+    let inside = false;
+    CUSTOM_SELECTS.forEach(state => {
+      if (state.wrapper.contains(target) || state.menu.contains(target)) inside = true;
+    });
+    if (!inside) closeAllCustomSelects();
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape") {
+      closeAllCustomSelects();
+    }
+  });
+  window.addEventListener("resize", scheduleCustomSelectPosition);
+  window.addEventListener("scroll", scheduleCustomSelectPosition, true);
+}
+
+function getFilterFieldMeta(fieldId) {
+  if (!fieldId) return null;
+  return FILTER_BUILDER_FIELDS.find(field => field.id === fieldId) || null;
+}
+
+function resolveFilterValues(meta) {
+  if (!meta || !meta.values) return [];
+  if (typeof meta.values === "function") {
+    try {
+      const values = meta.values();
+      return Array.isArray(values) ? values.filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+  return Array.isArray(meta.values) ? meta.values.filter(Boolean) : [];
+}
+
+function updateFilterConditionOptions() {
+  if (!filterCondition) return;
+  const meta = getFilterFieldMeta(filterCategory?.value);
+  const type = meta?.type || "string";
+  const conditions = FILTER_CONDITIONS[type] || FILTER_CONDITIONS.string;
+  const current = filterCondition.value;
+  filterCondition.textContent = "";
+  conditions.forEach(condition => {
+    const opt = document.createElement("option");
+    opt.value = condition.id;
+    opt.textContent = condition.label;
+    filterCondition.appendChild(opt);
+  });
+  if (conditions.some(condition => condition.id === current)) {
+    filterCondition.value = current;
+  }
+  updateCustomSelect(filterCondition);
+}
+
+function updateFilterValueOptions() {
+  if (!filterValueInput || !filterValueSelect) return;
+  const meta = getFilterFieldMeta(filterCategory?.value);
+  const values = resolveFilterValues(meta);
+  const allowCustom = Boolean(meta?.allowCustom);
+  const useSelect = values.length > 0;
+  const placeholder = meta?.placeholder || "Value";
+
+  filterValueInput.placeholder = placeholder;
+
+  if (!useSelect) {
+    filterValueSelect.textContent = "";
+    filterValueSelect.classList.add("hidden");
+    filterValueInput.classList.remove("hidden");
+    filterValueInput.disabled = false;
+    updateCustomSelect(filterValueSelect);
+    return;
+  }
+
+  const current = filterValueSelect.value;
+  filterValueSelect.textContent = "";
+  values.forEach(option => {
+    const opt = document.createElement("option");
+    opt.value = option.value;
+    opt.textContent = option.label;
+    filterValueSelect.appendChild(opt);
+  });
+  if (allowCustom) {
+    const opt = document.createElement("option");
+    opt.value = "__custom__";
+    opt.textContent = "Custom...";
+    filterValueSelect.appendChild(opt);
+  }
+  if (current && Array.from(filterValueSelect.options).some(opt => opt.value === current)) {
+    filterValueSelect.value = current;
+  } else {
+    filterValueSelect.value = filterValueSelect.options[0]?.value || "";
+  }
+
+  filterValueSelect.classList.remove("hidden");
+  const isCustom = allowCustom && filterValueSelect.value === "__custom__";
+  filterValueInput.classList.toggle("hidden", !isCustom);
+  filterValueInput.disabled = !isCustom;
+  if (!isCustom) {
+    filterValueInput.value = "";
+  }
+  updateCustomSelect(filterValueSelect);
+}
+
+function updateFilterBuilderOptions() {
+  if (!filterCategory) return;
+  const fields = getFilterBuilderFields();
+  const current = filterCategory.value;
+  filterCategory.textContent = "";
+  fields.forEach(field => {
+    const opt = document.createElement("option");
+    opt.value = field.id;
+    opt.textContent = field.label;
+    filterCategory.appendChild(opt);
+  });
+  if (fields.some(field => field.id === current)) {
+    filterCategory.value = current;
+  } else {
+    filterCategory.value = fields[0]?.id || "";
+  }
+  updateCustomSelect(filterCategory);
+  updateFilterConditionOptions();
+  updateFilterValueOptions();
+}
+
+function formatFilterTokenLabel(token) {
+  const rawToken = String(token || "").trim();
+  if (!rawToken) return "";
+  let negated = false;
+  let raw = rawToken;
+  if (raw[0] === "-" && raw.length > 1) {
+    negated = true;
+    raw = raw.slice(1);
+  }
+
+  let field = "";
+  let op = "";
+  let value = "";
+  const compMatch = raw.match(/^([a-zA-Z]+)(>=|<=|=|>|<)(.+)$/);
+  if (compMatch) {
+    field = compMatch[1];
+    op = compMatch[2];
+    value = compMatch[3];
+  } else {
+    const idx = raw.indexOf(":");
+    if (idx > 0) {
+      field = raw.slice(0, idx);
+      op = ":";
+      value = raw.slice(idx + 1);
+    } else {
+      return negated ? `not ${raw}` : raw;
+    }
+  }
+
+  const fieldKey = field.toLowerCase();
+  const fieldLabel = FILTER_FIELD_LABELS[fieldKey] || field;
+  if (op === ":" || op === "=") {
+    const wildcard = /[*?]/.test(value);
+    let cleanValue = value.replace(/[*?]+/g, " ").trim();
+    if (!cleanValue) cleanValue = value;
+    const condition = wildcard
+      ? (negated ? "does not contain" : "contains")
+      : (negated ? "is not" : "is");
+    return `${fieldLabel} ${condition} ${cleanValue}`;
+  }
+  const opLabels = {
+    ">": "greater than",
+    "<": "less than",
+    ">=": "at least",
+    "<=": "at most",
+  };
+  const opLabel = opLabels[op] || op;
+  const condition = negated ? `not ${opLabel}` : opLabel;
+  return `${fieldLabel} ${condition} ${value}`;
+}
+
+function renderActiveFilterChips() {
+  if (!activeFiltersEl) return;
+  const tokens = String(chipQuery || "").split(/\s+/).filter(Boolean);
+  activeFiltersEl.textContent = "";
+  activeFiltersEl.classList.toggle("hidden", tokens.length === 0);
+  scheduleTableWrapLayout();
+  if (!tokens.length) return;
+  const frag = document.createDocumentFragment();
+  tokens.forEach(token => {
+    const label = formatFilterTokenLabel(token);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "filter-bubble";
+    btn.setAttribute("data-token", token);
+    btn.setAttribute("aria-label", `Remove filter ${label}`);
+    btn.title = token;
+    const text = document.createElement("span");
+    text.className = "filter-bubble-label";
+    text.textContent = label;
+    const remove = document.createElement("span");
+    remove.className = "filter-bubble-remove";
+    remove.textContent = "x";
+    remove.setAttribute("aria-hidden", "true");
+    btn.appendChild(text);
+    btn.appendChild(remove);
+    frag.appendChild(btn);
+  });
+  activeFiltersEl.appendChild(frag);
+}
+
+function normalizeBuilderValue(value, meta, condition) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (meta?.type === "number") {
+    const cleaned = raw.replace(/[^0-9.+-]/g, "");
+    if (!cleaned) return "";
+    const num = Number(cleaned);
+    if (!Number.isFinite(num)) return "";
+    return String(num);
+  }
+  if (meta?.type === "bool") {
+    const lowered = raw.toLowerCase();
+    if (["1", "true", "yes", "y"].includes(lowered)) return "true";
+    if (["0", "false", "no", "n"].includes(lowered)) return "false";
+    return "";
+  }
+  let normalized = raw.replace(/\s+/g, "*");
+  if (condition?.wrap === "contains") {
+    if (!normalized.startsWith("*")) normalized = `*${normalized}`;
+    if (!normalized.endsWith("*")) normalized = `${normalized}*`;
+  }
+  return normalized;
+}
+
+function buildFilterTokenFromBuilder() {
+  const meta = getFilterFieldMeta(filterCategory?.value);
+  if (!meta) return "";
+  const conditions = FILTER_CONDITIONS[meta.type] || FILTER_CONDITIONS.string;
+  const condition = conditions.find(item => item.id === filterCondition?.value) || conditions[0];
+  let rawValue = "";
+  if (filterValueSelect && !filterValueSelect.classList.contains("hidden")) {
+    const selected = filterValueSelect.value;
+    if (selected === "__custom__") {
+      rawValue = filterValueInput?.value || "";
+    } else {
+      rawValue = selected || "";
+    }
+  } else {
+    rawValue = filterValueInput?.value || "";
+  }
+  const normalized = normalizeBuilderValue(rawValue, meta, condition);
+  if (!normalized) return "";
+  let token = `${meta.id}${condition.op}${normalized}`;
+  if (condition.negate) {
+    token = `-${token}`;
+  }
+  return token;
+}
+
+function addBuilderFilterToken() {
+  const token = buildFilterTokenFromBuilder();
+  if (!token) return;
+  const tokens = String(chipQuery || "").split(/\s+/).filter(Boolean);
+  if (tokens.includes(token)) return;
+  tokens.push(token);
+  chipQuery = tokens.join(" ");
+  syncChipButtonsToQuery();
+  scheduleViewStateSave();
+  if (filterValueInput && (!filterValueSelect || filterValueSelect.value === "__custom__")) {
+    filterValueInput.value = "";
+  }
+  const scrollAnchor = captureTableScrollAnchor();
+  render(dataByApp[activeApp] || [], { scrollAnchor });
 }
 
 function getDefaultSortKey(app) {
@@ -741,6 +1253,11 @@ function updateTruncationTooltips() {
       const rawPath = String(row.Path ?? row.path ?? "").trim();
       setTruncationTooltip(pathCell, rawPath);
     }
+    const rootCell = tr.querySelector('td[data-col="RootFolder"]');
+    if (rootCell) {
+      const rawRoot = String(row.RootFolder ?? "").trim();
+      setTruncationTooltip(rootCell, rawRoot);
+    }
   });
 }
 
@@ -993,10 +1510,17 @@ let statusNotice = "";
 let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
+let playbackProvider = "";
+let playbackLabel = "Playback";
+let playbackSupportsItemRefresh = false;
+let playbackSupportsDiagnostics = false;
 let backgroundLoading = false;
 let chipsVisible = true;
 let filtersCollapsed = false;
+let chipsEnabled = false;
 const tableReadyByApp = { sonarr: false, radarr: false };
+const CUSTOM_SELECTS = new Map();
+let customSelectsEnabled = false;
 const columnWidthLock = { active: false, widths: new Map(), token: 0 };
 const columnWidthCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const columnWidthCacheVersionByApp = { sonarr: -1, radarr: -1 };
@@ -1084,7 +1608,7 @@ const PAGE_LOAD_AT = Date.now();
 let pageFreshNoticeTimer = null;
 const COLD_CACHE_NOTICE =
   "First load can take a while for large libraries; later loads are cached and faster.";
-const TAUTULLI_MATCHING_NOTICE = "Tautulli matching in progress.";
+const PLAYBACK_MATCHING_NOTICE = "Playback matching in progress.";
 const NOTICE_FLAGS_HEADER = "X-Sortarr-Notice-Flags";
 const TAUTULLI_POLL_INTERVAL_MS = 4000;
 const TAUTULLI_STATUS_POLL_INTERVAL_MS = 1000;
@@ -1104,6 +1628,18 @@ const SKIPPED_REASON_SORT_ORDER = {
   disk: 1,
   other: 2,
 };
+
+function getPlaybackLabel() {
+  return playbackLabel || "Playback";
+}
+
+function getPlaybackMatchingNotice() {
+  const label = getPlaybackLabel();
+  if (label && label !== "Playback") {
+    return `${label} matching in progress.`;
+  }
+  return PLAYBACK_MATCHING_NOTICE;
+}
 
 
 const SONARR_COLUMNS = new Set([
@@ -1226,6 +1762,7 @@ const CSV_COLUMNS_BY_APP = {
 };
 const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
 const FILTERS_COLLAPSED_KEY = "Sortarr-filters-collapsed";
+const CHIPS_ENABLED_KEY = "Sortarr-chips-enabled";
 const VIEW_STATE_KEY = "Sortarr-view-state";
 const csvColumnsState = { sonarr: false, radarr: false };
 const RESET_UI_PARAM = "reset_ui";
@@ -1258,22 +1795,534 @@ const titlePathWidthVersionByApp = { sonarr: -1, radarr: -1 };
 const titlePathWidthFilterDirtyByApp = { sonarr: false, radarr: false };
 
 const ADVANCED_PLACEHOLDER_BASE =
-  "Advanced filtering examples: path:C:\\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
+  "Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
 const ADVANCED_HELP_BASE =
   "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
+  "Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
 const ADVANCED_HELP_TAUTULLI =
   "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour";
+  "Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour";
+
+const FILTER_CONDITIONS = {
+  string: [
+    { id: "is", label: "is", op: ":", negate: false },
+    { id: "is_not", label: "is not", op: ":", negate: true },
+    { id: "contains", label: "contains", op: ":", negate: false, wrap: "contains" },
+    { id: "not_contains", label: "does not contain", op: ":", negate: true, wrap: "contains" },
+  ],
+  number: [
+    { id: "eq", label: "is", op: "=", negate: false },
+    { id: "neq", label: "is not", op: "=", negate: true },
+    { id: "gt", label: "greater than", op: ">", negate: false },
+    { id: "gte", label: "at least", op: ">=", negate: false },
+    { id: "lt", label: "less than", op: "<", negate: false },
+    { id: "lte", label: "at most", op: "<=", negate: false },
+  ],
+  bool: [
+    { id: "is", label: "is", op: ":", negate: false },
+    { id: "is_not", label: "is not", op: ":", negate: true },
+  ],
+};
+
+const FILTER_LANGUAGE_VALUES = [
+  { label: "English", value: "English" },
+  { label: "Spanish", value: "Spanish" },
+  { label: "French", value: "French" },
+  { label: "German", value: "German" },
+  { label: "Japanese", value: "Japanese" },
+];
+const FILTER_TRUE_FALSE_VALUES = [
+  { label: "True", value: "true" },
+  { label: "False", value: "false" },
+];
+
+const FILTER_BUILDER_FIELDS = [
+  {
+    id: "title",
+    label: "Title",
+    type: "string",
+    placeholder: "Star Trek",
+    allowCustom: true,
+  },
+  {
+    id: "titleslug",
+    label: "Title Slug",
+    type: "string",
+    app: "sonarr",
+    placeholder: "star-trek",
+    allowCustom: true,
+  },
+  {
+    id: "tmdbid",
+    label: "TMDB ID",
+    type: "string",
+    placeholder: "12345",
+    allowCustom: true,
+  },
+  {
+    id: "dateadded",
+    label: "Date Added",
+    type: "string",
+    placeholder: "2024",
+    allowCustom: true,
+  },
+  {
+    id: "path",
+    label: "Path",
+    type: "string",
+    placeholder: "/data/shows",
+    allowCustom: true,
+  },
+  {
+    id: "rootfolder",
+    label: "Root Folder",
+    type: "string",
+    placeholder: "/data",
+    allowCustom: true,
+  },
+  {
+    id: "status",
+    label: "Status",
+    type: "string",
+    values: [
+      { label: "Continuing", value: "continuing" },
+      { label: "Ended", value: "ended" },
+      { label: "Announced", value: "announced" },
+      { label: "In Cinemas", value: "incinemas" },
+      { label: "Released", value: "released" },
+      { label: "Deleted", value: "deleted" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "monitored",
+    label: "Availability",
+    type: "bool",
+    values: [
+      { label: "Monitored", value: "true" },
+      { label: "Unmonitored", value: "false" },
+    ],
+  },
+  {
+    id: "qualityprofile",
+    label: "Quality Profile",
+    type: "string",
+    placeholder: "HD-1080p",
+    allowCustom: true,
+  },
+  {
+    id: "tags",
+    label: "Tags",
+    type: "string",
+    placeholder: "kids",
+    allowCustom: true,
+  },
+  {
+    id: "releasegroup",
+    label: "Release Group",
+    type: "string",
+    placeholder: "ntb",
+    allowCustom: true,
+  },
+  {
+    id: "studio",
+    label: "Studio",
+    type: "string",
+    placeholder: "Pixar",
+    allowCustom: true,
+  },
+  {
+    id: "seriestype",
+    label: "Series Type",
+    type: "string",
+    app: "sonarr",
+    placeholder: "anime",
+    allowCustom: true,
+  },
+  {
+    id: "originallanguage",
+    label: "Original Language",
+    type: "string",
+    placeholder: "English",
+    values: FILTER_LANGUAGE_VALUES,
+    allowCustom: true,
+  },
+  {
+    id: "genres",
+    label: "Genres",
+    type: "string",
+    placeholder: "Drama",
+    allowCustom: true,
+  },
+  {
+    id: "lastaired",
+    label: "Last Aired",
+    type: "string",
+    app: "sonarr",
+    placeholder: "2024",
+    allowCustom: true,
+  },
+  {
+    id: "hasfile",
+    label: "Has File",
+    type: "bool",
+    app: "radarr",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "isavailable",
+    label: "Is Available",
+    type: "bool",
+    app: "radarr",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "incinemas",
+    label: "In Cinemas",
+    type: "bool",
+    app: "radarr",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "lastsearchtime",
+    label: "Last Search Time",
+    type: "string",
+    app: "radarr",
+    placeholder: "2024",
+    allowCustom: true,
+  },
+  {
+    id: "edition",
+    label: "Edition",
+    type: "string",
+    app: "radarr",
+    placeholder: "Director's Cut",
+    allowCustom: true,
+  },
+  {
+    id: "customformats",
+    label: "Custom Formats",
+    type: "string",
+    app: "radarr",
+    placeholder: "HDR",
+    allowCustom: true,
+  },
+  {
+    id: "customformatscore",
+    label: "Custom Format Score",
+    type: "number",
+    app: "radarr",
+    placeholder: "100",
+  },
+  {
+    id: "qualitycutoffnotmet",
+    label: "Quality Cutoff Not Met",
+    type: "bool",
+    app: "radarr",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "videoquality",
+    label: "Quality",
+    type: "string",
+    values: [
+      { label: "2160p", value: "2160p" },
+      { label: "1080p", value: "1080p" },
+      { label: "720p", value: "720p" },
+      { label: "480p", value: "480p" },
+      { label: "WEB-DL", value: "webdl" },
+      { label: "WEBRip", value: "webrip" },
+      { label: "BluRay", value: "bluray" },
+      { label: "Remux", value: "remux" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "resolution",
+    label: "Resolution",
+    type: "string",
+    values: [
+      { label: "4K", value: "4k" },
+      { label: "2160p", value: "2160p" },
+      { label: "1080p", value: "1080p" },
+      { label: "720p", value: "720p" },
+      { label: "480p", value: "480p" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "videocodec",
+    label: "Video Codec",
+    type: "string",
+    values: [
+      { label: "x265", value: "x265" },
+      { label: "x264", value: "x264" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "videohdr",
+    label: "Video HDR",
+    type: "string",
+    values: [
+      { label: "HDR", value: "hdr" },
+      { label: "Dolby Vision", value: "dolby" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "audiocodec",
+    label: "Audio Codec",
+    type: "string",
+    values: [
+      { label: "Atmos", value: "Atmos" },
+      { label: "DD+", value: "eac3" },
+      { label: "TrueHD", value: "truehd" },
+    ],
+    allowCustom: true,
+  },
+  {
+    id: "audiocodecmixed",
+    label: "Audio Codec Mixed",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "audiochannels",
+    label: "Audio Channels",
+    type: "number",
+    placeholder: "6",
+  },
+  {
+    id: "audiolanguages",
+    label: "Audio Languages",
+    type: "string",
+    placeholder: "English",
+    values: FILTER_LANGUAGE_VALUES,
+    allowCustom: true,
+  },
+  {
+    id: "audiolanguagesmixed",
+    label: "Audio Languages Mixed",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "subtitlelanguages",
+    label: "Subtitle Languages",
+    type: "string",
+    placeholder: "English",
+    values: FILTER_LANGUAGE_VALUES,
+    allowCustom: true,
+  },
+  {
+    id: "subtitlelanguagesmixed",
+    label: "Subtitle Languages Mixed",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "nosubs",
+    label: "No Subtitles",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "missing",
+    label: "Missing",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "cutoff",
+    label: "Cutoff Unmet",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "cutoffunmet",
+    label: "Cutoff Unmet Count",
+    type: "number",
+    placeholder: "1",
+  },
+  {
+    id: "recentlygrabbed",
+    label: "Recently Grabbed",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "airing",
+    label: "Airing/Available",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "scene",
+    label: "Scene",
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "episodes",
+    label: "Episodes",
+    type: "number",
+    app: "sonarr",
+    placeholder: "10",
+  },
+  {
+    id: "seasons",
+    label: "Seasons",
+    type: "number",
+    app: "sonarr",
+    placeholder: "3",
+  },
+  {
+    id: "totalsize",
+    label: "Size (GB)",
+    type: "number",
+    placeholder: "10",
+  },
+  {
+    id: "avgepisode",
+    label: "Avg Episode Size (GB)",
+    type: "number",
+    app: "sonarr",
+    placeholder: "1",
+  },
+  {
+    id: "runtime",
+    label: "Runtime (mins)",
+    type: "number",
+    placeholder: "60",
+  },
+  {
+    id: "filesize",
+    label: "File Size (GB)",
+    type: "number",
+    app: "radarr",
+    placeholder: "8",
+  },
+  {
+    id: "gbperhour",
+    label: "GB per Hour",
+    type: "number",
+    placeholder: "1",
+  },
+  {
+    id: "instance",
+    label: "Instance",
+    type: "string",
+    allowCustom: true,
+    values: () => {
+      const instances = instanceConfig[activeApp] || [];
+      return instances
+        .map(inst => ({
+          label: inst?.name || inst?.id || "",
+          value: inst?.id || "",
+        }))
+        .filter(opt => opt.label && opt.value);
+    },
+  },
+  {
+    id: "matchstatus",
+    label: "Match Status",
+    type: "string",
+    tautulli: true,
+    values: [
+      { label: "Matched", value: "matched" },
+      { label: "Unmatched", value: "unmatched" },
+      { label: "Skipped", value: "skipped" },
+      { label: "Unavailable", value: "unavailable" },
+      { label: "Future", value: "future" },
+      { label: "Not On Disk", value: "nodisk" },
+      { label: "Not Checked", value: "notchecked" },
+    ],
+  },
+  {
+    id: "mismatch",
+    label: "Mismatch",
+    type: "bool",
+    tautulli: true,
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+  {
+    id: "playcount",
+    label: "Play Count",
+    type: "number",
+    tautulli: true,
+    placeholder: "1",
+  },
+  {
+    id: "lastwatched",
+    label: "Last Watched",
+    type: "string",
+    tautulli: true,
+    placeholder: "2024",
+    allowCustom: true,
+  },
+  {
+    id: "dayssincewatched",
+    label: "Days Since Watched",
+    type: "number",
+    tautulli: true,
+    placeholder: "30",
+  },
+  {
+    id: "watchtime",
+    label: "Watch Time (hours)",
+    type: "number",
+    tautulli: true,
+    placeholder: "10",
+  },
+  {
+    id: "contenthours",
+    label: "Content Hours",
+    type: "number",
+    tautulli: true,
+    placeholder: "10",
+  },
+  {
+    id: "watchratio",
+    label: "Watch / Runtime Ratio",
+    type: "number",
+    tautulli: true,
+    placeholder: "1",
+  },
+  {
+    id: "users",
+    label: "Users Watched",
+    type: "number",
+    tautulli: true,
+    placeholder: "2",
+  },
+  {
+    id: "neverwatched",
+    label: "Never Watched",
+    type: "bool",
+    tautulli: true,
+    values: FILTER_TRUE_FALSE_VALUES,
+  },
+];
+
+const FILTER_FIELD_LABELS = FILTER_BUILDER_FIELDS.reduce((acc, field) => {
+  acc[field.id] = field.label;
+  return acc;
+}, {});
 
 // Store per-tab data so switching tabs doesn't briefly show the other tab's list
 const dataByApp = { sonarr: [], radarr: [] };
 const dataVersionByApp = { sonarr: 0, radarr: 0 };
 const lastUpdatedByApp = { sonarr: null, radarr: null };
 const sortCacheByApp = { sonarr: null, radarr: null };
-const configState = { sonarrConfigured: false, radarrConfigured: false };
+const configState = {
+  sonarrConfigured: false,
+  radarrConfigured: false,
+  playbackProvider: "",
+  playbackConfigured: false,
+};
 const instanceConfig = { sonarr: [], radarr: [] };
 const instanceBaseById = { sonarr: {}, radarr: {} };
 
@@ -1649,12 +2698,55 @@ function updateStatusText() {
   statusEl.textContent = parts.join(" | ");
 }
 
+function syncChipWrapVisibility() {
+  if (!chipWrapEl) return;
+  const show = chipsVisible && chipsEnabled;
+  chipWrapEl.classList.toggle("chip-wrap--hidden", !show);
+  scheduleChipGroupLayout();
+  scheduleTableWrapLayout();
+}
+
+function updateFilterUiMode() {
+  const builderMode = !chipsEnabled;
+  if (filterBuilder) filterBuilder.classList.toggle("hidden", !builderMode);
+  if (filterInputs) filterInputs.classList.toggle("hidden", builderMode);
+  if (advancedToggle) advancedToggle.classList.toggle("hidden", builderMode);
+  if (advancedHelpBtn) {
+    if (builderMode) {
+      advancedHelpBtn.classList.add("hidden");
+    } else {
+      advancedHelpBtn.classList.toggle("hidden", !advancedEnabled);
+    }
+  }
+  if (builderMode) {
+    if (advancedHelp) advancedHelp.classList.add("hidden");
+    if (advancedWarnings) updateAdvancedWarnings([]);
+    updateFilterBuilderOptions();
+  }
+  scheduleTableWrapLayout();
+}
+
+function setChipsEnabled(enabled) {
+  chipsEnabled = Boolean(enabled);
+  if (chipsToggle) {
+    chipsToggle.setAttribute("aria-pressed", chipsEnabled ? "true" : "false");
+    chipsToggle.title = chipsEnabled ? "Hide quick chips" : "Show quick chips";
+  }
+  try {
+    localStorage.setItem(CHIPS_ENABLED_KEY, chipsEnabled ? "1" : "0");
+  } catch {
+  }
+  syncChipWrapVisibility();
+  updateFilterUiMode();
+  if ((dataByApp[activeApp] || []).length) {
+    const scrollAnchor = captureTableScrollAnchor();
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  }
+}
+
 function setChipsVisible(visible) {
   chipsVisible = Boolean(visible);
-  if (chipWrapEl) {
-    chipWrapEl.classList.toggle("chip-wrap--hidden", !chipsVisible);
-    scheduleChipGroupLayout();
-  }
+  syncChipWrapVisibility();
   syncStatusNotice(activeApp);
 }
 
@@ -1768,16 +2860,17 @@ function schedulePageFreshNoticeClear() {
   }, remaining);
 }
 
-function shouldShowTautulliNotice(app) {
+function shouldShowPlaybackNotice(app) {
   return Boolean(chipsVisible && tableReadyByApp[app]);
 }
 
 function filterStatusNotice(msg, app) {
   const text = msg || "";
-  if (!text || shouldShowTautulliNotice(app)) return text;
-  if (!text.includes(TAUTULLI_MATCHING_NOTICE)) return text;
+  if (!text || shouldShowPlaybackNotice(app)) return text;
+  const notice = getPlaybackMatchingNotice();
+  if (!text.includes(notice)) return text;
   const parts = text.split(" | ").map(part => part.trim()).filter(Boolean);
-  const filtered = parts.filter(part => part !== TAUTULLI_MATCHING_NOTICE);
+  const filtered = parts.filter(part => part !== notice);
   return filtered.join(" | ");
 }
 
@@ -1873,7 +2966,7 @@ function formatTautulliStatus(state, progressMeta) {
   if (!state || !state.configured) return "Not configured";
   if (state.refresh_in_progress) {
     const total = Number.isFinite(progressMeta?.total) ? progressMeta.total : 0;
-    return total > 0 ? "Matching in progress" : "Receiving Tautulli data...";
+    return total > 0 ? "Matching in progress" : `Receiving ${getPlaybackLabel()} data...`;
   }
   if (state.status === "stale") return "Awaiting data";
   const age = formatAgeShort(withElapsedAge(state.index_age_seconds));
@@ -1885,7 +2978,7 @@ function formatStatusPillText(appState, tautulli, displayProcessed = null) {
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     const total = appState?.progress?.total || 0;
     if (!total) {
-      return "Receiving Tautulli data...";
+      return `Receiving ${getPlaybackLabel()} data...`;
     }
     if (total > 0) {
       const processed = Number.isFinite(displayProcessed)
@@ -1912,9 +3005,9 @@ function updateStatusPill(appState, tautulli, displayProcessed = null) {
       const processed = Number.isFinite(displayProcessed)
         ? displayProcessed
         : (progress.processed || 0);
-      title = `Tautulli matching in progress (${processed}/${progress.total} processed). Hover to expand status.`;
+      title = `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed). Hover to expand status.`;
     } else {
-      title = "Receiving Tautulli data. Hover to expand status.";
+      title = `Receiving ${getPlaybackLabel()} data. Hover to expand status.`;
     }
   } else if (showLoaded) {
     title = "Data loaded. Hover to expand status.";
@@ -2341,7 +3434,7 @@ function updateStatusPanel() {
       parts.push(formatCacheStatus(label, withElapsedAge(appAgeSeconds)));
     }
     if (tautulli && tautulli.configured) {
-      parts.push(formatCacheStatus("Tautulli", withElapsedAge(tautulli.index_age_seconds)));
+      parts.push(formatCacheStatus(getPlaybackLabel(), withElapsedAge(tautulli.index_age_seconds)));
     }
     cacheStatusEl.textContent = parts.length ? parts.join(" | ") : "--";
   }
@@ -2693,8 +3786,13 @@ function scheduleStatusPoll() {
         const deltaY = currentY - lastY;
         lastY = currentY;
         if (!deltaY) return;
+        if (!tableWrapEl) return;
+        const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+        if (maxScroll <= 0) return;
+        const nextTop = Math.max(0, Math.min(maxScroll, tableWrapEl.scrollTop - deltaY));
+        if (nextTop === tableWrapEl.scrollTop) return;
         e.preventDefault();
-        window.scrollBy(0, -deltaY);
+        tableWrapEl.scrollTop = nextTop;
       },
       { passive: false }
     );
@@ -3078,7 +4176,9 @@ function parseNoticeState(headers) {
   const notice = headers.get("X-Sortarr-Notice") || "";
   if (!rawFlags && notice) {
     if (notice.includes(COLD_CACHE_NOTICE)) flags.add("cold_cache");
-    if (/tautulli matching in progress/i.test(notice)) flags.add("tautulli_refresh");
+    if (/(tautulli|jellystat|playback) matching in progress/i.test(notice)) {
+      flags.add("tautulli_refresh");
+    }
   }
   return { flags, notice };
 }
@@ -3210,14 +4310,14 @@ function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
     if (otherConfigured) {
       setTautulliPending(other, true);
       if (!noticeByApp[other]) {
-        noticeByApp[other] = TAUTULLI_MATCHING_NOTICE;
+        noticeByApp[other] = getPlaybackMatchingNotice();
       }
     }
   }
 
   const notices = [];
   if (tautulliPending) {
-    notices.push(TAUTULLI_MATCHING_NOTICE);
+    notices.push(getPlaybackMatchingNotice());
   }
   if (coldCache) {
     notices.push(COLD_CACHE_NOTICE);
@@ -3243,6 +4343,7 @@ function resetUiState() {
   localStorage.removeItem(COLUMN_STORAGE_KEY);
   localStorage.removeItem(CSV_COLUMNS_KEY);
   localStorage.removeItem(FILTERS_COLLAPSED_KEY);
+  localStorage.removeItem(CHIPS_ENABLED_KEY);
   localStorage.removeItem(VIEW_STATE_KEY);
   localStorage.removeItem("Sortarr-theme");
 }
@@ -3358,6 +4459,7 @@ function bindChipButtons(rootEl = document) {
       }
 
       chipQuery = Array.from(tokens).join(" ");
+      renderActiveFilterChips();
       if (tableReadyByApp[activeApp]) {
         pendingStabilizeByApp[activeApp] = true;
       }
@@ -3388,6 +4490,7 @@ function syncChipButtonsToQuery(rootEl = document) {
       btn.dataset.state = "off";
     }
   });
+  renderActiveFilterChips();
 }
 
 function buildInstanceChips() {
@@ -3949,6 +5052,10 @@ async function handleMatchDiagnosticsClick(btn, event) {
     setStatus("Diagnostics failed: row not found.");
     return;
   }
+  if (!playbackSupportsDiagnostics) {
+    setStatus(`${getPlaybackLabel()} diagnostics are unavailable.`);
+    return;
+  }
   try {
     const data = await requestMatchDiagnostics(row, app);
     const text = JSON.stringify(data, null, 2);
@@ -4076,29 +5183,31 @@ async function handleRowRefreshClick(btn) {
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
   const rowTitle = formatRowTitle(row, app);
   const appLabel = app === "sonarr" ? "Sonarr" : "Radarr";
-  const tautulliConfigured = Boolean(statusState.tautulli?.configured);
+  const playbackConfigured = Boolean(statusState.tautulli?.configured);
+  const playbackItemRefresh = Boolean(playbackConfigured && playbackSupportsItemRefresh);
+  const playbackLabel = getPlaybackLabel();
   setRowRefreshPending(rowEl, true);
   btn.disabled = true;
   const initialParts = [`${appLabel} refresh queued.`];
-  if (tautulliConfigured) {
-    initialParts.push("Tautulli refresh queued.");
+  if (playbackItemRefresh) {
+    initialParts.push(`${playbackLabel} refresh queued.`);
   }
   setRowRefreshNotice(statusToken, `Refreshing ${rowTitle} - ${initialParts.join(" ")}`);
   try {
     const arrPromise = requestArrRefresh(app, { itemId, instanceId });
-    const tautulliPromise = tautulliConfigured
+    const playbackPromise = playbackItemRefresh
       ? requestTautulliItemRefresh(row, app)
       : null;
     const arrResultPromise = settlePromise(arrPromise);
-    const tautulliResultPromise = tautulliConfigured
-      ? settleWithTimeout(tautulliPromise, TAUTULLI_ROW_REFRESH_STATUS_TIMEOUT_MS)
+    const playbackResultPromise = playbackItemRefresh
+      ? settleWithTimeout(playbackPromise, TAUTULLI_ROW_REFRESH_STATUS_TIMEOUT_MS)
       : Promise.resolve({ status: "fulfilled", value: { skipped: true } });
-    const waitMs = tautulliConfigured ? ITEM_REFRESH_TAUTULLI_DELAY_MS : ITEM_REFRESH_DELAY_MS;
+    const waitMs = playbackItemRefresh ? ITEM_REFRESH_TAUTULLI_DELAY_MS : ITEM_REFRESH_DELAY_MS;
     const reloadDelayPromise = arrResultPromise.then(arrResult => {
       if (arrResult.status !== "fulfilled") return null;
       return delay(waitMs);
     });
-    const [arrResult, tautulliResult] = await Promise.all([arrResultPromise, tautulliResultPromise]);
+    const [arrResult, playbackResult] = await Promise.all([arrResultPromise, playbackResultPromise]);
     const parts = [];
     const arrOk = arrResult.status === "fulfilled";
     if (arrOk) {
@@ -4106,28 +5215,35 @@ async function handleRowRefreshClick(btn) {
     } else {
       parts.push(`${appLabel} refresh failed.`);
     }
-    if (tautulliConfigured) {
-      if (tautulliResult.status === "timeout") {
-        parts.push("Tautulli refresh pending.");
-      } else if (tautulliResult.status === "fulfilled") {
-        if (tautulliResult.value?.skipped) {
-          parts.push("Tautulli refresh skipped.");
+    if (playbackItemRefresh) {
+      if (playbackResult.status === "timeout") {
+        parts.push(`${playbackLabel} refresh pending.`);
+      } else if (playbackResult.status === "fulfilled") {
+        if (playbackResult.value?.skipped) {
+          parts.push(`${playbackLabel} refresh skipped.`);
         } else {
-          parts.push("Tautulli refresh queued.");
+          parts.push(`${playbackLabel} refresh queued.`);
         }
       } else {
-        parts.push("Tautulli refresh failed.");
+        parts.push(`${playbackLabel} refresh failed.`);
       }
     }
-    const tautulliOk = tautulliResult.status === "fulfilled";
-    const tautulliSkipped = tautulliOk && tautulliResult.value?.skipped;
-    const tautulliPending = tautulliResult.status === "timeout";
-    const tautulliUsed = Boolean(tautulliConfigured && !tautulliSkipped && !tautulliPending);
-    const shouldForceTautulli = Boolean(tautulliConfigured && !hasTautulliKeys(row));
+    const playbackOk = playbackResult.status === "fulfilled";
+    const playbackSkipped = playbackOk && playbackResult.value?.skipped;
+    const playbackPending = playbackResult.status === "timeout";
+    const playbackUsed = Boolean(playbackItemRefresh && !playbackSkipped && !playbackPending);
+    const playbackLabelText = playbackItemRefresh
+      ? (playbackPending
+        ? `${playbackLabel} refresh pending`
+        : (playbackUsed
+          ? `${playbackLabel} refresh ${playbackOk ? "succeeded" : "failed"}`
+          : `${playbackLabel} refresh skipped`))
+      : "";
+    const shouldForceTautulli = Boolean(playbackItemRefresh && !hasTautulliKeys(row));
     let refreshOutcome = arrOk ? "success" : "fail";
-    if (arrOk && tautulliConfigured && (tautulliPending || tautulliSkipped || !tautulliOk)) {
+    if (arrOk && playbackItemRefresh && (playbackPending || playbackSkipped || !playbackOk)) {
       refreshOutcome = "partial";
-    } else if (tautulliUsed && arrOk !== tautulliOk) {
+    } else if (playbackUsed && arrOk !== playbackOk) {
       refreshOutcome = "partial";
     }
     setRowRefreshNotice(statusToken, `Refreshing ${rowTitle} - ${parts.join(" ")}`);
@@ -4157,16 +5273,10 @@ async function handleRowRefreshClick(btn) {
             }
           }
           const arrLabel = `${appLabel} refresh succeeded`;
-          const showTautulliLabel = Boolean(tautulliConfigured);
-          const tautulliLabel = tautulliPending
-            ? "Tautulli refresh pending"
-            : (tautulliUsed
-              ? `Tautulli refresh ${tautulliOk ? "succeeded" : "failed"}`
-              : "Tautulli refresh skipped");
           const filterNote = shouldClearFilters ? " Filters cleared to keep item visible." : "";
           const followup = refreshOutcome === "partial"
-            ? `${rowTitle} Updated - Partial refresh (${arrLabel}, ${tautulliLabel})`
-            : `${rowTitle} Updated - ${arrLabel}${showTautulliLabel ? `, ${tautulliLabel}` : ""}`;
+            ? `${rowTitle} Updated - Partial refresh (${arrLabel}, ${playbackLabelText})`
+            : `${rowTitle} Updated - ${arrLabel}${playbackItemRefresh ? `, ${playbackLabelText}` : ""}`;
           showRowRefreshFollowupNow(statusToken, `${followup}${filterNote}`);
           const refreshedRow = findRowElement(app, rowKey) || rowEl;
           setRowRefreshPending(refreshedRow, false);
@@ -4190,12 +5300,11 @@ async function handleRowRefreshClick(btn) {
         );
       }
     }
-    if (!arrOk && tautulliUsed) {
+    if (!arrOk && playbackUsed) {
       const arrLabel = `${appLabel} refresh failed`;
-      const tautulliLabel = `Tautulli refresh ${tautulliOk ? "succeeded" : "failed"}`;
       const followup = refreshOutcome === "partial"
-        ? `${rowTitle} Refresh failed - Partial refresh (${arrLabel}, ${tautulliLabel})`
-        : `${rowTitle} Refresh failed - ${arrLabel}, ${tautulliLabel}`;
+        ? `${rowTitle} Refresh failed - Partial refresh (${arrLabel}, ${playbackLabelText})`
+        : `${rowTitle} Refresh failed - ${arrLabel}, ${playbackLabelText}`;
       scheduleRowRefreshFollowup(statusToken, followup);
     } else if (!arrOk) {
       scheduleRowRefreshFollowup(
@@ -6507,6 +7616,8 @@ const FIELD_MAP = {
   dateadded: "DateAdded",
   added: "DateAdded",
   path: "Path",
+  rootfolder: "RootFolder",
+  rootpath: "RootFolder",
   status: "Status",
   monitored: "Monitored",
   qualityprofile: "QualityProfile",
@@ -6703,8 +7814,14 @@ function parseAdvancedQuery(query) {
   const tokens = String(query ?? "").trim().split(/\s+/).filter(Boolean);
   const preds = [];
   const warnings = [];
-  const tautulliWarning = "Tautulli filters are unavailable until configured.";
-  let tautulliWarned = false;
+  const playbackWarning = () => {
+    const label = getPlaybackLabel();
+    if (label && label !== "Playback") {
+      return `${label} filters are unavailable until configured.`;
+    }
+    return "Playback filters are unavailable until configured.";
+  };
+  let playbackWarned = false;
 
   const invertOp = (op) => {
     switch (op) {
@@ -6738,11 +7855,11 @@ function parseAdvancedQuery(query) {
     if (comp) {
       const field = comp[1].toLowerCase();
       const op = comp[2];
-      if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
-        if (!tautulliWarned) { warnings.push(tautulliWarning); tautulliWarned = true; }
-        addPred(() => false);
-        continue;
-      }
+    if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
+      if (!playbackWarned) { warnings.push(playbackWarning()); playbackWarned = true; }
+      addPred(() => false);
+      continue;
+    }
       if (!NUMERIC_FIELDS.has(field)) {
         warnings.push(`Field '${field}' does not support numeric comparisons.`);
         addPred(() => false);
@@ -6996,9 +8113,23 @@ function updateAdvancedWarnings(warnings) {
 }
 
 function applyFilters(data) {
+  const chipValue = String(chipQuery ?? "").trim();
+
+  if (!chipsEnabled) {
+    updateAdvancedWarnings([]);
+    if (!chipValue) {
+      return data || [];
+    }
+    let filtered = data || [];
+    if (chipValue) {
+      const chips = parseAdvancedQuery(chipValue);
+      filtered = filtered.filter(row => chips.preds.every(p => p(row)));
+    }
+    return filtered;
+  }
+
   const useAdvanced = advancedEnabled;
   const advValue = String(advancedFilter?.value ?? "").trim();
-  const chipValue = String(chipQuery ?? "").trim();
 
   if (!useAdvanced && !chipValue) {
     const titleValue = String(titleFilter?.value ?? "").trim();
@@ -7051,6 +8182,9 @@ function applyFilters(data) {
 
 function hasActiveFilters() {
   const chipValue = String(chipQuery ?? "").trim();
+  if (!chipsEnabled) {
+    return Boolean(chipValue);
+  }
   if (advancedEnabled) {
     const advValue = String(advancedFilter?.value ?? "").trim();
     return Boolean(chipValue || advValue);
@@ -7063,6 +8197,11 @@ function hasActiveFilters() {
 function rowMatchesCurrentFilters(row) {
   if (!row) return false;
   const chipValue = String(chipQuery ?? "").trim();
+  if (!chipsEnabled) {
+    if (!chipValue) return true;
+    const chips = parseAdvancedQuery(chipValue);
+    return chips.preds.every(p => p(row));
+  }
   if (advancedEnabled) {
     const advValue = String(advancedFilter?.value ?? "").trim();
     if (advValue) {
@@ -7112,6 +8251,7 @@ function clearActiveFilters() {
       btn.dataset.state = "off";
     });
     updateAdvancedWarnings([]);
+    renderActiveFilterChips();
     scheduleViewStateSave();
   }
   return changed;
@@ -7134,9 +8274,12 @@ function getDisplayCache(row) {
 }
 
 function getFilterSignature() {
+  const chipValue = String(chipQuery ?? "").trim();
+  if (!chipsEnabled) {
+    return `builder|${chipValue}`;
+  }
   const useAdvanced = advancedEnabled;
   const advValue = String(advancedFilter?.value ?? "").trim();
-  const chipValue = String(chipQuery ?? "").trim();
   if (useAdvanced) {
     return `adv|${advValue}|${chipValue}`;
   }
@@ -7240,6 +8383,7 @@ const COLUMN_STORAGE_KEY = "Sortarr-columns";
 const columnPrefsByApp = { sonarr: {}, radarr: {} };
 const DEFAULT_HIDDEN_COLUMNS = new Set([
   "Instance",
+  "RootFolder",
   "Status",
   "Monitored",
   "QualityProfile",
@@ -7286,6 +8430,7 @@ const LAZY_COLUMNS_ARRAY = Array.from(LAZY_COLUMNS);
 const RADARR_VIRTUAL_EAGER_COLUMNS = new Set([
   "DateAdded",
   "Instance",
+  "RootFolder",
   "RuntimeMins",
   "FileSizeGB",
   "GBPerHour",
@@ -7343,6 +8488,7 @@ const DISPLAY_CACHE_COLUMNS = {
       return notReportedIfEmpty(cell);
     }
   },
+  RootFolder: { key: "rootFolder", compute: row => escapeHtml(row.RootFolder ?? "") },
   Path: { key: "path", compute: row => escapeHtml(row.Path ?? "") },
 };
 const DISPLAY_CACHE_COLUMN_LIST = Object.keys(DISPLAY_CACHE_COLUMNS);
@@ -7526,9 +8672,10 @@ function getHiddenColumns() {
 function isColumnHidden(col, app, hiddenColumns) {
   const hideByCol = hiddenColumns && hiddenColumns.has(col);
   const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
+  const hideByDiagnostics = col === "Diagnostics" && !playbackSupportsDiagnostics;
   const hideByCsv = col && CSV_COLUMNS_BY_APP[app]?.has(col) && !csvColumnsEnabled();
   const hideByInstance = col === "Instance" && getInstanceCount(app) <= 1;
-  return hideByCol || hideByTautulli || hideByCsv || hideByInstance;
+  return hideByCol || hideByTautulli || hideByDiagnostics || hideByCsv || hideByInstance;
 }
 
 function getDeferredColumns(app, hiddenColumns, options = {}) {
@@ -7678,10 +8825,11 @@ function updateColumnFilter() {
     if (col) {
       const isTautulli = TAUTULLI_COLUMNS.has(col);
       const tautulliMatch = !isTautulli || tautulliEnabled;
+      const hideDiagnostics = col === "Diagnostics" && !playbackSupportsDiagnostics;
       const isCsv = CSV_COLUMNS_BY_APP[activeApp]?.has(col);
       const csvMatch = !isCsv || csvEnabled;
       const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
-      show = show && tautulliMatch && csvMatch && !hideByInstance;
+      show = show && tautulliMatch && csvMatch && !hideByInstance && !hideDiagnostics;
     } else if (group) {
       if (group === "tautulli" && !tautulliEnabled) {
         show = false;
@@ -7787,11 +8935,12 @@ function updateColumnVisibility(rootEl = document) {
       const hideByApp = app && app !== activeApp;
       const hideByCol = hidden.has(col);
       const hideByTautulli = hideTautulli && col && TAUTULLI_COLUMNS.has(col);
+      const hideByDiagnostics = col === "Diagnostics" && !playbackSupportsDiagnostics;
       const hideByCsv = csvCols && col && csvCols.has(col);
       const hideByInstance = hideInstance && col === "Instance";
       el.classList.toggle(
         "col-hidden",
-        hideByApp || hideByCol || hideByTautulli || hideByCsv || hideByInstance
+        hideByApp || hideByCol || hideByTautulli || hideByDiagnostics || hideByCsv || hideByInstance
       );
     });
   });
@@ -8154,6 +9303,7 @@ function setActiveTab(app) {
 
   loadColumnPrefs();
   applyViewState(activeApp);
+  updateFilterBuilderOptions();
   sortCacheByApp[activeApp] = null;
   syncCsvToggle();
   updateColumnVisibility();
@@ -8227,7 +9377,7 @@ function buildTitleLink(row, app) {
 
 const ROW_REFRESH_ICON_HTML = '<span aria-hidden="true">↻</span>';
 const ROW_REFRESH_BUTTON_HTML =
-  `<button class="row-refresh-btn row-refresh-btn--title" type="button" title="Refresh in Arr (and Tautulli if configured)" aria-label="Refresh item">${ROW_REFRESH_ICON_HTML}</button>`;
+  `<button class="row-refresh-btn row-refresh-btn--title" type="button" title="Refresh in Arr (and playback if supported)" aria-label="Refresh item">${ROW_REFRESH_ICON_HTML}</button>`;
 const SERIES_EXPAND_ICON_HTML = '<span aria-hidden="true">+</span>';
 const DIAG_BUTTON_HTML =
   `<div class="diag-actions"><button class="match-diag-btn" type="button" title="Copy match diagnostics" aria-label="Copy match diagnostics">i</button></div>`;
@@ -8453,7 +9603,7 @@ function computeHeavyCellValues(row, app, columns) {
     values.VideoHDR = cache.videoHdrCell;
   }
 
-  if (colSet.has("Diagnostics")) {
+  if (colSet.has("Diagnostics") && playbackSupportsDiagnostics) {
     values.Diagnostics = DIAG_BUTTON_HTML;
   }
 
@@ -8576,6 +9726,13 @@ function buildRow(row, app, options = {}) {
     displayCache,
     isColumnVisible("Path")
   );
+  const rootFolderState = resolveDisplayCacheValue(
+    row,
+    app,
+    "RootFolder",
+    displayCache,
+    isColumnVisible("RootFolder")
+  );
   const audioCodec = audioCodecState.value;
   const contentHours = contentHoursState.value;
   const titleLink = displayCache.titleLink;
@@ -8588,6 +9745,7 @@ function buildRow(row, app, options = {}) {
   const videoCodec = videoCodecState.value;
   const audioChannels = audioChannelsState.value;
   const rowPath = pathState.value;
+  const rootFolder = rootFolderState.value;
   const bitrateCell = formatBitrateCell(row, app);
   const audioCodecAttr = audioCodecState.lazy ? ' data-lazy-value="1"' : "";
   const contentHoursAttr = contentHoursState.lazy ? ' data-lazy-value="1"' : "";
@@ -8596,6 +9754,7 @@ function buildRow(row, app, options = {}) {
   const videoCodecAttr = videoCodecState.lazy ? ' data-lazy-value="1"' : "";
   const audioChannelsAttr = audioChannelsState.lazy ? ' data-lazy-value="1"' : "";
   const pathAttr = pathState.lazy ? ' data-lazy-value="1"' : "";
+  const rootFolderAttr = rootFolderState.lazy ? ' data-lazy-value="1"' : "";
   const deferredColumns = options.deferredColumns;
   const visibleHeavyColumns = options.visibleHeavyColumns || LAZY_COLUMNS_ARRAY;
   const heavyValues = visibleHeavyColumns.length
@@ -8719,6 +9878,7 @@ function buildRow(row, app, options = {}) {
     <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
     <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
     <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
+    <td data-col="RootFolder" ${rootFolderAttr}>${rootFolder}</td>
     <td data-col="Path" ${pathAttr}>${rowPath}</td>
   `;
   } else {
@@ -8768,6 +9928,7 @@ function buildRow(row, app, options = {}) {
     <td data-col="AudioCodecMixed">${audioCodecMixed}</td>
     <td data-col="AudioLanguagesMixed">${audioLanguagesMixed}</td>
     <td data-col="SubtitleLanguagesMixed">${subtitleLanguagesMixed}</td>
+    <td data-col="RootFolder" ${rootFolderAttr}>${rootFolder}</td>
     <td data-col="Path" ${pathAttr}>${rowPath}</td>
   `;
   }
@@ -8954,8 +10115,11 @@ function syncRowWidthLock(tr) {
 // Note: Uses top/bottom spacer rows to preserve scroll height and keeps DOM bounded.
 const VIRTUAL_MIN_ROWS = 800;
 const VIRTUAL_OVERSCAN_ROWS = 8; // Render overscan rows above/below viewport (keeps scroll smooth)
+const VIRTUAL_OVERSCAN_ROWS_IOS = 4;
 const VIRTUAL_HYDRATION_OVERSCAN_ROWS = 24; // Extra rows to pre-hydrate offscreen (reduces visible "pop-in")
+const VIRTUAL_HYDRATION_OVERSCAN_ROWS_IOS = 4;
 const VIRTUAL_ROW_CACHE_MULTIPLIER = 5; // LRU cap = pool * multiplier
+const VIRTUAL_ROW_CACHE_MULTIPLIER_IOS = 3;
 
 const virtualStateByApp = { sonarr: null, radarr: null };
 
@@ -9041,10 +10205,11 @@ function renderVirtualWindow(state) {
   const poolSize = visibleCount + state.overscan * 2;
   // Hydration window size: we pre-hydrate additional rows beyond the rendered overscan so that
   // rows are already "filled" before they scroll into view (avoids visible pop-in/blinks).
-  const hydrationOverscan = VIRTUAL_HYDRATION_OVERSCAN_ROWS;
+  const hydrationOverscan = IS_IOS ? VIRTUAL_HYDRATION_OVERSCAN_ROWS_IOS : VIRTUAL_HYDRATION_OVERSCAN_ROWS;
   const hydratePoolSize = visibleCount + (state.overscan + hydrationOverscan) * 2;
   // Cache must be large enough to hold prebuilt + prehydrated rows without churn.
-  const maxCache = Math.max(100, hydratePoolSize * VIRTUAL_ROW_CACHE_MULTIPLIER);
+  const cacheMultiplier = IS_IOS ? VIRTUAL_ROW_CACHE_MULTIPLIER_IOS : VIRTUAL_ROW_CACHE_MULTIPLIER;
+  const maxCache = Math.max(100, hydratePoolSize * cacheMultiplier);
 
   let start = Math.floor(scrollTop / rowHeight) - state.overscan;
   if (start < 0) start = 0;
@@ -9173,7 +10338,7 @@ function enableVirtualRows(rows, app, rowOptions, token, perf) {
     token,
     perf,
     rowHeight: getRowHeightOnce(),
-    overscan: VIRTUAL_OVERSCAN_ROWS,
+    overscan: IS_IOS ? VIRTUAL_OVERSCAN_ROWS_IOS : VIRTUAL_OVERSCAN_ROWS,
     topSpacer,
     bottomSpacer,
     rowCache: new Map(),
@@ -9755,7 +10920,8 @@ if (refreshRadarrBtn) {
 }
 if (refreshTautulliBtn) {
   refreshTautulliBtn.addEventListener("click", async () => {
-    setStatus("Refreshing Tautulli...");
+    const label = getPlaybackLabel();
+    setStatus(`Refreshing ${label}...`);
     try {
       const res = await fetch(apiUrl("/api/tautulli/refresh"), {
         method: "POST",
@@ -9766,14 +10932,14 @@ if (refreshTautulliBtn) {
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
       }
       const data = await res.json();
-      if (data.refresh_in_progress || data.started) {
-        setStatusNotice(TAUTULLI_MATCHING_NOTICE);
-        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
-        if (configState.radarrConfigured) setTautulliPending("radarr", true);
-        updateBackgroundLoading();
+        if (data.refresh_in_progress || data.started) {
+          setStatusNotice(getPlaybackMatchingNotice());
+          if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+          if (configState.radarrConfigured) setTautulliPending("radarr", true);
+          updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus("Tautulli refresh started.");
+      setStatus(`${label} refresh started.`);
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
@@ -9781,7 +10947,8 @@ if (refreshTautulliBtn) {
 }
 if (deepRefreshTautulliBtn) {
   deepRefreshTautulliBtn.addEventListener("click", async () => {
-    setStatus("Refreshing Tautulli data...");
+    const label = getPlaybackLabel();
+    setStatus(`Refreshing ${label} data...`);
     try {
       const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
         method: "POST",
@@ -9792,14 +10959,14 @@ if (deepRefreshTautulliBtn) {
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
       }
       const data = await res.json();
-      if (data.refresh_in_progress || data.started) {
-        setStatusNotice(TAUTULLI_MATCHING_NOTICE);
-        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
-        if (configState.radarrConfigured) setTautulliPending("radarr", true);
-        updateBackgroundLoading();
+        if (data.refresh_in_progress || data.started) {
+          setStatusNotice(getPlaybackMatchingNotice());
+          if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+          if (configState.radarrConfigured) setTautulliPending("radarr", true);
+          updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus("Tautulli refresh started. This can take a while.");
+      setStatus(`${label} refresh started. This can take a while.`);
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
@@ -9807,7 +10974,8 @@ if (deepRefreshTautulliBtn) {
 }
 if (clearCachesBtn) {
   clearCachesBtn.addEventListener("click", async () => {
-    if (!window.confirm("Clear all Sortarr caches and rebuild from Sonarr/Radarr (and Tautulli if configured)?")) {
+    const playbackLabel = playbackProvider ? getPlaybackLabel() : "playback";
+    if (!window.confirm(`Clear all Sortarr caches and rebuild from Sonarr/Radarr (and ${playbackLabel} if configured)?`)) {
       return;
     }
     setStatus("Clearing caches...");
@@ -9871,6 +11039,7 @@ function setAdvancedMode(enabled) {
   if (!enabled && advancedFilter) advancedFilter.value = "";
   if (!enabled && advancedHelp) advancedHelp.classList.add("hidden");
   if (!enabled && advancedWarnings) updateAdvancedWarnings([]);
+  updateFilterUiMode();
 }
 
 function updateAdvancedHelpText() {
@@ -9971,9 +11140,46 @@ async function prefetch(app, refresh, options = {}) {
   }
 }
 
-function setTautulliEnabled(enabled) {
+function updatePlaybackLabels() {
+  const label = getPlaybackLabel();
+  playbackLabelEls.forEach(el => {
+    el.textContent = label;
+  });
+  playbackTitleEls.forEach(el => {
+    el.textContent = playbackProvider ? `Playback (${label})` : "Playback";
+  });
+  playbackMatchTitleEls.forEach(el => {
+    el.textContent = playbackProvider ? `Match (${label})` : "Match";
+  });
+  if (refreshTautulliBtn) {
+    refreshTautulliBtn.textContent = playbackProvider ? `Refresh ${label}` : "Refresh playback";
+    refreshTautulliBtn.title = playbackProvider
+      ? `Refresh ${label} library data and rebuild matches`
+      : "Refresh playback library data and rebuild matches";
+  }
+  if (deepRefreshTautulliBtn) {
+    deepRefreshTautulliBtn.textContent = playbackProvider ? `Refresh ${label} data` : "Refresh playback data";
+    deepRefreshTautulliBtn.title = playbackProvider
+      ? `Refresh ${label} library data and rebuild matches`
+      : "Refresh playback library data and rebuild matches";
+  }
+}
+
+function setPlaybackProvider(provider) {
+  playbackProvider = provider || "";
+  playbackLabel = playbackProvider === "jellystat"
+    ? "Jellystat"
+    : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
+  playbackSupportsItemRefresh = playbackProvider === "tautulli";
+  playbackSupportsDiagnostics = playbackProvider === "tautulli";
+  updatePlaybackLabels();
+}
+
+function setTautulliEnabled(enabled, provider = "") {
   tautulliEnabled = Boolean(enabled);
+  setPlaybackProvider(provider);
   updateAdvancedHelpText();
+  updateFilterBuilderOptions();
   const chipsChanged = updateChipVisibility();
   updateColumnFilter();
   markColumnVisibilityDirty();
@@ -9990,6 +11196,61 @@ function setTautulliEnabled(enabled) {
 bindFilterInput(titleFilter);
 bindFilterInput(pathFilter);
 bindFilterInput(advancedFilter);
+
+if (filterCategory) {
+  filterCategory.addEventListener("change", () => {
+    updateFilterConditionOptions();
+    updateFilterValueOptions();
+  });
+}
+if (filterValueSelect) {
+  filterValueSelect.addEventListener("change", () => {
+    const allowCustom = Boolean(getFilterFieldMeta(filterCategory?.value)?.allowCustom);
+    const isCustom = allowCustom && filterValueSelect.value === "__custom__";
+    if (filterValueInput) {
+      filterValueInput.classList.toggle("hidden", !isCustom);
+      filterValueInput.disabled = !isCustom;
+      if (!isCustom) {
+        filterValueInput.value = "";
+      }
+    }
+    updateCustomSelect(filterValueSelect);
+  });
+}
+if (filterValueInput) {
+  filterValueInput.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      addBuilderFilterToken();
+    }
+  });
+}
+if (filterAddBtn) {
+  filterAddBtn.addEventListener("click", () => {
+    addBuilderFilterToken();
+  });
+}
+if (activeFiltersEl) {
+  activeFiltersEl.addEventListener("click", e => {
+    const btn = e.target.closest(".filter-bubble");
+    if (!btn) return;
+    const token = btn.getAttribute("data-token") || "";
+    if (!token) return;
+    const tokens = String(chipQuery || "").split(/\s+/).filter(Boolean);
+    const next = tokens.filter(item => item !== token);
+    if (next.length === tokens.length) return;
+    chipQuery = next.join(" ");
+    syncChipButtonsToQuery();
+    scheduleViewStateSave();
+    const scrollAnchor = captureTableScrollAnchor();
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  });
+}
+if (chipsToggle) {
+  chipsToggle.addEventListener("click", () => {
+    setChipsEnabled(!chipsEnabled);
+  });
+}
 
 window.addEventListener("beforeunload", () => {
   flushViewStateSave();
@@ -10114,21 +11375,22 @@ if (columnsBtn && columnsPanel) {
     const nowHidden = !columnsPanel.classList.contains("hidden");
     setColumnsPanelHidden(nowHidden);
     if (!nowHidden) {
+      closeAllCustomSelects();
+    }
+    if (!nowHidden) {
       updateColumnFilter();
       columnSearch?.focus();
       requestAnimationFrame(updateColumnScrollHint);
     }
   });
 
-  columnsPanel.addEventListener("click", e => {
-    e.stopPropagation();
-  });
-
   columnsPanel.addEventListener("scroll", () => {
     updateColumnScrollHint();
   });
 
-  document.addEventListener("click", () => {
+  document.addEventListener("click", e => {
+    if (columnsPanel.classList.contains("hidden")) return;
+    if (columnsPanel.contains(e.target) || columnsBtn.contains(e.target)) return;
     setColumnsPanelHidden(true);
   });
 
@@ -10294,6 +11556,8 @@ const savedFiltersCollapsed = localStorage.getItem(FILTERS_COLLAPSED_KEY) === "1
 if (filtersEl) {
   setFiltersCollapsed(savedFiltersCollapsed);
 }
+const savedChipsEnabled = localStorage.getItem(CHIPS_ENABLED_KEY) === "1";
+setChipsEnabled(savedChipsEnabled);
 if (filtersToggleBtn) {
   filtersToggleBtn.addEventListener("click", () => {
     setFiltersCollapsed(!filtersCollapsed);
@@ -10325,9 +11589,14 @@ async function loadConfig() {
     radarrBase = cfg.radarr_url || radarrInstances[0]?.url || "";
     configState.sonarrConfigured = sonarrInstances.length > 0;
     configState.radarrConfigured = radarrInstances.length > 0;
+    configState.playbackProvider = cfg.playback_provider || "";
+    configState.playbackConfigured = Boolean(
+      cfg.playback_configured ?? cfg.tautulli_configured
+    );
 
     buildInstanceChips();
-    setTautulliEnabled(cfg.tautulli_configured);
+    updateFilterBuilderOptions();
+    setTautulliEnabled(configState.playbackConfigured, configState.playbackProvider);
     updatePrimaryRefreshButton();
   } catch (e) {
     console.warn("config load failed", e);
@@ -10342,6 +11611,7 @@ async function loadConfig() {
   if (resetUiRequested) {
     localStorage.removeItem(COLUMN_STORAGE_KEY);
     localStorage.removeItem(CSV_COLUMNS_KEY);
+    localStorage.removeItem(CHIPS_ENABLED_KEY);
     localStorage.removeItem(VIEW_STATE_KEY);
     try {
       const url = new URL(window.location.href);
@@ -10356,8 +11626,10 @@ async function loadConfig() {
   loadCsvColumnsState();
   loadViewState();
   applyViewState(activeApp);
+  updateFilterBuilderOptions();
+  initFilterCustomSelects();
   syncCsvToggle();
-  setTautulliEnabled(false);
+  setTautulliEnabled(false, "");
   updateRuntimeLabels();
   updateColumnFilter();
   updateColumnVisibility();
@@ -10412,5 +11684,4 @@ async function loadConfig() {
   await load(false);
   enableTablePinchZoom();
   enableTableScrollChaining();
-  enableStatusRowScrollChaining();
 })()
