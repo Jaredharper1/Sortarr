@@ -100,7 +100,13 @@
     const url = getFieldValue(urlField);
     const apiKey = getFieldValue(keyField);
     if (!url || !apiKey) {
-      updateInlineMessage(inlineKey, "URL and API key are required.", "is-error");
+      updateInlineMessage(
+        inlineKey,
+        (window.SORTARR_I18N && window.SORTARR_I18N.url_key_required)
+          ? window.SORTARR_I18N.url_key_required
+          : "URL and API key are required.",
+        "is-error"
+      );
       return;
     }
 
@@ -109,7 +115,15 @@
     button.classList.add("is-testing");
     button.setAttribute("aria-busy", "true");
     button.setAttribute("aria-disabled", "true");
-    updateInlineMessage(inlineKey, "Testing connection...", "is-pending");
+
+    updateInlineMessage(
+      inlineKey,
+      (window.SORTARR_I18N && window.SORTARR_I18N.testing_connection)
+        ? window.SORTARR_I18N.testing_connection
+        : "Testing connection...",
+      "is-pending"
+    );
+
     try {
       const res = await fetch(apiUrl("/api/setup/test"), {
         method: "POST",
@@ -117,24 +131,47 @@
         credentials: "same-origin",
         body: JSON.stringify({ kind, url, api_key: apiKey }),
       });
+
       let payload = {};
       try {
         payload = await res.json();
       } catch {
         payload = {};
       }
+
       await ensureMinimumDelay(startedAt, 250);
+
       if (res.ok && payload.ok) {
-        updateInlineMessage(inlineKey, "Connection ok.", "is-ok");
+        updateInlineMessage(
+          inlineKey,
+          (window.SORTARR_I18N && window.SORTARR_I18N.connection_ok)
+            ? window.SORTARR_I18N.connection_ok
+            : "Connection OK.",
+          "is-ok"
+        );
         flashInline(button, "ok");
       } else {
-        const msg = payload.error || "Connection failed.";
+        const backendErr = payload.error || "";
+        const msg =
+          (backendErr === "Connection failed. Check URL and API key.")
+            ? ((window.SORTARR_I18N && window.SORTARR_I18N.connection_failed_check)
+              ? window.SORTARR_I18N.connection_failed_check
+              : backendErr)
+            : (backendErr || ((window.SORTARR_I18N && window.SORTARR_I18N.connection_failed_check)
+              ? window.SORTARR_I18N.connection_failed_check
+              : "Connection failed. Check URL and API key."));
         updateInlineMessage(inlineKey, msg, "is-error");
         flashInline(button, "error");
       }
     } catch (err) {
       await ensureMinimumDelay(startedAt, 250);
-      updateInlineMessage(inlineKey, `Connection failed: ${err}`, "is-error");
+      updateInlineMessage(
+        inlineKey,
+        `${(window.SORTARR_I18N && window.SORTARR_I18N.connection_failed_check)
+          ? window.SORTARR_I18N.connection_failed_check
+          : "Connection failed. Check URL and API key."}: ${err}`,
+        "is-error"
+      );
       flashInline(button, "error");
     } finally {
       button.dataset.testing = "0";
@@ -143,6 +180,8 @@
       button.removeAttribute("aria-disabled");
     }
   }
+
+
 
   document.querySelectorAll(".setup-test").forEach((button) => {
     button.addEventListener("click", () => runTest(button));

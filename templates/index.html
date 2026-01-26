@@ -19,36 +19,36 @@
         <img id="brandLogo" src="/static/logo.svg" alt="{{ app_name }}" />
         <div class="brandText">
           <div class="brandName">{{ app_name }}</div>
-          <div class="brandSub">Media library insights</div>
+          <div class="brandSub">{{ _('Media library insights') }}</div>
         </div>
       </div>
 
-      <button id="resetUiBtn" title="Clear UI settings and reload cached data">Reset UI</button>
-      <button id="settingsBtn" title="Open setup">Settings</button>
+      <button id="resetUiBtn" title="{{ _('Clear UI settings and reload cached data') }}">{{ _('Reset UI') }}</button>
+      <button id="settingsBtn" title="{{ _('Open setup') }}">{{ _('Settings') }}</button>
       <div class="column-menu">
-        <button id="columnsBtn" type="button" title="Adjust visible columns" aria-expanded="false"
-          aria-controls="columnsPanel">Columns</button>
-        <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="Columns" aria-modal="false"
-          aria-hidden="true">
+        <button id="columnsBtn" type="button" title="{{ _('Adjust visible columns') }}" aria-expanded="false"
+          aria-controls="columnsPanel">{{ _('Columns') }}</button>
+        <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="{{ _('Columns') }}"
+          aria-modal="false" aria-hidden="true">
           <div class="column-panel-header">
-            <input id="columnSearch" class="column-search" type="search" placeholder="Search columns" />
+            <input id="columnSearch" class="column-search" type="search" placeholder="{{ _('Search columns') }}" />
             <div class="column-actions">
-              <button id="columnsShowAll" type="button">Show all</button>
-              <button id="columnsHideAll" type="button">Hide all</button>
-              <button id="columnsReset" type="button">Reset</button>
+              <button id="columnsShowAll" type="button">{{ _('Show all') }}</button>
+              <button id="columnsHideAll" type="button">{{ _('Hide all') }}</button>
+              <button id="columnsReset" type="button">{{ _('Reset') }}</button>
             </div>
             <label class="column-toggle">
               <input type="checkbox" id="csvColumnsToggle" />
-              <span>Enable CSV columns</span>
+              <span>{{ _('Enable CSV columns') }}</span>
             </label>
           </div>
           <div class="column-group">
             <div class="column-group-title">Core</div>
-            <label class="column-row"><input type="checkbox" data-col="Title" /> Title</label>
-            <label class="column-row"><input type="checkbox" data-col="DateAdded" /> Date Added</label>
-            <label class="column-row"><input type="checkbox" data-col="Instance" /> Instance</label>
-            <label class="column-row"><input type="checkbox" data-col="RootFolder" /> Root Folder</label>
-            <label class="column-row"><input type="checkbox" data-col="Path" /> Path</label>
+            <label class="column-row"><input type="checkbox" data-col="Title" /> {{ _('Title') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="DateAdded" /> {{ _('Date Added') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Instance" /> {{ _('Instance') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="RootFolder" /> {{ _('Root Folder') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Path" /> {{ _('Path') }}</label>
           </div>
 
 
@@ -57,33 +57,36 @@
             <div class="column-group-title">Sonarr</div>
 
             <label class="column-row column-row--group">
-              <input type="checkbox" data-col-group="sonarr" /> Sonarr columns
+              <input type="checkbox" data-col-group="sonarr" /> {{ _('Sonarr columns') }}
             </label>
-            <label class="column-row"><input type="checkbox" data-col="SeriesType" /> Series Type</label>
-            <label class="column-row"><input type="checkbox" data-col="Studio" /> Studio</label>
-            <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
-            <label class="column-row"><input type="checkbox" data-col="LastAired" /> Last Aired</label>
-            <label class="column-row" title="Episodes missing on disk."><input type="checkbox"
-                data-col="MissingCount" /> Missing</label>
-            <label class="column-row" title="Episodes where the quality cutoff is unmet."><input type="checkbox"
-                data-col="CutoffUnmetCount" /> Cutoff Unmet</label>
-            <label class="column-row" title="Total content hours based on non-special episodes."><input type="checkbox"
-                data-col="ContentHours" /> Runtime (hh:mm)</label>
-            <label class="column-row" title="Episode count excludes specials."><input type="checkbox"
-                data-col="EpisodesCounted" /> Episodes</label>
-            <label class="column-row" title="Season count excludes specials and only counts seasons with files."><input
-                type="checkbox" data-col="SeasonCount" /> Seasons</label>
-            <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> Avg / Ep (GiB)</label>
-            <label class="column-row" title="Total size includes specials."><input type="checkbox"
-                data-col="TotalSizeGB" /> Total (GiB)</label>
-            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
-            <label class="column-row" title="Estimated series bitrate from total size and runtime."><input
-                type="checkbox" data-col="BitrateMbps" /> Bitrate (Mbps)</label>
-            <label class="column-row"><input type="checkbox" data-col="Status" /> Status</label>
-            <label class="column-row"><input type="checkbox" data-col="Monitored" /> Monitored</label>
-            <label class="column-row"><input type="checkbox" data-col="Tags" /> Tags</label>
-            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> Release Group</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> Quality Profile</label>
+            <label class="column-row"><input type="checkbox" data-col="SeriesType" /> {{ _('Series Type') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="LastAired" /> {{ _('Last Aired') }}</label>
+            <label class="column-row" title="{{ _('Episodes missing on disk.') }}"><input type="checkbox"
+                data-col="MissingCount" /> {{ _('Missing') }}</label>
+            <label class="column-row" title="{{ _('Episodes where the quality cutoff is unmet.') }}"><input
+                type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
+            <label class="column-row" title="{{ _('Total content hours based on non-special episodes.') }}"><input
+                type="checkbox" data-col="ContentHours" /> {{ _('Runtime (hh:mm)') }}</label>
+            <label class="column-row" title="{{ _('Episode count excludes specials.') }}"><input type="checkbox"
+                data-col="EpisodesCounted" /> {{ _('Episodes') }}</label>
+            <label class="column-row"
+              title="{{ _('Season count excludes specials and only counts seasons with files.') }}"><input
+                type="checkbox" data-col="SeasonCount" /> {{ _('Seasons') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> {{ _('Avg / Ep (GiB)')
+              }}</label>
+            <label class="column-row" title="{{ _('Total size includes specials.') }}"><input type="checkbox"
+                data-col="TotalSizeGB" /> {{ _('Total (GiB)') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
+            <label class="column-row" title="{{ _('Estimated series bitrate from total size and runtime.') }}"><input
+                type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
+              }}</label>
           </div>
 
 
@@ -98,33 +101,39 @@
               <input type="checkbox" data-col-group="radarr" /> Radarr columns
             </label>
 
-            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> Runtime (hh:mm)</label>
-            <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> Size (GiB)</label>
-            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> GiB / Hour</label>
-            <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> Bitrate (Mbps)</label>
+            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> {{ _('Runtime (hh:mm)')
+              }}</label>
+            <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> {{ _('Size (GiB)') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
 
-            <label class="column-row"><input type="checkbox" data-col="Status" /> Status</label>
-            <label class="column-row"><input type="checkbox" data-col="Monitored" /> Monitored</label>
-            <label class="column-row"><input type="checkbox" data-col="Tags" /> Tags</label>
-            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> Release Group</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> Quality Profile</label>
+            <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
+              }}</label>
 
-            <label class="column-row"><input type="checkbox" data-col="Studio" /> Studio</label>
-            <label class="column-row"><input type="checkbox" data-col="Genres" /> Genres</label>
+            <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
 
-            <label class="column-row" title="Movies missing on disk."><input type="checkbox" data-col="MissingCount" />
-              Missing</label>
-            <label class="column-row" title="Movies where the quality cutoff is unmet."><input type="checkbox"
-                data-col="CutoffUnmetCount" /> Cutoff Unmet</label>
+            <label class="column-row" title="{{ _('Movies missing on disk.') }}"><input type="checkbox"
+                data-col="MissingCount" />
+              {{ _('Missing') }}</label>
+            <label class="column-row" title="{{ _('Movies where the quality cutoff is unmet.') }}"><input
+                type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
 
-            <label class="column-row"><input type="checkbox" data-col="HasFile" /> Has File</label>
-            <label class="column-row"><input type="checkbox" data-col="IsAvailable" /> Available</label>
-            <label class="column-row"><input type="checkbox" data-col="InCinemas" /> In Cinemas</label>
-            <label class="column-row"><input type="checkbox" data-col="LastSearchTime" /> Last Search</label>
-            <label class="column-row"><input type="checkbox" data-col="Edition" /> Edition</label>
-            <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> Custom Formats</label>
-            <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> Custom Format Score</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> Cutoff Not Met</label>
+            <label class="column-row"><input type="checkbox" data-col="HasFile" /> {{ _('Has File') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="IsAvailable" /> {{ _('Available') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="InCinemas" /> {{ _('In Cinemas') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="LastSearchTime" /> {{ _('Last Search') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Edition" /> {{ _('Edition') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> {{ _('Custom Formats')
+              }}</label>
+            <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> {{ _('Custom Format Score')
+              }}</label>
+            <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> {{ _('Cutoff Not Met')
+              }}</label>
           </div>
 
 
@@ -135,60 +144,68 @@
             <div class="column-group-title">Video</div>
             <label class="column-row column-row--group"><input type="checkbox" data-col-group="video" /> Video
               columns</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> Video Quality</label>
-            <label class="column-row"><input type="checkbox" data-col="Resolution" /> Resolution</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> Video Codec</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoHDR" /> Video HDR</label>
+            <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> {{ _('Video Quality') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Resolution" /> {{ _('Resolution') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> {{ _('Video Codec') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR') }}</label>
           </div>
 
 
           <div class="column-group">
-            <div class="column-group-title">Language</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> Language
-              columns</label>
-            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> Original Language</label>
-            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="Languages" /> Audio
-              Languages</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> Audio Codec</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> Audio Channels</label>
-            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="AudioLanguages" /> Audio
-              Languages</label>
-            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> Subtitle Languages</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> Audio Languages
-              Mixed</label>
-            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> Subtitle Languages
-              Mixed</label>
+            <div class="column-group-title">{{ _('Language') }}</div>
+            <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> {{
+              _('Language
+              columns') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> {{ _('Original Language')
+              }}</label>
+            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="Languages" /> {{ _('Audio
+              Languages') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> {{ _('Audio Codec') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> {{ _('Audio Channels')
+              }}</label>
+            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="AudioLanguages" /> {{ _('Audio
+              Languages') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> {{ _('Subtitle Languages')
+              }}</label>
+            <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> {{ _('Audio Languages
+              Mixed') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> {{ _('Subtitle
+              Languages
+              Mixed') }}</label>
           </div>
 
 
           <div class="column-group">
-            <div class="column-group-title" data-playback-title>Playback</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> Playback
-              columns</label>
-            <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> Diagnostics</label>
-            <label class="column-row"><input type="checkbox" data-col="PlayCount" /> Times Watched</label>
-            <label class="column-row"><input type="checkbox" data-col="LastWatched" /> Last Watched</label>
-            <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> Days Since Watched</label>
-            <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> Watch Time
-              (hh:mm)</label>
-            <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> Watch / Runtime
-              (hh:mm)</label>
-            <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> Users Watched</label>
+            <div class="column-group-title" data-playback-title>{{ _('Playback') }}</div>
+            <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> {{
+              _('Playback
+              columns') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> {{ _('Diagnostics') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="PlayCount" /> {{ _('Times Watched') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="LastWatched" /> {{ _('Last Watched') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> {{ _('Days Since Watched')
+              }}</label>
+            <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> {{ _('Watch Time
+              (hh:mm)') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> {{ _('Watch / Runtime
+              (hh:mm)') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> {{ _('Users Watched') }}</label>
           </div>
           <div class="column-group">
-            <div class="column-group-title">Advanced</div>
-            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> Title
-              Slug</label>
-            <label class="column-row"><input type="checkbox" data-col="TmdbId" /> TMDB ID</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> Audio Codec Mixed</label>
+            <div class="column-group-title">{{ _('Advanced') }}</div>
+            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> {{ _('Title
+              Slug') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="TmdbId" /> {{ _('TMDB ID') }}</label>
+            <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> {{ _('Audio Codec Mixed')
+              }}</label>
           </div>
           <div class="column-scroll-hint" aria-hidden="true"></div>
         </div>
       </div>
-      <button id="themeBtn" title="Toggle theme">☀️</button>
+      <button id="themeBtn" title="{{ _('Toggle theme') }}">☀️</button>
       <span class="status" id="status" role="status" aria-live="polite"></span>
       <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
-      <span class="version-badge">{{ app_name }} v{{ app_version }} - Sonarr & Radarr efficiency view</span>
+      <span class="version-badge">{{ app_name }} v{{ app_version }} - {{ _('Sonarr & Radarr efficiency view') }}</span>
     </div>
 
 
@@ -199,34 +216,35 @@
         <div class="filter-row">
           <div class="filter-inputs" id="filterInputs">
             <div class="simple-filters" id="simpleFilters">
-              <input id="titleFilter" placeholder="Filter title (supports * and ?)" />
-              <input id="pathFilter" placeholder="Filter path (supports * and ?)" />
+              <input id="titleFilter" placeholder="{{ _('Filter title (supports * and ?)') }}" />
+              <input id="pathFilter" placeholder="{{ _('Filter path (supports * and ?)') }}" />
             </div>
             <input id="advancedFilter" class="advanced-filter"
-              placeholder="Advanced filtering examples: path:C:\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2" />
+              placeholder="{{ _('Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2') }}" />
           </div>
           <div class="filter-controls">
-            <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">Advanced</button>
-            <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">Chips</button>
+            <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
+              }}</button>
+            <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
             <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
           </div>
         </div>
         <div class="filter-builder" id="filterBuilder">
           <div class="filter-builder-row">
             <div class="filter-builder-field">
-              <label for="filterCategory">Category</label>
+              <label for="filterCategory">{{ _('Category') }}</label>
               <select id="filterCategory"></select>
             </div>
             <div class="filter-builder-field">
-              <label for="filterCondition">Condition</label>
+              <label for="filterCondition">{{ _('Condition') }}</label>
               <select id="filterCondition"></select>
             </div>
             <div class="filter-builder-field">
-              <label for="filterValueInput">Value</label>
+              <label for="filterValueInput">{{ _('Value') }}</label>
               <select id="filterValueSelect" class="hidden" aria-label="Value"></select>
               <input id="filterValueInput" placeholder="Value" />
             </div>
-            <button id="filterAddBtn" class="filter-add-btn" type="button">Add</button>
+            <button id="filterAddBtn" class="filter-add-btn" type="button">{{ _('Add') }}</button>
           </div>
           <div class="active-filters hidden" id="activeFilters" aria-live="polite"></div>
         </div>
@@ -235,7 +253,8 @@
           gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples:
           dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb
           seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true
-          Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags,
+          Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile,
+          tags,
           releasegroup, seriestype, originallanguage, genres, lastaired, videoquality, videocodec, videohdr, resolution,
           audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang,
           subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes,
@@ -245,7 +264,7 @@
         <div class="chip-wrap">
           <div class="chip-groups">
             <div class="chip-group">
-              <div class="chip-group-title">Audio</div>
+              <div class="chip-group-title">{{ _('Audio') }}</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-query="audio:Atmos">Atmos</button>
                 <button class="chip" type="button" data-query="audio:eac3">DD+</button>
@@ -256,59 +275,63 @@
               </div>
             </div>
             <div class="chip-group">
-              <div class="chip-group-title">Audio Language</div>
+              <div class="chip-group-title">{{ _('Audio Language') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-query="audiolang:eng">English</button>
-                <button class="chip" type="button" data-query="audiolang:spa">Spanish</button>
-                <button class="chip" type="button" data-query="audiolang:fra">French</button>
-                <button class="chip" type="button" data-query="audiolang:deu">German</button>
-                <button class="chip" type="button" data-query="audiolang:jpn">Japanese</button>
+                <button class="chip" type="button" data-query="audiolang:eng">{{ _('English') }}</button>
+                <button class="chip" type="button" data-query="audiolang:spa">{{ _('Spanish') }}</button>
+                <button class="chip" type="button" data-query="audiolang:fra">{{ _('French') }}</button>
+                <button class="chip" type="button" data-query="audiolang:deu">{{ _('German') }}</button>
+                <button class="chip" type="button" data-query="audiolang:jpn">{{ _('Japanese') }}</button>
               </div>
             </div>
             <div class="chip-group">
-              <div class="chip-group-title">Subtitles</div>
+              <div class="chip-group-title">{{ _('Subtitles') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-query="sublang:eng">English</button>
-                <button class="chip" type="button" data-query="sublang:spa">Spanish</button>
-                <button class="chip" type="button" data-query="sublang:fra">French</button>
-                <button class="chip" type="button" data-query="sublang:deu">German</button>
-                <button class="chip" type="button" data-query="sublang:jpn">Japanese</button>
-                <button class="chip" type="button" data-query="nosubs:true">No Subtitles</button>
+                <button class="chip" type="button" data-query="sublang:eng">{{ _('English') }}</button>
+                <button class="chip" type="button" data-query="sublang:spa">{{ _('Spanish') }}</button>
+                <button class="chip" type="button" data-query="sublang:fra">{{ _('French') }}</button>
+                <button class="chip" type="button" data-query="sublang:deu">{{ _('German') }}</button>
+                <button class="chip" type="button" data-query="sublang:jpn">{{ _('Japanese') }}</button>
+                <button class="chip" type="button" data-query="nosubs:true">{{ _('No Subtitles') }}</button>
               </div>
             </div>
             <div class="chip-group" data-tautulli="true">
-              <div class="chip-group-title" data-playback-match-title>Match</div>
+              <div class="chip-group-title" data-playback-match-title>{{ _('Match') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-tautulli="true"
-                  data-query="matchstatus:matched">Matched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unmatched">Potential
-                  Mismatch</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:future">Future
-                  Release</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:nodisk">Not On
-                  Disk</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:notchecked">Not
-                  Checked</button>
-                <button class="chip" type="button" data-tautulli="true"
-                  data-query="matchstatus:unavailable">Unavailable</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:matched">{{ _('Matched')
+                  }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unmatched">{{
+                  _('Potential
+                  Mismatch') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:future">{{ _('Future
+                  Release') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:nodisk">{{ _('Not On
+                  Disk') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:notchecked">{{ _('Not
+                  Checked') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unavailable">{{
+                  _('Unavailable') }}</button>
               </div>
             </div>
             <div class="chip-group" data-tautulli="true">
-              <div class="chip-group-title" data-playback-title>Playback</div>
+              <div class="chip-group-title" data-playback-title>{{ _('Playback') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">Never
-                  Watched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">Watched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">Rewatched</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">Recent
-                  (30d)</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">Heavy (10+
-                  hrs)</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="users>=2">Multi-user</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">{{ _('Never
+                  Watched') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">{{ _('Watched')
+                  }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">{{ _('Rewatched')
+                  }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">{{ _('Recent
+                  (30d)') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">{{ _('Heavy (10+
+                  hrs)') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="users>=2">{{ _('Multi-user')
+                  }}</button>
               </div>
             </div>
             <div class="chip-group">
-              <div class="chip-group-title">Resolution</div>
+              <div class="chip-group-title">{{ _('Resolution') }}</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-query="videoquality:2160p">4K</button>
                 <button class="chip" type="button" data-query="videoquality:1080p">1080p</button>
@@ -317,7 +340,7 @@
               </div>
             </div>
             <div class="chip-group">
-              <div class="chip-group-title">Source</div>
+              <div class="chip-group-title">{{ _('Source') }}</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-query="videoquality:webdl">WEB-DL</button>
                 <button class="chip" type="button" data-query="videoquality:webrip">WEBRip</button>
@@ -326,7 +349,7 @@
               </div>
             </div>
             <div class="chip-group">
-              <div class="chip-group-title">Video Tags</div>
+              <div class="chip-group-title">{{ _('Video Tags') }}</div>
               <div class="chip-row">
                 <button class="chip" type="button" data-query="videocodec:x265">x265</button>
                 <button class="chip" type="button" data-query="videocodec:x264">x264</button>
@@ -335,204 +358,235 @@
               </div>
             </div>
             <div class="chip-group" data-app="sonarr">
-              <div class="chip-group-title">Sonarr</div>
+              <div class="chip-group-title">{{ _('Sonarr') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-query="missing:true">Missing</button>
-                <button class="chip" type="button" data-query="cutoff:true">Cutoff Unmet</button>
-                <button class="chip" type="button" data-query="recentlygrabbed:true">Recently Grabbed</button>
-                <button class="chip" type="button" data-query="scene:true">Scene</button>
-                <button class="chip" type="button" data-query="airing:true">Airing</button>
+                <button class="chip" type="button" data-query="missing:true">{{ _('Missing') }}</button>
+                <button class="chip" type="button" data-query="cutoff:true">{{ _('Cutoff Unmet') }}</button>
+                <button class="chip" type="button" data-query="recentlygrabbed:true">{{ _('Recently Grabbed')
+                  }}</button>
+                <button class="chip" type="button" data-query="scene:true">{{ _('Scene') }}</button>
+                <button class="chip" type="button" data-query="airing:true">{{ _('Airing') }}</button>
               </div>
             </div>
             <div class="chip-group" data-app="radarr">
-              <div class="chip-group-title">Radarr</div>
+              <div class="chip-group-title">{{ _('Radarr') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-query="missing:true">Missing</button>
-                <button class="chip" type="button" data-query="cutoff:true">Cutoff Unmet</button>
-                <button class="chip" type="button" data-query="recentlygrabbed:true">Recently Grabbed</button>
-                <button class="chip" type="button" data-query="scene:true">Scene</button>
-                <button class="chip" type="button" data-query="airing:true">Available</button>
+                <button class="chip" type="button" data-query="missing:true">{{ _('Missing') }}</button>
+                <button class="chip" type="button" data-query="cutoff:true">{{ _('Cutoff Unmet') }}</button>
+                <button class="chip" type="button" data-query="recentlygrabbed:true">{{ _('Recently Grabbed')
+                  }}</button>
+                <button class="chip" type="button" data-query="scene:true">{{ _('Scene') }}</button>
+                <button class="chip" type="button" data-query="airing:true">{{ _('Available') }}</button>
               </div>
             </div>
             <div class="chip-group hidden" data-app="sonarr" data-instance-group="true">
-              <div class="chip-group-title">Instance</div>
+              <div class="chip-group-title">{{ _('Instance') }}</div>
               <div class="chip-row" id="instanceChipsSonarr"></div>
             </div>
             <div class="chip-group hidden" data-app="radarr" data-instance-group="true">
-              <div class="chip-group-title">Instance</div>
+              <div class="chip-group-title">{{ _('Instance') }}</div>
               <div class="chip-row" id="instanceChipsRadarr"></div>
             </div>
           </div>
         </div>
       </div>
       <div class="filters-footer">
-        <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="Hide filters and chips"
+        <button id="filtersToggleBtn" type="button" class="filters-toggle-btn"
+          title="{{ _('Hide filters and chips') }}">
           aria-expanded="true" aria-controls="filtersPanel">▴</button>
         <div class="tabs">
           <button class="tab active" id="tabSonarr">Sonarr</button>
           <button class="tab" id="tabRadarr">Radarr</button>
           <span class="spacer"></span>
-          <button id="exportCsvBtn">Export CSV</button>
+          <button id="exportCsvBtn">{{ _('Export CSV') }}</button>
         </div>
         <div class="filters-footer-chips">
-          <div class="status-pill status-pill--hidden" id="statusPill" title="Hover to expand data status">
+          <div class="status-pill status-pill--hidden" id="statusPill" title="{{ _('Hover to expand data status') }}">
             Data status
           </div>
-          <div class="health-badges-slot" id="healthBadges" aria-label="Health badges"></div>
+          <div class="health-badges-slot" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
         </div>
       </div>
     </div>
 
     <div class="status-row" id="statusRow">
       <div class="status-block">
-        <div class="status-label">Progress</div>
+        <div class="status-label">{{ _('Progress') }}</div>
         <div class="status-value" id="progressStatus">--</div>
       </div>
       <div class="status-block">
-        <div class="status-label" data-playback-label>Playback</div>
+        <div class="status-label" data-playback-label>{{ _('Playback') }}</div>
         <div class="status-value" id="tautulliStatus">--</div>
       </div>
       <div class="status-block">
-        <div class="status-label">Cache</div>
+        <div class="status-label">{{ _('Cache') }}</div>
         <div class="status-value" id="cacheStatus">--</div>
       </div>
       <div class="status-actions">
         <div class="status-actions-group">
           <button id="refreshTabBtn"
-            title="Refresh the active app metadata, reload its data, and update the cache">Refresh Sonarr data</button>
-          <button id="deepRefreshTautulliBtn" title="Refresh playback library data and rebuild matches">Refresh playback
-            data</button>
-          <button id="clearCachesBtn" title="Clear all Sortarr cache files and rebuild everything from scratch">Clear
-            caches & rebuild</button>
+            title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
+            Sonarr data') }}</button>
+          <button id="deepRefreshTautulliBtn" title="{{ _('Refresh playback library data and rebuild matches') }}">{{
+            _('Refresh playback
+            data') }}</button>
+          <button id="clearCachesBtn"
+            title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
+            caches & rebuild') }}</button>
         </div>
       </div>
-      <div class="status-complete hidden" id="statusCompleteNote">All data is up to date. Hiding in 5s…</div>
+      <div class="status-complete hidden" id="statusCompleteNote">{{ _('All data is up to date. Hiding in 5s…') }}</div>
     </div>
 
     <div class="status-banner hidden" id="partialBanner">
-      Partial playback data loaded. Matching will continue in the background.
-    </div>
+      {{ _('Partial playback data loaded. Matching will continue in the background.') }}</div>
     <div class="status-banner hidden" id="fastModeBanner">
-      Sonarr fast mode enabled. Codec and language details may be missing.
-    </div>
+      {{ _('Sonarr fast mode enabled. Codec and language details may be missing.') }}</div>
 
     <div class="table-wrap" id="tableWrap">
       <table class="stable-columns">
-      <thead>
-        <tr>
-        <th data-sort="Title" data-col="Title">{{ _('Title') }} <span class="sort-indicator"></span></th>
-        <th data-sort="DateAdded" data-col="DateAdded">{{ _('Date Added') }} <span class="sort-indicator"></span></th>
-        <th data-sort="InstanceName" data-col="Instance">{{ _('Instance') }} <span class="sort-indicator"></span></th>
-        <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">{{ _('Series Type') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Studio" data-app="sonarr" data-col="Studio">{{ _('Studio') }} <span class="sort-indicator"></span></th>
-        <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">{{ _('Original Language') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Genres" data-app="sonarr" data-col="Genres">{{ _('Genres') }} <span class="sort-indicator"></span></th>
-        <th data-sort="LastAired" data-app="sonarr" data-col="LastAired">{{ _('Last Aired') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="MissingCount" data-app="sonarr" data-col="MissingCount"
-          title="Episodes missing on disk.">{{ _('Missing') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="CutoffUnmetCount" data-app="sonarr" data-col="CutoffUnmetCount"
-          title="Episodes where the quality cutoff is unmet.">{{ _('Cutoff Unmet') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours"
-          title="Total content hours based on non-special episodes.">{{ _('Runtime (hh:mm)') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted"
-          title="Episode count excludes specials.">{{ _('Episodes') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount"
-          title="Season count excludes specials and only counts seasons with files.">{{ _('Seasons') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg / Ep (GiB)') }}
-          <span class="sort-indicator"></span>
-        </th>
-        <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB" title="Total size includes specials.">
-          {{ _('Total (GiB)') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="GBPerHour" data-app="sonarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="BitrateMbps" data-app="sonarr" data-col="BitrateMbps"
-          title="Estimated series bitrate from total size and runtime.">{{ _('Bitrate (Mbps)') }} <span
-          class="sort-indicator"></span></th>
+        <thead>
+          <tr>
+            <th data-sort="Title" data-col="Title">{{ _('Title') }} <span class="sort-indicator"></span></th>
+            <th data-sort="DateAdded" data-col="DateAdded">{{ _('Date Added') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="InstanceName" data-col="Instance">{{ _('Instance') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">{{ _('Series Type') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="Studio" data-app="sonarr" data-col="Studio">{{ _('Studio') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">{{ _('Original Language') }}
+              <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="Genres" data-app="sonarr" data-col="Genres">{{ _('Genres') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="LastAired" data-app="sonarr" data-col="LastAired">{{ _('Last Aired') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="MissingCount" data-app="sonarr" data-col="MissingCount"
+              title="{{ _('Episodes missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="CutoffUnmetCount" data-app="sonarr" data-col="CutoffUnmetCount"
+              title="{{ _('Episodes where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours"
+              title="{{ _('Total content hours based on non-special episodes.') }}">{{ _('Runtime (hh:mm)') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted"
+              title="{{ _('Episode count excludes specials.') }}">{{ _('Episodes') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount"
+              title="{{ _('Season count excludes specials and only counts seasons with files.') }}">{{ _('Seasons') }}
+              <span class="sort-indicator"></span>
+            </th>
+            <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg / Ep
+              (GiB)') }}
+              <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB" title="Total size includes specials.">
+              {{ _('Total (GiB)') }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="GBPerHour" data-app="sonarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="BitrateMbps" data-app="sonarr" data-col="BitrateMbps"
+              title="{{ _('Estimated series bitrate from total size and runtime.') }}">{{ _('Bitrate (Mbps)') }} <span
+                class="sort-indicator"></span></th>
 
-        <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime (hh:mm)') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">{{ _('Size (GiB)') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate (Mbps)') }} <span
-          class="sort-indicator"></span></th>
+            <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime (hh:mm)')
+              }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">{{ _('Size (GiB)') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate (Mbps)') }}
+              <span class="sort-indicator"></span>
+            </th>
 
-        <th data-sort="Status" data-col="Status">{{ _('Status') }} <span class="sort-indicator"></span></th>
-        <th data-sort="Monitored" data-col="Monitored">{{ _('Monitored') }} <span class="sort-indicator"></span></th>
-        <th data-sort="Tags" data-col="Tags">{{ _('Tags') }} <span class="sort-indicator"></span></th>
-        <th data-sort="ReleaseGroup" data-col="ReleaseGroup">{{ _('Release Group') }} <span class="sort-indicator"></span></th>
-        <th data-sort="QualityProfile" data-col="QualityProfile">{{ _('Quality Profile') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Studio" data-app="radarr" data-col="Studio">{{ _('Studio') }} <span class="sort-indicator"></span></th>
-        <th data-sort="OriginalLanguage" data-app="radarr" data-col="OriginalLanguage">{{ _('Original Language') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Genres" data-app="radarr" data-col="Genres">{{ _('Genres') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="MissingCount" data-app="radarr" data-col="MissingCount"
-          title="Movies missing on disk.">{{ _('Missing') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="CutoffUnmetCount" data-app="radarr" data-col="CutoffUnmetCount"
-          title="Movies where the quality cutoff is unmet.">{{ _('Cutoff Unmet') }} <span class="sort-indicator"></span></th>
-        <th data-sort="HasFile" data-app="radarr" data-col="HasFile">{{ _('Has File') }} <span class="sort-indicator"></span>
-        </th>
-        <th data-sort="IsAvailable" data-app="radarr" data-col="IsAvailable">{{ _('Available') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="InCinemas" data-app="radarr" data-col="InCinemas">{{ _('In Cinemas') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="LastSearchTime" data-app="radarr" data-col="LastSearchTime">{{ _('Last Search') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Edition" data-app="radarr" data-col="Edition">{{ _('Edition') }} <span class="sort-indicator"></span>
-        </th>
-        <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">{{ _('Custom Formats') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">{{ _('Custom Format Score') }} <span class="sort-indicator"></span></th>
-        <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not Met') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="Languages" data-app="radarr" data-col="Languages">{{ _('Audio Languages') }} <span
-          class="sort-indicator"></span></th>
+            <th data-sort="Status" data-col="Status">{{ _('Status') }} <span class="sort-indicator"></span></th>
+            <th data-sort="Monitored" data-col="Monitored">{{ _('Monitored') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="Tags" data-col="Tags">{{ _('Tags') }} <span class="sort-indicator"></span></th>
+            <th data-sort="ReleaseGroup" data-col="ReleaseGroup">{{ _('Release Group') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="QualityProfile" data-col="QualityProfile">{{ _('Quality Profile') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="Studio" data-app="radarr" data-col="Studio">{{ _('Studio') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="OriginalLanguage" data-app="radarr" data-col="OriginalLanguage">{{ _('Original Language') }}
+              <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="Genres" data-app="radarr" data-col="Genres">{{ _('Genres') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="MissingCount" data-app="radarr" data-col="MissingCount"
+              title="{{ _('Movies missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="CutoffUnmetCount" data-app="radarr" data-col="CutoffUnmetCount"
+              title="{{ _('Movies where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="HasFile" data-app="radarr" data-col="HasFile">{{ _('Has File') }} <span
+                class="sort-indicator"></span>
+            </th>
+            <th data-sort="IsAvailable" data-app="radarr" data-col="IsAvailable">{{ _('Available') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="InCinemas" data-app="radarr" data-col="InCinemas">{{ _('In Cinemas') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="LastSearchTime" data-app="radarr" data-col="LastSearchTime">{{ _('Last Search') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="Edition" data-app="radarr" data-col="Edition">{{ _('Edition') }} <span
+                class="sort-indicator"></span>
+            </th>
+            <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">{{ _('Custom Formats') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">{{ _('Custom
+              Format Score') }} <span class="sort-indicator"></span></th>
+            <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not Met')
+              }} <span class="sort-indicator"></span></th>
+            <th data-sort="Languages" data-app="radarr" data-col="Languages">{{ _('Audio Languages') }} <span
+                class="sort-indicator"></span></th>
 
-        <th data-sort="VideoQuality" data-col="VideoQuality">{{ _('Video Quality') }} <span class="sort-indicator"></span></th>
-        <th data-sort="Resolution" data-col="Resolution">{{ _('Resolution') }} <span class="sort-indicator"></span></th>
-        <th data-sort="VideoCodec" data-col="VideoCodec">{{ _('Video Codec') }} <span class="sort-indicator"></span></th>
-        <th data-sort="VideoHDR" data-col="VideoHDR">{{ _('Video HDR') }} <span class="sort-indicator"></span></th>
-        <th data-sort="AudioCodec" data-col="AudioCodec">{{ _('Audio Codec') }} <span class="sort-indicator"></span></th>
-        <th data-sort="AudioChannels" data-col="AudioChannels">{{ _('Audio Channels') }} <span class="sort-indicator"></span>
-        </th>
-        <th data-sort="AudioLanguages" data-app="sonarr" data-col="AudioLanguages">{{ _('Audio Languages') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">{{ _('Subtitle Languages') }} <span
-          class="sort-indicator"></span></th>
-        <th data-col="Diagnostics">{{ _('Diagnostics') }}</th>
-        <th class="right" data-sort="PlayCount" data-col="PlayCount">{{ _('Times Watched') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="LastWatched" data-col="LastWatched">{{ _('Last Watched') }} <span class="sort-indicator"></span></th>
-        <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">{{ _('Days Since') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time (hh:mm)') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime (hh:mm)') }} <span
-          class="sort-indicator"></span></th>
-        <th class="right" data-sort="UsersWatched" data-col="UsersWatched">{{ _('Users Watched') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">{{ _('Title Slug') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="TmdbId" data-col="TmdbId">{{ _('TMDB ID') }} <span class="sort-indicator"></span></th>
-        <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">{{ _('Audio Codec Mixed') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">{{ _('Audio Languages Mixed') }} <span
-          class="sort-indicator"></span></th>
-        <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages Mixed') }} <span
-          class="sort-indicator"></span></th>
+            <th data-sort="VideoQuality" data-col="VideoQuality">{{ _('Video Quality') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="Resolution" data-col="Resolution">{{ _('Resolution') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="VideoCodec" data-col="VideoCodec">{{ _('Video Codec') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="VideoHDR" data-col="VideoHDR">{{ _('Video HDR') }} <span class="sort-indicator"></span></th>
+            <th data-sort="AudioCodec" data-col="AudioCodec">{{ _('Audio Codec') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="AudioChannels" data-col="AudioChannels">{{ _('Audio Channels') }} <span
+                class="sort-indicator"></span>
+            </th>
+            <th data-sort="AudioLanguages" data-app="sonarr" data-col="AudioLanguages">{{ _('Audio Languages') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">{{ _('Subtitle Languages') }} <span
+                class="sort-indicator"></span></th>
+            <th data-col="Diagnostics">{{ _('Diagnostics') }}</th>
+            <th class="right" data-sort="PlayCount" data-col="PlayCount">{{ _('Times Watched') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="LastWatched" data-col="LastWatched">{{ _('Last Watched') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">{{ _('Days Since') }} <span
+                class="sort-indicator"></span></th>
+            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time (hh:mm)')
+              }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime (hh:mm)')
+              }} <span class="sort-indicator"></span></th>
+            <th class="right" data-sort="UsersWatched" data-col="UsersWatched">{{ _('Users Watched') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">{{ _('Title Slug') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="TmdbId" data-col="TmdbId">{{ _('TMDB ID') }} <span class="sort-indicator"></span></th>
+            <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">{{ _('Audio Codec Mixed') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">{{ _('Audio Languages Mixed') }} <span
+                class="sort-indicator"></span></th>
+            <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages Mixed') }}
+              <span class="sort-indicator"></span>
+            </th>
 
-        <th data-sort="RootFolder" data-col="RootFolder">{{ _('Root Folder') }} <span class="sort-indicator"></span></th>
-        <th data-sort="Path" data-col="Path">{{ _('Path') }} <span class="sort-indicator"></span></th>
-        </tr>
-      </thead>
-      <tbody id="tbody"></tbody>
+            <th data-sort="RootFolder" data-col="RootFolder">{{ _('Root Folder') }} <span class="sort-indicator"></span>
+            </th>
+            <th data-sort="Path" data-col="Path">{{ _('Path') }} <span class="sort-indicator"></span></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
       </table>
     </div>
 
@@ -545,7 +599,7 @@
           <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
             decoding="async" />
         </div>
-        <div class="series-expansion-title">Seasons</div>
+        <div class="series-expansion-title">{{ _("Seasons") }}</div>
         <div class="series-expansion-actions">
           <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
         </div>
@@ -553,6 +607,178 @@
       <div class="series-expansion-body" data-role="series-expansion-body"></div>
     </div>
   </template>
+
+
+
+
+  <script id="i18n-json" type="application/json">
+  {{ {
+    "notConfigured": _("Not configured"),
+    "noCachedData": _("No cached data"),
+    "awaitingData": _("Awaiting data"),
+    "dataStatus": _("Data status"),
+    "dataLoaded": _("Data loaded"),
+    "matching": _("Matching"),
+    "matchingEllipsis": _("Matching..."),
+    "matchingInProgress": _("Matching in progress"),
+
+    "receivingPlaybackData": _("Receiving %(label)s data...", label="%(label)s"),
+    "matched": _("Matched"),
+    "matchedWithAge": _("Matched (%(age)s ago)", age="%(age)s"),
+
+    "hoverToExpandDataStatus": _("Hover to expand data status"),
+    "hoverToExpandStatus": _("Hover to expand status."),
+    "dataLoadedHover": _("Data loaded. Hover to expand status."),
+
+    "receivingPlaybackDataHover": _("Receiving %(label)s data. Hover to expand status.", label="%(label)s"),
+    "matchingInProgressHoverProcessed": _(
+      "%(label)s matching in progress (%(processed)s/%(total)s processed). Hover to expand status.",
+      label="%(label)s",
+      processed="%(processed)s",
+      total="%(total)s"
+    ),
+
+    "cacheAwaitingData": _("%(label)s: Awaiting data", label="%(label)s"),
+    "cacheAgeAgo": _("%(label)s: %(age)s ago", label="%(label)s", age="%(age)s"),
+
+    "progressBase": _("%(matched)s/%(total)s %(label)s", matched="%(matched)s", total="%(total)s", label="%(label)s"),
+    "progressAgeUnknown": _("--"),
+    "progressAgeAgo": _("%(age)s ago", age="%(age)s"),
+    "progressUpdatedSuffix": _(" | updated %(ageLabel)s", ageLabel="%(ageLabel)s"),
+    "progressPendingSuffix": _(" - %(pending)s pending", pending="%(pending)s"),
+    "progressNotMatchedSuffix": _(" - %(notMatched)s not matched", notMatched="%(notMatched)s"),
+
+    "processedLower": _("processed"),
+    "matchedLower": _("matched"),
+    "coldCacheNotice": _("First load can take a while for large libraries; later loads are cached and faster."),
+    "playbackMatchingNotice": _("Playback matching in progress."),
+    "matchingInProgressLabel": _("%(label)s matching in progress.", label="%(label)s"),
+
+    "Title": _("Title"),
+    "Title Slug": _("Title Slug"),
+    "TMDB ID": _("TMDB ID"),
+    "Date Added": _("Date Added"),
+    "Path": _("Path"),
+    "Root Folder": _("Root Folder"),
+    "Status": _("Status"),
+
+    "Continuing": _("Continuing"),
+    "Ended": _("Ended"),
+    "Announced": _("Announced"),
+    "In Cinemas": _("In Cinemas"),
+    "Released": _("Released"),
+    "Deleted": _("Deleted"),
+
+    "Availability": _("Availability"),
+    "Monitored": _("Monitored"),
+    "Unmonitored": _("Unmonitored"),
+
+    "Series Type": _("Series Type"),
+    "Standard": _("Standard"),
+    "Anime": _("Anime"),
+
+    "True": _("True"),
+    "False": _("False"),
+
+    "Match Status": _("Match Status"),
+    "Matched": _("Matched"),
+    "Unmatched": _("Unmatched"),
+    "Skipped": _("Skipped"),
+    "Unavailable": _("Unavailable"),
+    "Future": _("Future"),
+    "Not On Disk": _("Not On Disk"),
+    "Not Checked": _("Not Checked"),
+    "Potential Mismatch": _("Potential Mismatch"),
+
+    "Has File": _("Has File"),
+    "Is Available": _("Is Available"),
+    "Missing": _("Missing"),
+    "Cutoff Unmet": _("Cutoff Unmet"),
+    "Cutoff Unmet Count": _("Cutoff Unmet Count"),
+    "Recently Grabbed": _("Recently Grabbed"),
+    "Airing/Available": _("Airing/Available"),
+    "Scene": _("Scene"),
+    "Quality Cutoff Not Met": _("Quality Cutoff Not Met"),
+    "No Subtitles": _("No Subtitles"),
+    "Never Watched": _("Never Watched"),
+
+    "Quality Profile": _("Quality Profile"),
+    "Tags": _("Tags"),
+    "Release Group": _("Release Group"),
+    "Studio": _("Studio"),
+    "Original Language": _("Original Language"),
+    "Genres": _("Genres"),
+    "Last Aired": _("Last Aired"),
+    "Episodes": _("Episodes"),
+    "Seasons": _("Seasons"),
+
+    "Size (GB)": _("Size (GB)"),
+    "Avg Episode Size (GB)": _("Avg Episode Size (GB)"),
+    "Runtime (mins)": _("Runtime (mins)"),
+    "File Size (GB)": _("File Size (GB)"),
+    "GB per Hour": _("GB per Hour"),
+
+    "Match": _("Match"),
+    "Mismatch": _("Mismatch"),
+    "Play Count": _("Play Count"),
+    "Last Watched": _("Last Watched"),
+    "Days Since Watched": _("Days Since Watched"),
+    "Watch Time (hours)": _("Watch Time (hours)"),
+    "Content Hours": _("Content Hours"),
+    "Watch / Runtime Ratio": _("Watch / Runtime Ratio"),
+    "Users Watched": _("Users Watched"),
+
+    "Resolution": _("Resolution"),
+    "Video Codec": _("Video Codec"),
+    "Video HDR": _("Video HDR"),
+    "HDR": _("HDR"),
+    "Dolby Vision": _("Dolby Vision"),
+
+    "Audio Codec": _("Audio Codec"),
+    "Atmos": _("Atmos"),
+    "DD+": _("DD+"),
+    "TrueHD": _("TrueHD"),
+    "Audio Codec Mixed": _("Audio Codec Mixed"),
+    "Audio Channels": _("Audio Channels"),
+    "Audio Languages": _("Audio Languages"),
+    "Audio Languages Mixed": _("Audio Languages Mixed"),
+    "Subtitle Languages": _("Subtitle Languages"),
+    "Subtitle Languages Mixed": _("Subtitle Languages Mixed"),
+
+    "is": _("is"),
+    "is not": _("is not"),
+    "contains": _("contains"),
+    "does not contain": _("does not contain"),
+    "greater than": _("greater than"),
+    "at least": _("at least"),
+    "less than": _("less than"),
+    "at most": _("at most"),
+
+    "English": _("English"),
+    "Spanish": _("Spanish"),
+    "French": _("French"),
+    "German": _("German"),
+    "Japanese": _("Japanese"),
+    "fetchingNewSonarrData": _("Fetching new Sonarr data..."),
+    "fetchingNewRadarrData": _("Fetching new Radarr data..."),
+    "loadingSonarrData": _("Loading Sonarr data..."),
+    "loadingRadarrData": _("Loading Radarr data..."),
+
+    "advancedPlaceholderBase": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2"),
+    "advancedPlaceholderTautulli": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2"),
+
+    "advancedHelpBase": _("Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours"),
+    "advancedHelpTautulli": _("Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour"),
+
+    
+  }|tojson }}
+</script>
+
+
+
+  <script>
+    window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
+  </script>
 
   <script src="/static/app.js?v={{ app_version }}"></script>
 </body>

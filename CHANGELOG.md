@@ -1,7 +1,25 @@
 # Changelog
 
 
-## [Unreleased]
+## [0.7.10] - 2026-01-26
+
+Sortarr now includes an expanded German translation set for both index.html and setup.html! Thank you so much, DerAachener!
+
+The translation catalog covers:
+
+UI labels, column names, filters, and chips
+
+Playback and cache status messages
+
+Setup page labels and configuration help text
+
+Status pill and progress banners
+
+Condition operators and filter UI text
+
+Translations are managed using Flask-Babel with gettext .po and .mo catalogs to improve future translation efforts.
+
+- Added 'File History' badges to the Radarr title column, and Sonarr episode view. 
 
 ## [0.7.9] - 2026-01-25
 

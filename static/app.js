@@ -97,6 +97,19 @@ function focusNoScroll(el) {
   }
 }
 
+function t(key, fallback) {
+  return (window.I18N && window.I18N[key]) || fallback || key;
+}
+
+function tp(key, params, fallback) {
+  let s = t(key, fallback);
+  if (!params) return s;
+  for (const [k, v] of Object.entries(params)) {
+    s = s.replaceAll(`%(${k})s`, String(v));
+  }
+  return s;
+}
+
 function withWrapScrollLock(fn) {
   const wrap = document.querySelector(".table-wrap");
   if (!wrap) return fn();
@@ -106,6 +119,17 @@ function withWrapScrollLock(fn) {
   requestAnimationFrame(() => {
     wrap.scrollLeft = x;
     wrap.scrollTop = y;
+  });
+}
+
+function t(key, fallback, vars) {
+  const s = (I18N && I18N[key]) ? I18N[key] : fallback;
+
+  if (!vars) return s;
+
+  return String(s).replace(/%\(([^)]+)\)s/g, (_, name) => {
+    if (Object.prototype.hasOwnProperty.call(vars, name)) return String(vars[name]);
+    return `%(${name})s`;
   });
 }
 
@@ -274,16 +298,23 @@ const API_ORIGIN = window.location && window.location.host
 
 let tableWrapLayoutPending = false;
 const FILTER_RENDER_DEBOUNCE_MS = 140;
+const FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
 let filterRenderTimer = null;
+const CHIP_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
+let chipRenderTimer = null;
+let chipRenderAnchor = null;
 
 function scheduleFilterRender() {
   if (filterRenderTimer) {
     window.clearTimeout(filterRenderTimer);
   }
+  const debounce = (IS_MOBILE && activeApp === "radarr")
+    ? FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR
+    : FILTER_RENDER_DEBOUNCE_MS;
   filterRenderTimer = window.setTimeout(() => {
     filterRenderTimer = null;
     render(dataByApp[activeApp] || []);
-  }, FILTER_RENDER_DEBOUNCE_MS);
+  }, debounce);
 }
 
 function flushFilterRender() {
@@ -292,6 +323,24 @@ function flushFilterRender() {
     filterRenderTimer = null;
   }
   render(dataByApp[activeApp] || []);
+}
+
+function scheduleChipRender(anchor) {
+  if (chipRenderTimer) {
+    window.clearTimeout(chipRenderTimer);
+  }
+  if (anchor) {
+    chipRenderAnchor = anchor;
+  }
+  const debounce = (IS_MOBILE && activeApp === "radarr")
+    ? CHIP_RENDER_DEBOUNCE_MS_MOBILE_RADARR
+    : 0;
+  chipRenderTimer = window.setTimeout(() => {
+    chipRenderTimer = null;
+    const scrollAnchor = chipRenderAnchor;
+    chipRenderAnchor = null;
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  }, debounce);
 }
 
 function bindFilterInput(input) {
@@ -1419,12 +1468,35 @@ const BENCH_PARAMS = (() => {
   }
 })()
 
+const IS_MOBILE = (() => {
+  try {
+    const mq = window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
+    const ua = navigator.userAgent || "";
+    const touch = /iPhone|iPad|iPod|Android/i.test(ua);
+    return Boolean(mq || touch);
+  } catch {
+    return false;
+  }
+})();
+
 const IMAGES_ENABLED = (() => {
   try {
     const sp = new URLSearchParams(window.location.search || "");
     return sp.get("images") !== "0";
   } catch (err) {
     return true;
+  }
+})();
+
+const RADARR_IMAGES_ENABLED = (() => {
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    if (sp.get("radarr_images") === "0") return false;
+    // Disable Radarr posters on mobile to avoid heavy DOM/memory
+    if (IS_MOBILE) return false;
+    return IMAGES_ENABLED;
+  } catch {
+    return IMAGES_ENABLED && !IS_MOBILE;
   }
 })();
 ;
@@ -1607,8 +1679,13 @@ const PAGE_FRESH_NOTICE_MS = 10000;
 const PAGE_LOAD_AT = Date.now();
 let pageFreshNoticeTimer = null;
 const COLD_CACHE_NOTICE =
+  (window.I18N && window.I18N.coldCacheNotice) ||
   "First load can take a while for large libraries; later loads are cached and faster.";
-const PLAYBACK_MATCHING_NOTICE = "Playback matching in progress.";
+
+const PLAYBACK_MATCHING_NOTICE =
+  (window.I18N && window.I18N.playbackMatchingNotice) ||
+  "Playback matching in progress.";
+
 const NOTICE_FLAGS_HEADER = "X-Sortarr-Notice-Flags";
 const TAUTULLI_POLL_INTERVAL_MS = 4000;
 const TAUTULLI_STATUS_POLL_INTERVAL_MS = 1000;
@@ -1636,7 +1713,7 @@ function getPlaybackLabel() {
 function getPlaybackMatchingNotice() {
   const label = getPlaybackLabel();
   if (label && label !== "Playback") {
-    return `${label} matching in progress.`;
+    return t("matchingInProgressLabel", "%(label)s matching in progress.", { label });
   }
   return PLAYBACK_MATCHING_NOTICE;
 }
@@ -1794,61 +1871,57 @@ const pathWidthByApp = { sonarr: null, radarr: null };
 const titlePathWidthVersionByApp = { sonarr: -1, radarr: -1 };
 const titlePathWidthFilterDirtyByApp = { sonarr: false, radarr: false };
 
-const ADVANCED_PLACEHOLDER_BASE =
-  "Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
-const ADVANCED_PLACEHOLDER_TAUTULLI =
-  "Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2";
-const ADVANCED_HELP_BASE =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours";
-const ADVANCED_HELP_TAUTULLI =
-  "Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 " +
-  "Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour";
+const ADVANCED_PLACEHOLDER_BASE = I18N.advancedPlaceholderBase;
+const ADVANCED_PLACEHOLDER_TAUTULLI = I18N.advancedPlaceholderTautulli;
+
+const ADVANCED_HELP_BASE = I18N.advancedHelpBase;
+const ADVANCED_HELP_TAUTULLI = I18N.advancedHelpTautulli;
+
 
 const FILTER_CONDITIONS = {
   string: [
-    { id: "is", label: "is", op: ":", negate: false },
-    { id: "is_not", label: "is not", op: ":", negate: true },
-    { id: "contains", label: "contains", op: ":", negate: false, wrap: "contains" },
-    { id: "not_contains", label: "does not contain", op: ":", negate: true, wrap: "contains" },
+    { id: "is", label: t("is"), op: ":", negate: false },
+    { id: "is_not", label: t("is not"), op: ":", negate: true },
+    { id: "contains", label: t("contains"), op: ":", negate: false, wrap: "contains" },
+    { id: "not_contains", label: t("does not contain"), op: ":", negate: true, wrap: "contains" },
   ],
   number: [
-    { id: "eq", label: "is", op: "=", negate: false },
-    { id: "neq", label: "is not", op: "=", negate: true },
-    { id: "gt", label: "greater than", op: ">", negate: false },
-    { id: "gte", label: "at least", op: ">=", negate: false },
-    { id: "lt", label: "less than", op: "<", negate: false },
-    { id: "lte", label: "at most", op: "<=", negate: false },
+    { id: "eq", label: t("is"), op: "=", negate: false },
+    { id: "neq", label: t("is not"), op: "=", negate: true },
+    { id: "gt", label: t("greater than"), op: ">", negate: false },
+    { id: "gte", label: t("at least"), op: ">=", negate: false },
+    { id: "lt", label: t("less than"), op: "<", negate: false },
+    { id: "lte", label: t("at most"), op: "<=", negate: false },
   ],
   bool: [
-    { id: "is", label: "is", op: ":", negate: false },
-    { id: "is_not", label: "is not", op: ":", negate: true },
+    { id: "is", label: t("is"), op: ":", negate: false },
+    { id: "is_not", label: t("is not"), op: ":", negate: true },
   ],
 };
 
 const FILTER_LANGUAGE_VALUES = [
-  { label: "English", value: "English" },
-  { label: "Spanish", value: "Spanish" },
-  { label: "French", value: "French" },
-  { label: "German", value: "German" },
-  { label: "Japanese", value: "Japanese" },
+  { label: t("English"), value: "English" },
+  { label: t("Spanish"), value: "Spanish" },
+  { label: t("French"), value: "French" },
+  { label: t("German"), value: "German" },
+  { label: t("Japanese"), value: "Japanese" },
 ];
 const FILTER_TRUE_FALSE_VALUES = [
-  { label: "True", value: "true" },
-  { label: "False", value: "false" },
+  { label: t("True"), value: "true" },
+  { label: t("False"), value: "false" },
 ];
 
 const FILTER_BUILDER_FIELDS = [
   {
     id: "title",
-    label: "Title",
+    label: t("Title"),
     type: "string",
     placeholder: "Star Trek",
     allowCustom: true,
   },
   {
     id: "titleslug",
-    label: "Title Slug",
+    label: t("Title Slug"),
     type: "string",
     app: "sonarr",
     placeholder: "star-trek",
@@ -1856,86 +1929,86 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "tmdbid",
-    label: "TMDB ID",
+    label: t("TMDB ID"),
     type: "string",
     placeholder: "12345",
     allowCustom: true,
   },
   {
     id: "dateadded",
-    label: "Date Added",
+    label: t("Date Added"),
     type: "string",
     placeholder: "2024",
     allowCustom: true,
   },
   {
     id: "path",
-    label: "Path",
+    label: t("Path"),
     type: "string",
     placeholder: "/data/shows",
     allowCustom: true,
   },
   {
     id: "rootfolder",
-    label: "Root Folder",
+    label: t("Root Folder"),
     type: "string",
     placeholder: "/data",
     allowCustom: true,
   },
   {
     id: "status",
-    label: "Status",
+    label: t("Status"),
     type: "string",
     values: [
-      { label: "Continuing", value: "continuing" },
-      { label: "Ended", value: "ended" },
-      { label: "Announced", value: "announced" },
-      { label: "In Cinemas", value: "incinemas" },
-      { label: "Released", value: "released" },
-      { label: "Deleted", value: "deleted" },
+      { label: t("Continuing"), value: "continuing" },
+      { label: t("Ended"), value: "ended" },
+      { label: t("Announced"), value: "announced" },
+      { label: t("In Cinemas"), value: "incinemas" },
+      { label: t("Released"), value: "released" },
+      { label: t("Deleted"), value: "deleted" },
     ],
     allowCustom: true,
   },
   {
     id: "monitored",
-    label: "Availability",
+    label: t("Availability"),
     type: "bool",
     values: [
-      { label: "Monitored", value: "true" },
-      { label: "Unmonitored", value: "false" },
+      { label: t("Monitored"), value: "true" },
+      { label: t("Unmonitored"), value: "false" },
     ],
   },
   {
     id: "qualityprofile",
-    label: "Quality Profile",
+    label: t("Quality Profile"),
     type: "string",
     placeholder: "HD-1080p",
     allowCustom: true,
   },
   {
     id: "tags",
-    label: "Tags",
+    label: t("Tags"),
     type: "string",
     placeholder: "kids",
     allowCustom: true,
   },
   {
     id: "releasegroup",
-    label: "Release Group",
+    label: t("Release Group"),
     type: "string",
     placeholder: "ntb",
     allowCustom: true,
   },
   {
     id: "studio",
-    label: "Studio",
+    label: t("Studio"),
     type: "string",
     placeholder: "Pixar",
     allowCustom: true,
   },
   {
     id: "seriestype",
-    label: "Series Type",
+    label: t("Series Type"),
     type: "string",
     app: "sonarr",
     placeholder: "anime",
@@ -1943,7 +2016,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "originallanguage",
-    label: "Original Language",
+    label: t("Original Language"),
     type: "string",
     placeholder: "English",
     values: FILTER_LANGUAGE_VALUES,
@@ -1951,14 +2024,14 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "genres",
-    label: "Genres",
+    label: t("Genres"),
     type: "string",
     placeholder: "Drama",
     allowCustom: true,
   },
   {
     id: "lastaired",
-    label: "Last Aired",
+    label: t("Last Aired"),
     type: "string",
     app: "sonarr",
     placeholder: "2024",
@@ -1966,28 +2039,28 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "hasfile",
-    label: "Has File",
+    label: t("Has File"),
     type: "bool",
     app: "radarr",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "isavailable",
-    label: "Is Available",
+    label: t("Is Available"),
     type: "bool",
     app: "radarr",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "incinemas",
-    label: "In Cinemas",
+    label: t("In Cinemas"),
     type: "bool",
     app: "radarr",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "lastsearchtime",
-    label: "Last Search Time",
+    label: t("Last Search Time"),
     type: "string",
     app: "radarr",
     placeholder: "2024",
@@ -1995,7 +2068,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "edition",
-    label: "Edition",
+    label: t("Edition"),
     type: "string",
     app: "radarr",
     placeholder: "Director's Cut",
@@ -2003,7 +2076,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "customformats",
-    label: "Custom Formats",
+    label: t("Custom Formats"),
     type: "string",
     app: "radarr",
     placeholder: "HDR",
@@ -2011,21 +2084,21 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "customformatscore",
-    label: "Custom Format Score",
+    label: t("Custom Format Score"),
     type: "number",
     app: "radarr",
     placeholder: "100",
   },
   {
     id: "qualitycutoffnotmet",
-    label: "Quality Cutoff Not Met",
+    label: t("Quality Cutoff Not Met"),
     type: "bool",
     app: "radarr",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "videoquality",
-    label: "Quality",
+    label: t("Quality"),
     type: "string",
     values: [
       { label: "2160p", value: "2160p" },
@@ -2041,7 +2114,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "resolution",
-    label: "Resolution",
+    label: t("Resolution"),
     type: "string",
     values: [
       { label: "4K", value: "4k" },
@@ -2054,7 +2127,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "videocodec",
-    label: "Video Codec",
+    label: t("Video Codec"),
     type: "string",
     values: [
       { label: "x265", value: "x265" },
@@ -2064,7 +2137,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "videohdr",
-    label: "Video HDR",
+    label: t("Video HDR"),
     type: "string",
     values: [
       { label: "HDR", value: "hdr" },
@@ -2074,7 +2147,7 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "audiocodec",
-    label: "Audio Codec",
+    label: t("Audio Codec"),
     type: "string",
     values: [
       { label: "Atmos", value: "Atmos" },
@@ -2085,19 +2158,19 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "audiocodecmixed",
-    label: "Audio Codec Mixed",
+    label: t("Audio Codec Mixed"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "audiochannels",
-    label: "Audio Channels",
+    label: t("Audio Channels"),
     type: "number",
     placeholder: "6",
   },
   {
     id: "audiolanguages",
-    label: "Audio Languages",
+    label: t("Audio Languages"),
     type: "string",
     placeholder: "English",
     values: FILTER_LANGUAGE_VALUES,
@@ -2105,13 +2178,13 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "audiolanguagesmixed",
-    label: "Audio Languages Mixed",
+    label: t("Audio Languages Mixed"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "subtitlelanguages",
-    label: "Subtitle Languages",
+    label: t("Subtitle Languages"),
     type: "string",
     placeholder: "English",
     values: FILTER_LANGUAGE_VALUES,
@@ -2119,101 +2192,101 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "subtitlelanguagesmixed",
-    label: "Subtitle Languages Mixed",
+    label: t("Subtitle Languages Mixed"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "nosubs",
-    label: "No Subtitles",
+    label: t("No Subtitles"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "missing",
-    label: "Missing",
+    label: t("Missing"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "cutoff",
-    label: "Cutoff Unmet",
+    label: t("Cutoff Unmet"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "cutoffunmet",
-    label: "Cutoff Unmet Count",
+    label: t("Cutoff Unmet Count"),
     type: "number",
     placeholder: "1",
   },
   {
     id: "recentlygrabbed",
-    label: "Recently Grabbed",
+    label: t("Recently Grabbed"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "airing",
-    label: "Airing/Available",
+    label: t("Airing/Available"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "scene",
-    label: "Scene",
+    label: t("Scene"),
     type: "bool",
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "episodes",
-    label: "Episodes",
+    label: t("Episodes"),
     type: "number",
     app: "sonarr",
     placeholder: "10",
   },
   {
     id: "seasons",
-    label: "Seasons",
+    label: t("Seasons"),
     type: "number",
     app: "sonarr",
     placeholder: "3",
   },
   {
     id: "totalsize",
-    label: "Size (GB)",
+    label: t("Size (GB)"),
     type: "number",
     placeholder: "10",
   },
   {
     id: "avgepisode",
-    label: "Avg Episode Size (GB)",
+    label: t("Avg Episode Size (GB)"),
     type: "number",
     app: "sonarr",
     placeholder: "1",
   },
   {
     id: "runtime",
-    label: "Runtime (mins)",
+    label: t("Runtime (mins)"),
     type: "number",
     placeholder: "60",
   },
   {
     id: "filesize",
-    label: "File Size (GB)",
+    label: t("File Size (GB)"),
     type: "number",
     app: "radarr",
     placeholder: "8",
   },
   {
     id: "gbperhour",
-    label: "GB per Hour",
+    label: t("GB per Hour"),
     type: "number",
     placeholder: "1",
   },
   {
     id: "instance",
-    label: "Instance",
+    label: t("Instance"),
     type: "string",
     allowCustom: true,
     values: () => {
@@ -2228,36 +2301,36 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "matchstatus",
-    label: "Match Status",
+    label: t("Match Status"),
     type: "string",
     tautulli: true,
     values: [
-      { label: "Matched", value: "matched" },
-      { label: "Unmatched", value: "unmatched" },
-      { label: "Skipped", value: "skipped" },
-      { label: "Unavailable", value: "unavailable" },
-      { label: "Future", value: "future" },
-      { label: "Not On Disk", value: "nodisk" },
-      { label: "Not Checked", value: "notchecked" },
+      { label: t("Matched"), value: "matched" },
+      { label: t("Unmatched"), value: "unmatched" },
+      { label: t("Skipped"), value: "skipped" },
+      { label: t("Unavailable"), value: "unavailable" },
+      { label: t("Future"), value: "future" },
+      { label: t("Not On Disk"), value: "nodisk" },
+      { label: t("Not Checked"), value: "notchecked" },
     ],
   },
   {
     id: "mismatch",
-    label: "Mismatch",
+    label: t("Mismatch"),
     type: "bool",
     tautulli: true,
     values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "playcount",
-    label: "Play Count",
+    label: t("Play Count"),
     type: "number",
     tautulli: true,
     placeholder: "1",
   },
   {
     id: "lastwatched",
-    label: "Last Watched",
+    label: t("Last Watched"),
     type: "string",
     tautulli: true,
     placeholder: "2024",
@@ -2265,42 +2338,42 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "dayssincewatched",
-    label: "Days Since Watched",
+    label: t("Days Since Watched"),
     type: "number",
     tautulli: true,
     placeholder: "30",
   },
   {
     id: "watchtime",
-    label: "Watch Time (hours)",
+    label: t("Watch Time (hours)"),
     type: "number",
     tautulli: true,
     placeholder: "10",
   },
   {
     id: "contenthours",
-    label: "Content Hours",
+    label: t("Content Hours"),
     type: "number",
     tautulli: true,
     placeholder: "10",
   },
   {
     id: "watchratio",
-    label: "Watch / Runtime Ratio",
+    label: t("Watch / Runtime Ratio"),
     type: "number",
     tautulli: true,
     placeholder: "1",
   },
   {
     id: "users",
-    label: "Users Watched",
+    label: t("Users Watched"),
     type: "number",
     tautulli: true,
     placeholder: "2",
   },
   {
     id: "neverwatched",
-    label: "Never Watched",
+    label: t("Never Watched"),
     type: "bool",
     tautulli: true,
     values: FILTER_TRUE_FALSE_VALUES,
@@ -2472,7 +2545,7 @@ function positionRadarrPosterTooltip(anchorRect) {
 }
 
 function setupRadarrPosterTooltipDelegation() {
-  if (!IMAGES_ENABLED) return;
+  if (!RADARR_IMAGES_ENABLED) return;
   if (setupRadarrPosterTooltipDelegation._done) return;
   setupRadarrPosterTooltipDelegation._done = true;
 
@@ -2919,8 +2992,8 @@ function withElapsedAge(ageSeconds) {
 }
 
 function formatCacheStatus(label, ageSeconds) {
-  if (ageSeconds == null) return `${label}: Awaiting data`;
-  return `${label}: ${formatAgeShort(ageSeconds)} ago`;
+  if (ageSeconds == null) return tp("cacheAwaitingData", { label }, `${label}: Awaiting data`);
+  return tp("cacheAgeAgo", { label, age: formatAgeShort(ageSeconds) }, `${label}: ${formatAgeShort(ageSeconds)} ago`);
 }
 
 function setPartialBanner(show) {
@@ -2935,88 +3008,121 @@ function updateFastModeBanner() {
 }
 
 function formatProgress(counts, configured, progressMeta, tautulliState, displayProcessed = null) {
-  if (!configured) return "Not configured";
+  if (!configured) return t("notConfigured", "Not configured");
+
   const progressActive = Boolean(tautulliState?.refresh_in_progress && progressMeta?.total);
-  const total = progressActive
-    ? progressMeta?.total || 0
-    : counts?.total || 0;
-  if (!total) return "No cached data";
+  const total = progressActive ? (progressMeta?.total || 0) : (counts?.total || 0);
+  if (!total) return t("noCachedData", "No cached data");
+
   const matched = progressActive
     ? (Number.isFinite(displayProcessed) ? displayProcessed : (progressMeta?.processed || 0))
-    : counts?.matched || 0;
-  const label = progressActive ? "processed" : "matched";
-  const base = `${matched}/${total} ${label}`;
+    : (counts?.matched || 0);
+
+  const labelKey = progressActive ? "processedLower" : "matchedLower";
+  const label = t(labelKey, progressActive ? "processed" : "matched");
+
+  const base = tp("progressBase", { matched, total, label }, `${matched}/${total} ${label}`);
+
   const progressAge = withElapsedAge(progressMeta?.updated_age_seconds);
   const progressAgeLabel = progressAge == null
-    ? "--"
-    : `${formatAgeShort(progressAge)} ago`;
+    ? t("progressAgeUnknown", "--")
+    : tp("progressAgeAgo", { age: formatAgeShort(progressAge) }, `${formatAgeShort(progressAge)} ago`);
+
   const progressSuffix = progressActive
-    ? ` | updated ${progressAgeLabel}`
+    ? tp("progressUpdatedSuffix", { ageLabel: progressAgeLabel }, ` | updated ${progressAgeLabel}`)
     : "";
-  const pending = progressActive
-    ? Math.max(total - matched, 0)
-    : (counts?.pending || 0);
-  if (pending > 0) return `${base} - ${pending} pending${progressSuffix}`;
+
+  const pending = progressActive ? Math.max(total - matched, 0) : (counts?.pending || 0);
+  if (pending > 0) {
+    return `${base}${tp("progressPendingSuffix", { pending }, ` - ${pending} pending`)}${progressSuffix}`;
+  }
+
   const notMatched = total - matched;
-  if (notMatched > 0) return `${base} - ${notMatched} not matched${progressSuffix}`;
+  if (notMatched > 0) {
+    return `${base}${tp("progressNotMatchedSuffix", { notMatched }, ` - ${notMatched} not matched`)}${progressSuffix}`;
+  }
+
   return `${base}${progressSuffix}`;
 }
 
+
 function formatTautulliStatus(state, progressMeta) {
-  if (!state || !state.configured) return "Not configured";
+  if (!state || !state.configured) return t("notConfigured", "Not configured");
+
   if (state.refresh_in_progress) {
     const total = Number.isFinite(progressMeta?.total) ? progressMeta.total : 0;
-    return total > 0 ? "Matching in progress" : `Receiving ${getPlaybackLabel()} data...`;
+    if (total > 0) return t("matchingInProgress", "Matching in progress");
+    return tp("receivingPlaybackData", { label: getPlaybackLabel() }, `Receiving ${getPlaybackLabel()} data...`);
   }
-  if (state.status === "stale") return "Awaiting data";
+
+  if (state.status === "stale") return t("awaitingData", "Awaiting data");
+
   const age = formatAgeShort(withElapsedAge(state.index_age_seconds));
-  return age === "--" ? "Matched" : `Matched (${age} ago)`;
+  if (age === "--") return t("matched", "Matched");
+  return tp("matchedWithAge", { age }, `Matched (${age} ago)`);
 }
 
+
 function formatStatusPillText(appState, tautulli, displayProcessed = null) {
-  if (!appState?.configured) return "Data status";
+  if (!appState?.configured) return t("dataStatus", "Data status");
+
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     const total = appState?.progress?.total || 0;
+
     if (!total) {
-      return `Receiving ${getPlaybackLabel()} data...`;
+      return tp("receivingPlaybackData", { label: getPlaybackLabel() }, `Receiving ${getPlaybackLabel()} data...`);
     }
-    if (total > 0) {
-      const processed = Number.isFinite(displayProcessed)
-        ? displayProcessed
-        : (appState?.progress?.processed || 0);
-      return `Matching ${processed}/${total}`;
-    }
-    return "Matching...";
+
+    const processed = Number.isFinite(displayProcessed)
+      ? displayProcessed
+      : (appState?.progress?.processed || 0);
+
+    return `${t("matching", "Matching")} ${processed}/${total}`;
   }
+
   if (isStatusPillLoadedActive(appState, tautulli)) {
-    return "Data loaded";
+    return t("dataLoaded", "Data loaded");
   }
-  return "Data status";
+
+  return t("dataStatus", "Data status");
 }
+
 
 function updateStatusPill(appState, tautulli, displayProcessed = null) {
   if (!statusPillEl) return;
+
   statusPillEl.textContent = formatStatusPillText(appState, tautulli, displayProcessed);
+
   const progress = appState?.progress;
-  let title = "Hover to expand data status";
+  let title = t("hoverToExpandDataStatus", "Hover to expand data status");
+
   const showLoaded = isStatusPillLoadedActive(appState, tautulli);
+
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     if (progress?.total) {
       const processed = Number.isFinite(displayProcessed)
         ? displayProcessed
         : (progress.processed || 0);
-      title = `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed). Hover to expand status.`;
+
+      title = tp(
+        "matchingInProgressHoverProcessed",
+        { label: getPlaybackLabel(), processed, total: progress.total },
+        `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed). Hover to expand status.`
+      );
     } else {
-      title = `Receiving ${getPlaybackLabel()} data. Hover to expand status.`;
+      title = tp(
+        "receivingPlaybackDataHover",
+        { label: getPlaybackLabel() },
+        `Receiving ${getPlaybackLabel()} data. Hover to expand status.`
+      );
     }
   } else if (showLoaded) {
-    title = "Data loaded. Hover to expand status.";
+    title = t("dataLoadedHover", "Data loaded. Hover to expand status.");
   }
+
   statusPillEl.title = title;
-  statusPillEl.classList.toggle(
-    "status-pill--pending",
-    Boolean(tautulli?.refresh_in_progress)
-  );
+
+  statusPillEl.classList.toggle("status-pill--pending", Boolean(tautulli?.refresh_in_progress));
   statusPillEl.classList.toggle("status-pill--loaded", showLoaded);
 }
 
@@ -4464,7 +4570,7 @@ function bindChipButtons(rootEl = document) {
         pendingStabilizeByApp[activeApp] = true;
       }
       const scrollAnchor = captureTableScrollAnchor();
-      render(dataByApp[activeApp] || [], { scrollAnchor });
+      scheduleChipRender(scrollAnchor);
       scheduleViewStateSave();
     });
   });
@@ -5504,7 +5610,7 @@ const EPISODE_GRID_MAIN_WIDTH = "minmax(120px, 18vw)";
 const EPISODE_GRID_COLUMNS = [
   {
     key: "runtime",
-    label: "Runtime",
+    label: t("Runtime"),
     className: "series-episode-runtime",
     width: "80px",
     extra: false,
@@ -5514,7 +5620,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "size",
-    label: "Size",
+    label: t("Size"),
     className: "series-episode-size",
     width: "100px",
     extra: false,
@@ -5527,7 +5633,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "quality",
-    label: "Video Quality",
+    label: t("Video Quality"),
     className: "series-episode-quality",
     width: "140px",
     extra: false,
@@ -5535,7 +5641,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "resolution",
-    label: "Resolution",
+    label: t("Resolution"),
     className: "series-episode-resolution",
     width: "120px",
     extra: false,
@@ -5543,7 +5649,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "videoCodec",
-    label: "Video Codec",
+    label: t("Video Codec"),
     className: "series-episode-video-codec",
     width: "120px",
     extra: false,
@@ -5551,7 +5657,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "audioCodec",
-    label: "Audio Codec",
+    label: t("Audio Codec"),
     className: "series-episode-audio-codec",
     width: "120px",
     extra: false,
@@ -5559,7 +5665,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "audioChannels",
-    label: "Audio Channels",
+    label: t("Audio Channels"),
     className: "series-episode-audio-channels",
     width: "110px",
     extra: false,
@@ -5569,7 +5675,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "audioLanguages",
-    label: "Languages",
+    label: t("Languages"),
     className: "series-episode-audio-langs",
     width: "150px",
     extra: false,
@@ -5589,7 +5695,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "airDate",
-    label: "Air Date",
+    label: t("Air Date"),
     className: "series-episode-air-date",
     width: "110px",
     extra: true,
@@ -5599,7 +5705,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "cutoff",
-    label: "Cutoff",
+    label: t("Cutoff"),
     className: "series-episode-cutoff",
     width: "90px",
     extra: true,
@@ -5609,7 +5715,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "monitored",
-    label: "Monitored",
+    label: t("Monitored"),
     className: "series-episode-monitored",
     width: "90px",
     extra: true,
@@ -5617,7 +5723,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "releaseGroup",
-    label: "Release Group",
+    label: t("Release Group"),
     className: "series-episode-release-group",
     width: "120px",
     extra: true,
@@ -5625,7 +5731,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "lastSearch",
-    label: "Last Search",
+    label: t("Last Search"),
     className: "series-episode-last-search",
     width: "150px",
     extra: true,
@@ -5635,7 +5741,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "customFormats",
-    label: "Custom Formats",
+    label: t("Custom Formats"),
     className: "series-episode-custom-formats",
     width: "180px",
     extra: true,
@@ -5645,7 +5751,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "customScore",
-    label: "CF Score",
+    label: t("CF Score"),
     className: "series-episode-custom-score",
     width: "90px",
     extra: true,
@@ -5890,8 +5996,10 @@ function buildEpisodeGridRow(episode, columns, index) {
   const ordered = Array.isArray(columns) && columns.length
     ? columns
     : EPISODE_GRID_COLUMNS;
+  const historyButton = buildEpisodeHistoryButton(episode);
   const cells = [
     `<div class="series-episode-main">
+      ${historyButton}
       <span class="series-episode-code"${overviewAttr}>${escapeHtml(code)}</span>
       <span class="series-episode-title"${overviewAttr}>${escapeHtml(episode.title || "Untitled")}</span>
     </div>`,
@@ -7855,11 +7963,11 @@ function parseAdvancedQuery(query) {
     if (comp) {
       const field = comp[1].toLowerCase();
       const op = comp[2];
-    if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
-      if (!playbackWarned) { warnings.push(playbackWarning()); playbackWarned = true; }
-      addPred(() => false);
-      continue;
-    }
+      if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
+        if (!playbackWarned) { warnings.push(playbackWarning()); playbackWarned = true; }
+        addPred(() => false);
+        continue;
+      }
       if (!NUMERIC_FIELDS.has(field)) {
         warnings.push(`Field '${field}' does not support numeric comparisons.`);
         addPred(() => false);
@@ -9738,7 +9846,8 @@ function buildRow(row, app, options = {}) {
   const titleLink = displayCache.titleLink;
   const matchOrb = buildMatchOrb(row);
   const seriesExpander = app === "sonarr" ? buildSeriesExpanderButton(row) : "";
-  const titleCell = `${seriesExpander}${ROW_REFRESH_BUTTON_HTML}<span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
+  const historyButton = app === "radarr" ? buildHistoryButton(row, app) : "";
+  const titleCell = `${seriesExpander}<span class="title-control-wrap">${ROW_REFRESH_BUTTON_HTML}${historyButton}</span><span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
   const dateAdded = formatDateAdded(row.DateAdded);
   const videoQuality = videoQualityState.value;
   const resolution = resolutionState.value;
@@ -9865,6 +9974,7 @@ function buildRow(row, app, options = {}) {
     <td data-col="VideoHDR">${videoHdr}</td>
     <td data-col="AudioCodec" ${audioCodecAttr}>${audioCodec}</td>
     <td data-col="AudioChannels" ${audioChannelsAttr}>${audioChannels}</td>
+    <td data-col="AudioLanguages">${audioLanguages}</td>
     <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
     <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
     <td class="right" data-col="PlayCount">${playCount}</td>
@@ -9915,7 +10025,6 @@ function buildRow(row, app, options = {}) {
     <td data-col="VideoHDR">${videoHdr}</td>
     <td data-col="AudioCodec" ${audioCodecAttr}>${audioCodec}</td>
     <td data-col="AudioChannels" ${audioChannelsAttr}>${audioChannels}</td>
-    <td data-col="AudioLanguages">${audioLanguages}</td>
     <td data-col="SubtitleLanguages">${subtitleLanguages}</td>
     <td class="diag-cell" data-col="Diagnostics">${diagButton}</td>
     <td class="right" data-col="PlayCount">${playCount}</td>
@@ -10548,9 +10657,10 @@ function render(data, options = {}) {
   const hiddenColumns = getHiddenColumns();
   const allowDeferred = resolveRenderFlag("deferHeavy", app);
   // Radarr large lists: render light rows first, hydrate heavy cells after.
+  const forceMobileVirtual = IS_MOBILE && app === "radarr";
   const virtualizeRadarr = app === "radarr" &&
     resolveRenderFlag("virtualize", app) &&
-    sorted.length >= RADARR_VIRTUAL_MIN_ROWS;
+    (forceMobileVirtual || sorted.length >= RADARR_VIRTUAL_MIN_ROWS);
   const deferredColumns = allowDeferred
     ? getDeferredColumns(app, hiddenColumns, { virtualize: virtualizeRadarr })
     : new Set();
@@ -10589,7 +10699,9 @@ function render(data, options = {}) {
     };
   setBatching(shouldBatch);
 
-  const virtualizeRows = app === "radarr" && resolveRenderFlag("virtualRows", app) && sorted.length >= VIRTUAL_MIN_ROWS;
+  const virtualizeRows = app === "radarr" &&
+    resolveRenderFlag("virtualRows", app) &&
+    (forceMobileVirtual || sorted.length >= VIRTUAL_MIN_ROWS);
   if (virtualizeRows) {
     const ok = enableVirtualRows(sorted, app, rowOptions, token, perf);
     if (ok) {
@@ -10723,11 +10835,11 @@ async function load(refresh, options = {}) {
   try {
     const label = refresh
       ? app === "sonarr"
-        ? "Fetching new Sonarr data..."
-        : "Fetching new Radarr data..."
+        ? I18N.fetchingNewSonarrData
+        : I18N.fetchingNewRadarrData
       : app === "sonarr"
-        ? "Loading Sonarr data..."
-        : "Loading Radarr data...";
+        ? I18N.loadingSonarrData
+        : I18N.loadingRadarrData;
     const hasData = (dataByApp[app] || []).length > 0;
     if (app === activeApp && !background) {
       setLoading(true, label);
@@ -10932,11 +11044,11 @@ if (refreshTautulliBtn) {
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
       }
       const data = await res.json();
-        if (data.refresh_in_progress || data.started) {
-          setStatusNotice(getPlaybackMatchingNotice());
-          if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
-          if (configState.radarrConfigured) setTautulliPending("radarr", true);
-          updateBackgroundLoading();
+      if (data.refresh_in_progress || data.started) {
+        setStatusNotice(getPlaybackMatchingNotice());
+        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+        if (configState.radarrConfigured) setTautulliPending("radarr", true);
+        updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
       setStatus(`${label} refresh started.`);
@@ -10959,11 +11071,11 @@ if (deepRefreshTautulliBtn) {
         throw new Error(`${res.status} ${res.statusText}: ${txt}`);
       }
       const data = await res.json();
-        if (data.refresh_in_progress || data.started) {
-          setStatusNotice(getPlaybackMatchingNotice());
-          if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
-          if (configState.radarrConfigured) setTautulliPending("radarr", true);
-          updateBackgroundLoading();
+      if (data.refresh_in_progress || data.started) {
+        setStatusNotice(getPlaybackMatchingNotice());
+        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
+        if (configState.radarrConfigured) setTautulliPending("radarr", true);
+        updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
       setStatus(`${label} refresh started. This can take a while.`);
@@ -11602,6 +11714,337 @@ async function loadConfig() {
     console.warn("config load failed", e);
   }
 }
+
+// History drawer state and helpers
+const historyDrawerState = {
+  open: false,
+  expanded: false,
+  loading: false,
+  data: null,
+  target: null,
+};
+let historyOverlayEl = null;
+let historyDrawerEl = null;
+let historyBodyEl = null;
+let historySummaryEl = null;
+let historyExpandBtn = null;
+let historyExportBtn = null;
+let historyTitleEl = null;
+
+function buildHistoryButton(row, app) {
+  if (app === "radarr") {
+    const movieId = row.MovieId ?? row.movieId;
+    if (!movieId) return "";
+    const instanceId = escapeHtml(String(row.InstanceId ?? row.instanceId ?? ""));
+    const title = escapeHtml(formatRowTitle(row, app) || "");
+    return `<button class="history-btn" type="button" data-history-btn="1" data-app="radarr" data-instance-id="${instanceId}" data-movie-id="${escapeHtml(String(movieId))}" data-history-title="${title}" aria-label="History">H</button>`;
+  }
+  return "";
+}
+
+function buildEpisodeHistoryButton(episode) {
+  const episodeId = episode.id ?? episode.episodeId ?? "";
+  if (!episodeId) return "";
+  const seriesId = episode.seriesId ?? episode.SeriesId ?? "";
+  const instanceId = episode.instanceId ?? episode.InstanceId ?? "";
+  const title = escapeHtml(String(episode.title || "Episode"));
+  return `<button class="history-btn history-btn--episode" type="button" data-history-btn="1" data-app="sonarr" data-series-id="${escapeHtml(String(seriesId))}" data-episode-id="${escapeHtml(String(episodeId))}" data-instance-id="${escapeHtml(String(instanceId))}" data-history-title="${title}" aria-label="History">H</button>`;
+}
+
+function ensureHistoryDrawer() {
+  if (historyOverlayEl && historyDrawerEl) return;
+  historyOverlayEl = document.createElement("div");
+  historyOverlayEl.className = "history-overlay hidden";
+  historyOverlayEl.innerHTML = `
+    <div class="history-scrim" data-history-close="1"></div>
+    <div class="history-drawer glass-panel">
+      <div class="history-header">
+        <div class="history-title" data-role="history-title">History</div>
+        <div class="history-actions">
+          <button class="history-btn-text" type="button" data-role="history-export">Export CSV</button>
+          <button class="history-close" type="button" aria-label="Close" data-history-close="1">\u00d7</button>
+        </div>
+      </div>
+      <div class="history-summary" data-role="history-summary"></div>
+      <button class="history-expand" type="button" data-role="history-expand">Show all events</button>
+      <div class="history-body" data-role="history-body"></div>
+    </div>
+  `;
+  historyDrawerEl = historyOverlayEl.querySelector(".history-drawer");
+  historyBodyEl = historyOverlayEl.querySelector('[data-role="history-body"]');
+  historySummaryEl = historyOverlayEl.querySelector('[data-role="history-summary"]');
+  historyExpandBtn = historyOverlayEl.querySelector('[data-role="history-expand"]');
+  historyExportBtn = historyOverlayEl.querySelector('[data-role="history-export"]');
+  historyTitleEl = historyOverlayEl.querySelector('[data-role="history-title"]');
+  document.body.appendChild(historyOverlayEl);
+}
+
+function setHistoryExpanded(expanded) {
+  historyDrawerState.expanded = expanded;
+  if (historyExpandBtn) {
+    historyExpandBtn.textContent = expanded ? "Show latest vs previous" : "Show all events";
+    historyExpandBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
+  }
+  renderHistoryContent();
+}
+
+function formatHistorySize(bytes) {
+  const size = Number(bytes || 0);
+  if (!size || size < 0) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let v = size;
+  let idx = 0;
+  while (v >= 1024 && idx < units.length - 1) {
+    v /= 1024;
+    idx += 1;
+  }
+  return `${v.toFixed(v >= 10 ? 0 : 1)} ${units[idx]}`;
+}
+
+function formatHistoryEventLabel(eventType) {
+  const map = {
+    grabbed: "Grabbed",
+    downloadFolderImported: "Imported",
+    movieFolderImported: "Imported",
+    seriesFolderImported: "Imported",
+    episodeFileRenamed: "Renamed",
+    movieFileRenamed: "Renamed",
+    downloadFailed: "Failed",
+    downloadIgnored: "Ignored",
+    episodeFileDeleted: "Deleted",
+    movieFileDeleted: "Deleted",
+  };
+  return map[eventType] || (eventType ? eventType : "Unknown");
+}
+
+function summarizeQuality(ev) {
+  const name = ev?.qualityName || "";
+  const res = ev?.qualityResolution ? `${ev.qualityResolution}p` : "";
+  const source = ev?.qualitySource || "";
+  return [name, res, source].filter(Boolean).join(" · ");
+}
+
+function renderHistorySummaryContent(data) {
+  if (!historySummaryEl) return;
+  if (!data || !data.all) {
+    historySummaryEl.textContent = "No history yet—will populate on next grab/import.";
+    return;
+  }
+  const latest = data.latest;
+  const previous = data.previous;
+  if (!latest && !previous) {
+    historySummaryEl.textContent = "No file history yet—will populate on next grab/import.";
+    return;
+  }
+  const buildRow = (label, ev) => {
+    if (!ev) return `<div class="history-summary-row"><div class="history-summary-label">${escapeHtml(label)}</div><div class="history-summary-empty">No data</div></div>`;
+    const size = formatHistorySize(ev.size);
+    const score = Number(ev.customFormatScore || 0);
+    const deltaScore = previous && label === "Latest" ? score - Number(previous.customFormatScore || 0) : null;
+    const sizeDelta = previous && label === "Latest" && ev.size && previous.size ? ev.size - previous.size : null;
+    const deltaParts = [];
+    if (deltaScore !== null) deltaParts.push(`CF ${deltaScore >= 0 ? "+" : ""}${deltaScore}`);
+    if (sizeDelta !== null) deltaParts.push(`${sizeDelta >= 0 ? "+" : ""}${formatHistorySize(sizeDelta)}`);
+    const deltas = deltaParts.length ? `<div class="history-summary-delta">${deltaParts.join(" / ")}</div>` : "";
+    return `
+      <div class="history-summary-row">
+        <div class="history-summary-label">${escapeHtml(label)}</div>
+        <div class="history-summary-main">
+          <div class="history-summary-line">
+            <span class="history-event">${escapeHtml(formatHistoryEventLabel(ev.eventType))}</span>
+            <span class="history-quality">${escapeHtml(summarizeQuality(ev))}</span>
+            ${size ? `<span class="history-size">${escapeHtml(size)}</span>` : ""}
+          </div>
+          <div class="history-summary-sub">
+            <span>${escapeHtml(ev.date || "")}</span>
+            ${ev.sourceTitle ? `<span class="muted">${escapeHtml(ev.sourceTitle)}</span>` : ""}
+          </div>
+        </div>
+        ${deltas}
+      </div>
+    `;
+  };
+  historySummaryEl.innerHTML = buildRow("Latest", latest) + buildRow("Previous", previous);
+}
+
+function renderHistoryTimeline(data) {
+  if (!historyBodyEl) return;
+  if (!data || !Array.isArray(data.all) || !data.all.length) {
+    historyBodyEl.textContent = "No events available.";
+    return;
+  }
+  const items = historyDrawerState.expanded ? data.all : (data.latest ? [data.latest] : []);
+  const timeline = items.map(ev => {
+    const size = formatHistorySize(ev.size);
+    const quality = summarizeQuality(ev);
+    const languages = (ev.languages || []).join(", ");
+    return `
+      <div class="history-row">
+        <div class="history-row-primary">
+          <span class="history-event">${escapeHtml(formatHistoryEventLabel(ev.eventType))}</span>
+          <span class="history-quality">${escapeHtml(quality)}</span>
+          ${size ? `<span class="history-size">${escapeHtml(size)}</span>` : ""}
+          ${ev.customFormatScore ? `<span class="history-cf">CF ${escapeHtml(String(ev.customFormatScore))}</span>` : ""}
+        </div>
+        <div class="history-row-meta">
+          <span>${escapeHtml(ev.date || "")}</span>
+          ${ev.sourceTitle ? `<span class="muted">${escapeHtml(ev.sourceTitle)}</span>` : ""}
+          ${languages ? `<span class="muted">${escapeHtml(languages)}</span>` : ""}
+          ${ev.releaseGroup ? `<span class="muted">RG: ${escapeHtml(ev.releaseGroup)}</span>` : ""}
+          ${ev.downloadId ? `<span class="muted">DL: ${escapeHtml(ev.downloadId)}</span>` : ""}
+        </div>
+      </div>
+    `;
+  });
+  historyBodyEl.innerHTML = timeline.join("") || "No events available.";
+}
+
+function renderHistoryContent() {
+  if (historyDrawerState.loading) {
+    if (historySummaryEl) historySummaryEl.textContent = "Fetching history...";
+    if (historyBodyEl) historyBodyEl.textContent = "";
+    return;
+  }
+  renderHistorySummaryContent(historyDrawerState.data);
+  renderHistoryTimeline(historyDrawerState.data);
+  if (historyDrawerState.data && historyDrawerState.data.historyStart && historyBodyEl) {
+    historyBodyEl.insertAdjacentHTML(
+      "beforeend",
+      `<div class="history-note muted">History begins ${escapeHtml(historyDrawerState.data.historyStart)} (from Arr)</div>`
+    );
+  }
+}
+
+function closeHistoryDrawer() {
+  historyDrawerState.open = false;
+  historyDrawerState.data = null;
+  historyDrawerState.loading = false;
+  if (historyOverlayEl) historyOverlayEl.classList.add("hidden");
+  document.body.classList.remove("history-open");
+}
+
+async function fetchHistoryData(target) {
+  const params = new URLSearchParams();
+  params.set("app", target.app);
+  if (target.instanceId) params.set("instance_id", target.instanceId);
+  if (target.app === "radarr") {
+    params.set("movieId", target.movieId);
+  } else {
+    params.set("seriesId", target.seriesId);
+    params.set("episodeId", target.episodeId);
+  }
+  const res = await fetch(apiUrl(`/api/history?${params.toString()}`));
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "History request failed");
+  }
+  return res.json();
+}
+
+function exportHistoryCsv(data, target) {
+  if (!data || !Array.isArray(data.all) || !data.all.length) return;
+  const rows = data.all.map(ev => ({
+    title: target?.title || "",
+    instance: target?.instanceId || "",
+    app: target?.app || "",
+    seriesId: ev.seriesId || "",
+    episodeId: ev.episodeId || "",
+    movieId: ev.movieId || "",
+    eventDate: ev.date || "",
+    eventType: ev.eventType || "",
+    sourceTitle: ev.sourceTitle || "",
+    qualityName: ev.qualityName || "",
+    qualityResolution: ev.qualityResolution || "",
+    qualitySource: ev.qualitySource || "",
+    customFormats: (ev.customFormats || []).join("|"),
+    customFormatScore: ev.customFormatScore || "",
+    qualityCutoffNotMet: ev.qualityCutoffNotMet ? "1" : "0",
+    size: ev.size || "",
+    languages: (ev.languages || []).join("|"),
+    releaseGroup: ev.releaseGroup || "",
+    downloadId: ev.downloadId || "",
+    rawDataJson: ev.data ? JSON.stringify(ev.data) : "",
+  }));
+  const header = Object.keys(rows[0]);
+  const csv = [header.join(",")].concat(
+    rows.map(r => header.map(h => `"${String(r[h] ?? "").replace(/"/g, '""')}"`).join(","))
+  ).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `history_${target?.app || "arr"}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  }, 100);
+}
+
+async function openHistoryFromButton(btn) {
+  const app = (btn.dataset.app || "").toLowerCase();
+  if (!app) return;
+  ensureHistoryDrawer();
+  const title = btn.dataset.historyTitle || "";
+  const target = {
+    app,
+    instanceId: btn.dataset.instanceId || "",
+    seriesId: btn.dataset.seriesId || "",
+    episodeId: btn.dataset.episodeId || "",
+    movieId: btn.dataset.movieId || "",
+    title,
+  };
+  if (app === "sonarr" && (!target.seriesId || !target.episodeId)) {
+    const expansion = btn.closest(".series-expansion");
+    if (expansion) {
+      target.seriesId = target.seriesId || expansion.dataset.seriesId || "";
+      target.instanceId = target.instanceId || expansion.dataset.instanceId || "";
+    }
+  }
+  historyDrawerState.target = target;
+  historyDrawerState.loading = true;
+  historyDrawerState.expanded = false;
+  historyDrawerState.data = null;
+  if (historyTitleEl) historyTitleEl.textContent = title || "History";
+  if (historyOverlayEl) historyOverlayEl.classList.remove("hidden");
+  document.body.classList.add("history-open");
+  renderHistoryContent();
+  try {
+    const data = await fetchHistoryData(target);
+    historyDrawerState.data = data;
+  } catch (err) {
+    if (historySummaryEl) historySummaryEl.textContent = err.message || "Failed to load history.";
+    if (historyBodyEl) historyBodyEl.textContent = "";
+    historyDrawerState.loading = false;
+    return;
+  }
+  historyDrawerState.loading = false;
+  renderHistoryContent();
+}
+
+document.addEventListener("click", event => {
+  const historyBtn = event.target.closest("[data-history-btn]");
+  if (historyBtn) {
+    event.preventDefault();
+    openHistoryFromButton(historyBtn);
+    return;
+  }
+  if (historyOverlayEl && !historyOverlayEl.classList.contains("hidden")) {
+    if (event.target.matches("[data-history-close]")) {
+      closeHistoryDrawer();
+    } else if (historyExpandBtn && event.target === historyExpandBtn) {
+      setHistoryExpanded(!historyDrawerState.expanded);
+    } else if (historyExportBtn && event.target === historyExportBtn) {
+      exportHistoryCsv(historyDrawerState.data, historyDrawerState.target);
+    }
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && historyOverlayEl && !historyOverlayEl.classList.contains("hidden")) {
+    closeHistoryDrawer();
+  }
+});
 
 /* init */
 (async function init() {
