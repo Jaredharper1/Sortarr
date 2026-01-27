@@ -5277,6 +5277,7 @@ html.is-ios table[data-app="radarr"] .match-diag-btn,
 html.is-ios table[data-app="radarr"] .row-refresh-btn--title,
 html.is-ios table[data-app="radarr"] .history-btn,
 html.is-ios table[data-app="radarr"] .lang-toggle,
+html.is-ios table[data-app="sonarr"] .lang-toggle,
 html.is-ios table[data-app="sonarr"] .series-season-toggle,
 html.is-ios table[data-app="sonarr"] .series-expansion-toggle {
   min-height: 0;
