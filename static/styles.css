@@ -5255,13 +5255,23 @@ html.is-ios .table-wrap {
   touch-action: pan-y;
 }
 
-@media (pointer: coarse) {
-  .column-row {
-    padding: 10px 10px;
-    gap: 12px;
-    /* remove min-height and font-size inflation */
-  }
+/* iOS only: increase tap targets and prevent iOS input zoom */
+html.is-ios button,
+html.is-ios select,
+html.is-ios input[type="text"],
+html.is-ios input[type="search"] {
+  min-height: 44px;
+  /* Apple HIG tap target */
+  font-size: 16px;
+  /* Prevents iOS Safari zoom on focus */
 }
+
+/* iOS only table scale tweak */
+html.is-ios .table-wrap {
+  font-size: 0.95rem;
+}
+
+
 
 html.is-ios table[data-app="radarr"] .match-diag-btn,
 html.is-ios table[data-app="radarr"] .row-refresh-btn--title,
@@ -5286,14 +5296,6 @@ html.is-ios table[data-app="sonarr"] .series-expansion-toggle {
   width: 22px;
   height: 22px;
   flex: 0 0 auto;
-}
-
-button,
-select,
-input[type="text"],
-input[type="search"] {
-  min-height: 44px;
-  font-size: 16px;
 }
 
 .table-wrap {
