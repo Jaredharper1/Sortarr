@@ -1,18 +1,28 @@
 (function () {
-  const ua = navigator.userAgent || "";
+  const ua = (navigator.userAgent || "").toLowerCase();
+
   const isIOS =
-    /iPad|iPhone|iPod/.test(ua) ||
+    /ipad|iphone|ipod/.test(ua) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
   const isSafari =
-    /Safari/.test(ua) && !/Chrome|Chromium|Edg|OPR|Android/.test(ua);
-  const isFirefox = /Firefox/i.test(ua);
+    ua.includes("safari") &&
+    !ua.includes("chrome") &&
+    !ua.includes("chromium") &&
+    !ua.includes("edg") &&
+    !ua.includes("opr") &&
+    !ua.includes("android");
+
+  const isFirefox = ua.includes("firefox");
+  const isCoarse = window.matchMedia("(pointer: coarse)").matches;
 
   const root = document.documentElement;
   if (isIOS) root.classList.add("is-ios");
   if (isSafari) root.classList.add("is-safari");
   if (isFirefox) root.classList.add("is-firefox");
+  if (isCoarse) root.classList.add("is-coarse");
 })();
+
 
 const tbody = document.getElementById("tbody");
 const statusEl = document.getElementById("status");
@@ -87,6 +97,103 @@ const TABLE_SCROLL_SNAP_MIN_MS = 140;
 const TABLE_SCROLL_SNAP_MAX_MS = 260;
 const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
+const I18N = window.I18N || {};
+window.I18N = I18N;
+
+function lockPageZoomIOSButAllowTableCustomZoom() {
+  if (!IS_IOS) return;
+
+  const isInTable = (target) =>
+    Boolean(tableWrapEl && target && tableWrapEl.contains(target));
+
+  // 1) Kill iOS native pinch zoom / gesture zoom everywhere.
+  // This prevents "whole page zoom" even when the pinch starts on the table.
+  ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+    document.addEventListener(
+      eventName,
+      (e) => {
+        e.preventDefault();
+      },
+      { passive: false, capture: true }
+    );
+  });
+
+  // 2) Also block the two-finger touch fallback (some iOS builds zoom via touchmove).
+  document.addEventListener(
+    "touchmove",
+    (e) => {
+      if (e.touches && e.touches.length === 2 && !isInTable(e.target)) {
+        e.preventDefault();
+      }
+      // If the pinch is in the table, your existing wrap touch handlers
+      // already preventDefault and apply custom scale().
+    },
+    { passive: false, capture: true }
+  );
+
+  // 3) Block double-tap-to-zoom outside the table (optional, but usually desired)
+  let lastTap = 0;
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (isInTable(e.target)) return;
+      if (!e.changedTouches || e.changedTouches.length !== 1) return;
+
+      const now = Date.now();
+      if (now - lastTap < 320) {
+        e.preventDefault();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+      }
+    },
+    { passive: false, capture: true }
+  );
+}
+
+
+function enableNoPageZoomExceptTable() {
+  if (!IS_IOS) return;
+
+  const isInTable = (target) => {
+    return Boolean(tableWrapEl && target && tableWrapEl.contains(target));
+  };
+
+  // Block iOS pinch-zoom on the page, except when the gesture starts inside the table.
+  ["gesturestart", "gesturechange", "gestureend"].forEach((eventName) => {
+    document.addEventListener(
+      eventName,
+      (e) => {
+        if (isInTable(e.target)) return; // allow table area
+        e.preventDefault();              // block page zoom
+      },
+      { passive: false }
+    );
+  });
+
+  // Block double-tap-to-zoom on the page, except inside the table.
+  let lastTap = 0;
+  document.addEventListener(
+    "touchend",
+    (e) => {
+      if (isInTable(e.target)) return;
+      if (!e.changedTouches || e.changedTouches.length !== 1) return;
+
+      const now = Date.now();
+      if (now - lastTap < 320) {
+        e.preventDefault();
+        lastTap = 0;
+      } else {
+        lastTap = now;
+      }
+    },
+    { passive: false }
+  );
+}
+
+// call once during init (after tableWrapEl exists)
+//enableNoPageZoomExceptTable();
+
 
 function focusNoScroll(el) {
   if (!el) return;
@@ -97,17 +204,23 @@ function focusNoScroll(el) {
   }
 }
 
-function t(key, fallback) {
-  return (window.I18N && window.I18N[key]) || fallback || key;
+
+function t(key, fallback, vars) {
+  const dict = window.I18N || {};
+  let s = (dict[key] !== undefined && dict[key] !== null)
+    ? dict[key]
+    : (fallback !== undefined ? fallback : key);
+
+  if (!vars) return s;
+
+  return String(s).replace(/%\(([^)]+)\)s/g, (_, name) => {
+    if (Object.prototype.hasOwnProperty.call(vars, name)) return String(vars[name]);
+    return `%(${name})s`;
+  });
 }
 
 function tp(key, params, fallback) {
-  let s = t(key, fallback);
-  if (!params) return s;
-  for (const [k, v] of Object.entries(params)) {
-    s = s.replaceAll(`%(${k})s`, String(v));
-  }
-  return s;
+  return t(key, fallback, params);
 }
 
 function withWrapScrollLock(fn) {
@@ -122,16 +235,7 @@ function withWrapScrollLock(fn) {
   });
 }
 
-function t(key, fallback, vars) {
-  const s = (I18N && I18N[key]) ? I18N[key] : fallback;
 
-  if (!vars) return s;
-
-  return String(s).replace(/%\(([^)]+)\)s/g, (_, name) => {
-    if (Object.prototype.hasOwnProperty.call(vars, name)) return String(vars[name]);
-    return `%(${name})s`;
-  });
-}
 
 
 // Perf overlay (Phase 0)
@@ -281,6 +385,19 @@ let selectedRowEl = null;
 let selectedSeasonRowEl = null;
 let selectedEpisodeRowEl = null;
 let pointerSelectionEnabled = true;
+let tableTouchActive = false;
+let tableTouchActiveTimer = null;
+
+function setTableTouchActive(active) {
+  tableTouchActive = active;
+  if (!active) return;
+  if (tableTouchActiveTimer) window.clearTimeout(tableTouchActiveTimer);
+  tableTouchActiveTimer = window.setTimeout(() => {
+    tableTouchActive = false;
+    tableTouchActiveTimer = null;
+  }, 200);
+}
+
 const keyboardNavState = {
   level: "rows",
   rowIndex: -1,
@@ -993,7 +1110,23 @@ if (tableWrapEl) {
   lastTableScrollTop = tableWrapEl.scrollTop;
   tableWrapEl.addEventListener("scroll", handleTableWrapScroll, { passive: true });
   tableWrapEl.addEventListener("wheel", cancelTableScrollSnap, { passive: true });
-  tableWrapEl.addEventListener("touchstart", cancelTableScrollSnap, { passive: true });
+  tableWrapEl.addEventListener("touchstart", () => {
+    cancelTableScrollSnap();
+    setTableTouchActive(true);
+  }, { passive: true });
+
+  tableWrapEl.addEventListener("touchmove", () => {
+    setTableTouchActive(true);
+  }, { passive: true });
+
+  tableWrapEl.addEventListener("touchend", () => {
+    setTableTouchActive(true);
+  }, { passive: true });
+
+  tableWrapEl.addEventListener("touchcancel", () => {
+    setTableTouchActive(true);
+  }, { passive: true });
+
   window.addEventListener("keydown", cancelTableScrollSnap);
   tableWrapEl.addEventListener("focus", () => {
     tableHasFocus = true;
@@ -1003,6 +1136,9 @@ if (tableWrapEl) {
   });
   tableWrapEl.addEventListener("keydown", handleTableKeydown);
 }
+
+
+
 
 function getTableHeaderHeight() {
   if (!tableEl) return 0;
@@ -1039,6 +1175,8 @@ function isSeriesExpansionActive() {
 
 function tableCanSnapScroll() {
   if (!tableWrapEl || !tbody || !tableEl) return false;
+  // Disable the "auto align to nearest row" behavior on iOS
+  if (IS_IOS) return false;
   if (pendingScrollAnchor) return false;
   if (tableEl.classList.contains("is-batching")) return false;
   if (isSeriesExpansionActive()) return false;
@@ -1250,6 +1388,13 @@ function animateTableScrollTo(targetTop) {
 
 function handleTableWrapScroll() {
   if (!tableWrapEl) return;
+
+  // Don’t do scroll snapping while touch gestures are in play (iOS pinch/drag)
+  if (tableTouchActive) {
+    lastTableScrollTop = tableWrapEl.scrollTop;
+    return;
+  }
+
   if (tableScrollSnapInProgress) return;
   if (isSeriesExpansionActive()) {
     lastTableScrollTop = tableWrapEl.scrollTop;
@@ -1713,7 +1858,7 @@ function getPlaybackLabel() {
 function getPlaybackMatchingNotice() {
   const label = getPlaybackLabel();
   if (label && label !== "Playback") {
-    return t("matchingInProgressLabel", "%(label)s matching in progress.", { label });
+    return t("matchingInProgressLabel", "%%(label)s matching in progress.", { label });
   }
   return PLAYBACK_MATCHING_NOTICE;
 }
@@ -3052,7 +3197,7 @@ function formatTautulliStatus(state, progressMeta) {
   if (state.refresh_in_progress) {
     const total = Number.isFinite(progressMeta?.total) ? progressMeta.total : 0;
     if (total > 0) return t("matchingInProgress", "Matching in progress");
-    return tp("receivingPlaybackData", { label: getPlaybackLabel() }, `Receiving ${getPlaybackLabel()} data...`);
+    return tp("receivingPlaybackData", { label: getPlaybackLabel() }, "Receiving %%(label)s data...");
   }
 
   if (state.status === "stale") return t("awaitingData", "Awaiting data");
@@ -3070,7 +3215,7 @@ function formatStatusPillText(appState, tautulli, displayProcessed = null) {
     const total = appState?.progress?.total || 0;
 
     if (!total) {
-      return tp("receivingPlaybackData", { label: getPlaybackLabel() }, `Receiving ${getPlaybackLabel()} data...`);
+      return tp("receivingPlaybackData", { label: getPlaybackLabel() }, "Receiving %%(label)s data...");
     }
 
     const processed = Number.isFinite(displayProcessed)
@@ -3113,7 +3258,7 @@ function updateStatusPill(appState, tautulli, displayProcessed = null) {
       title = tp(
         "receivingPlaybackDataHover",
         { label: getPlaybackLabel() },
-        `Receiving ${getPlaybackLabel()} data. Hover to expand status.`
+        "Receiving %%(label)s data... Hover to expand status."
       );
     }
   } else if (showLoaded) {
@@ -3330,12 +3475,22 @@ function muteStatusCompleteNote(muted) {
 function startStatusCountdown() {
   if (!statusRowEl || !statusCompleteNoteEl) return;
   if (statusRowEl.classList.contains("status-row--hidden") || statusCountdownTimer) return;
+
+  const renderCountdownText = () =>
+    t(
+      "dataLoadedHidingIn",
+      "Data loaded. Hiding in %(seconds)s…",
+      { seconds: statusCountdownRemaining }
+    );
+
   statusCountdownRemaining = STATUS_COUNTDOWN_SECONDS;
-  updateStatusCompleteNote(`Data loaded. Hiding in ${statusCountdownRemaining}s...`, true);
+  updateStatusCompleteNote(renderCountdownText(), true);
+
   if (statusFlashTimer) {
     clearTimeout(statusFlashTimer);
     statusFlashTimer = null;
   }
+
   statusRowEl.classList.remove("status-row--complete-flash");
   if (!statusCompletionFlashed) {
     void statusRowEl.offsetWidth;
@@ -3346,11 +3501,10 @@ function startStatusCountdown() {
       statusFlashTimer = null;
     }, 2600);
   }
+
   statusCountdownTimer = setInterval(() => {
-    const hovering = isStatusHovering();
-    if (hovering) {
-      return;
-    }
+    if (isStatusHovering()) return;
+
     statusCountdownRemaining -= 1;
     if (statusCountdownRemaining <= 0) {
       clearStatusCountdown();
@@ -3358,7 +3512,8 @@ function startStatusCountdown() {
       hideStatusRow();
       return;
     }
-    updateStatusCompleteNote(`Data loaded. Hiding in ${statusCountdownRemaining}s...`, true);
+
+    updateStatusCompleteNote(renderCountdownText(), true);
   }, 1000);
 }
 
@@ -3418,11 +3573,21 @@ function getArrRefreshSuffix(app, instance, index, total) {
   return `${appLabel} ${index + 1}`;
 }
 
+
+
 function formatArrRefreshLabel(app, suffix) {
   const appLabel = getAppLabel(app);
-  const base = `Refresh ${appLabel} metadata`;
+  const base = t(
+    "refreshArrMetadata",
+    "Refresh %(appLabel)s metadata",
+    { appLabel }
+  );
   if (!suffix) return base;
-  return `${base} (${suffix})`;
+  return t(
+    "refreshArrMetadataWithSuffix",
+    "%(base)s (%(suffix)s)",
+    { base, suffix }
+  );
 }
 
 function formatArrRefreshStatusLabel(app, suffix) {
@@ -3435,8 +3600,17 @@ function updatePrimaryRefreshButton() {
   if (!refreshTabBtn) return;
   const appLabel = getAppLabel(activeApp);
   const configured = getAppConfigured(activeApp);
-  refreshTabBtn.textContent = `Refresh ${appLabel} data`;
-  refreshTabBtn.title = `Refresh ${appLabel} metadata, reload ${appLabel} data, and update the cache.`;
+
+  refreshTabBtn.textContent = t(
+    "refreshArrData",
+    "Refresh %(appLabel)s data",
+    { appLabel }
+  );
+  refreshTabBtn.title = t(
+    "refreshArrDataTitle",
+    "Refresh %(appLabel)s metadata, reload %(appLabel)s data, and update the cache.",
+    { appLabel }
+  );
   refreshTabBtn.disabled = !configured || isLoading;
 }
 
@@ -3444,15 +3618,15 @@ async function refreshActiveAppData() {
   const app = activeApp;
   const appLabel = getAppLabel(app);
   if (!getAppConfigured(app)) {
-    setStatus(`${appLabel} is not configured.`);
+    setStatus(t("appNotConfigured", "%(app)s is not configured.", { app: appLabel }));
     return;
   }
-  setStatus(`Refreshing ${appLabel} data...`);
+  setStatus(t("refreshingAppData", "Refreshing %(app)s data...", { app: appLabel }));
   try {
     await requestArrRefresh(app);
-    setStatus(`${appLabel} metadata refresh queued.`);
+    setStatus(t("appMetadataRefreshQueued", "%(app)s metadata refresh queued.", { app: appLabel }));
   } catch (e) {
-    setStatus(`Error: ${e.message}`);
+    setStatus(t("errorPrefix", "Error: ") + e.message);
   }
   load(true);
 }
@@ -3486,7 +3660,11 @@ function updateArrRefreshButtons() {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = label;
-    btn.title = `Ask ${statusLabel} to refresh its metadata. Sortarr updates on the next fetch.`;
+    btn.title = t(
+      "askArrRefreshMetadata",
+      "Ask %(app)s to refresh its metadata. Sortarr updates on the next fetch.",
+      { app: statusLabel }
+    );
     btn.dataset.app = app;
     if (instanceId) btn.dataset.instanceId = instanceId;
     const busy = busySet.has(instanceId);
@@ -3496,12 +3674,12 @@ function updateArrRefreshButtons() {
       if (busySet.has(instanceId)) return;
       busySet.add(instanceId);
       updateArrRefreshButtons();
-      setStatus(`Refreshing ${statusLabel}...`);
+      setStatus(t("refreshingAppData", "Refreshing %(app)s data...", { app: statusLabel }));
       try {
         await requestArrRefresh(app, instanceId ? { instanceId } : {});
-        setStatus(`${statusLabel} refresh queued.`);
+        setStatus(t("appRefreshQueued", "%(app)s refresh queued.", { app: statusLabel }));
       } catch (e) {
-        setStatus(`Error: ${e.message}`);
+        setStatus(t("errorPrefix", "Error: ") + e.message);
       } finally {
         busySet.delete(instanceId);
         updateArrRefreshButtons();
@@ -3535,7 +3713,7 @@ function updateStatusPanel() {
     const parts = [];
     const appCache = statusState.apps?.[activeApp]?.cache;
     if (statusState.apps?.[activeApp]?.configured) {
-      const label = activeApp === "sonarr" ? "Sonarr" : "Radarr";
+      const label = t(activeApp === "sonarr" ? "Sonarr" : "Radarr");
       const appAgeSeconds = appCache?.memory_age_seconds ?? appCache?.disk_age_seconds;
       parts.push(formatCacheStatus(label, withElapsedAge(appAgeSeconds)));
     }
@@ -3622,13 +3800,16 @@ function scheduleStatusPoll() {
   function enableTablePinchZoom() {
     const wrap = document.querySelector(".table-wrap");
     if (!wrap) return;
+
+
     if (wrap.dataset.pinchZoomEnabled === "1") return;
-    wrap.dataset.pinchZoomEnabled = "1";
 
     // Allow the browser to handle page pinch-zoom everywhere else,
     // but take over pinch gestures that start on the table area.
     let table = wrap.querySelector("table");
     if (!table) return;
+
+    wrap.dataset.pinchZoomEnabled = "1";
 
     let inner = wrap.querySelector(".table-zoom-inner");
     if (!inner) {
@@ -3820,7 +4001,7 @@ function scheduleStatusPoll() {
           }
         }
       },
-      { passive: true }
+      { passive: false }
     );
   }
 
@@ -5276,7 +5457,7 @@ async function handleRowRefreshClick(btn) {
   const statusToken = rowRefreshStatusToken + 1;
   rowRefreshStatusToken = statusToken;
   if (!row) {
-    setStatusFor("Refresh failed: row not found.", ROW_REFRESH_FOLLOWUP_MS);
+    setStatusFor(t("refreshFailedRowNotFound", "Refresh failed: row not found."), ROW_REFRESH_FOLLOWUP_MS);
     return;
   }
   const itemId = app === "sonarr"
@@ -5428,8 +5609,9 @@ async function handleRowRefreshClick(btn) {
 }
 
 function formatSeasonLabel(seasonNumber) {
-  return `Season ${seasonNumber}`;
+  return t("label_season_number", "Season %(num)s", { num: seasonNumber });
 }
+
 
 function formatEpisodeCode(seasonNumber, episodeNumber) {
   const season = String(Math.max(0, Number(seasonNumber || 0))).padStart(2, "0");
@@ -5685,7 +5867,7 @@ const EPISODE_GRID_COLUMNS = [
   },
   {
     key: "subtitleLanguages",
-    label: "Subtitles",
+    label: t("Subtitles"),
     className: "series-episode-subs",
     width: "150px",
     extra: true,
@@ -5966,7 +6148,7 @@ function buildEpisodeGridHeader(columns) {
     ? columns
     : EPISODE_GRID_COLUMNS;
   const cells = [
-    '<div class="series-episode-header-cell series-episode-header-title">Episode</div>',
+    `<div class="series-episode-header-cell series-episode-header-title">${t("episode_grid_column_episode_title", "Episode")}</div>`,
   ];
   ordered.forEach(col => {
     const classes = [
@@ -6001,7 +6183,7 @@ function buildEpisodeGridRow(episode, columns, index) {
     `<div class="series-episode-main">
       ${historyButton}
       <span class="series-episode-code"${overviewAttr}>${escapeHtml(code)}</span>
-      <span class="series-episode-title"${overviewAttr}>${escapeHtml(episode.title || "Untitled")}</span>
+      <span class="series-episode-title"${overviewAttr}>${escapeHtml(episode.title || t("episode_title_untitled", "Untitled"))}</span>
     </div>`,
   ];
   ordered.forEach(col => {
@@ -6106,7 +6288,7 @@ function renderSeriesError(container, message) {
   container.textContent = "";
   const error = document.createElement("div");
   error.className = "series-expansion-error";
-  error.textContent = message || "Failed to load.";
+  error.textContent = message || t("series_failed_to_load", "Failed to load.");
   container.appendChild(error);
 }
 
@@ -6124,7 +6306,7 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
           <div class="series-expansion-poster">
             <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy" decoding="async" />
           </div>
-          <div class="series-expansion-title">Seasons</div>
+          <div class="series-expansion-title">${t("series_expansion_title_seasons", "Seasons")}</div>
           <div class="series-expansion-actions">
             <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
           </div>
@@ -6241,7 +6423,7 @@ async function loadSeriesSeasons(row, seriesKey, expansion) {
     const fastMode = sonarrExpansionState.fastModeBySeries.get(seriesKey) === true;
     updateSeriesExpansionStatus(
       expansion.statusEl,
-      fastMode ? "Fast mode: file details limited." : ""
+      fastMode ? t("sonarr_fast_mode_limited", "Fast mode: file details limited.") : ""
     );
     return;
   }
@@ -6262,11 +6444,12 @@ async function loadSeriesSeasons(row, seriesKey, expansion) {
     renderSeasonList(expansion.body, seriesKey, seasons);
     updateSeriesExpansionStatus(
       expansion.statusEl,
-      payload?.fast_mode ? "Fast mode: file details limited." : ""
+      payload?.fast_mode ? t("sonarr_fast_mode_limited", "Fast mode: file details limited.") : ""
     );
   } catch (err) {
-    renderSeriesError(expansion.body, err.message || "Failed to load seasons.");
-    updateSeriesExpansionStatus(expansion.statusEl, "Failed to load seasons.", { warn: true });
+    const loadSeasonsFail = t("sonarr_failed_load_seasons", "Failed to load seasons.");
+    renderSeriesError(expansion.body, err.message || loadSeasonsFail);
+    updateSeriesExpansionStatus(expansion.statusEl, loadSeasonsFail, { warn: true });
   } finally {
     sonarrExpansionState.inflight.delete(requestKey);
   }
@@ -6296,7 +6479,7 @@ function renderSeasonList(container, seriesKey, seasons) {
   if (!visible.length) {
     const empty = document.createElement("div");
     empty.className = "series-expansion-empty";
-    empty.textContent = "No seasons available.";
+    empty.textContent = t("sonarr_no_seasons_available", "No seasons available.");
     container.appendChild(empty);
     return;
   }
@@ -6347,7 +6530,7 @@ function renderSeasonList(container, seriesKey, seasons) {
     extrasToggle.className = "series-expansion-toggle series-season-extras";
     extrasToggle.setAttribute("aria-pressed", "false");
     extrasToggle.setAttribute("data-role", "episode-extras-toggle");
-    extrasToggle.textContent = "Extras";
+    extrasToggle.textContent = t("label_extras", "Extras");
 
     headerWrap.append(label, extrasToggle);
     metaWrap.append(headerWrap, meta);
@@ -6409,7 +6592,9 @@ async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container,
     if (!container || !container.isConnected) return;
     renderEpisodeList(container, episodes);
   } catch (err) {
-    renderSeriesError(container, err.message || "Failed to load episodes.");
+    const loadEpisodesFail = t("sonarr_failed_load_episodes", "Failed to load episodes.");
+    renderSeriesError(container, err.message || loadEpisodesFail);
+    updateSeriesExpansionStatus(expansion.statusEl, loadEpisodesFail, { warn: true });
   } finally {
     sonarrExpansionState.inflight.delete(requestKey);
   }
@@ -6421,7 +6606,7 @@ function renderEpisodeList(container, episodes) {
   if (!episodes || !episodes.length) {
     const empty = document.createElement("div");
     empty.className = "series-expansion-empty";
-    empty.textContent = "No episodes available.";
+    empty.textContent = t("sonarr_no_episodes_available", "No episodes available.");
     container.appendChild(empty);
     return;
   }
@@ -10494,6 +10679,26 @@ function enableVirtualRows(rows, app, rowOptions, token, perf) {
   requestAnimationFrame(() => renderVirtualWindow(state));
   setTimeout(() => renderVirtualWindow(state), 250);
 
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+  if (app === "radarr") {
+    requestAnimationFrame(() => {
+      const newH = getRowHeightOnce();
+      if (newH && Math.abs(newH - state.rowHeight) > 1) {
+        state.rowHeight = newH;
+        renderVirtualWindow(state);
+      }
+    });
+
+    setTimeout(() => {
+      const newH = getRowHeightOnce();
+      if (newH && Math.abs(newH - state.rowHeight) > 1) {
+        state.rowHeight = newH;
+        renderVirtualWindow(state);
+      }
+    }, 400);
+  }
+
   // Finalize
   tableReadyByApp[app] = true;
   setChipsVisible(true);
@@ -11002,12 +11207,12 @@ if (refreshSonarrBtn) {
   refreshSonarrBtn.addEventListener("click", async () => {
     refreshSonarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshSonarrBtn, configState.sonarrConfigured);
-    setStatus("Refreshing Sonarr...");
+    setStatus(t("refreshingSonarr", "Refreshing Sonarr..."));
     try {
       await requestArrRefresh("sonarr");
-      setStatus("Sonarr refresh queued.");
+      setStatus(t("sonarrRefreshQueued", "Sonarr refresh queued."));
     } catch (e) {
-      setStatus(`Error: ${e.message}`);
+      setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
       refreshSonarrBtn.removeAttribute("data-busy");
       updateArrRefreshButton(refreshSonarrBtn, configState.sonarrConfigured);
@@ -11018,12 +11223,12 @@ if (refreshRadarrBtn) {
   refreshRadarrBtn.addEventListener("click", async () => {
     refreshRadarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshRadarrBtn, configState.radarrConfigured);
-    setStatus("Refreshing Radarr...");
+    setStatus(t("refreshingRadarr"));
     try {
       await requestArrRefresh("radarr");
-      setStatus("Radarr refresh queued.");
+      setStatus(t("radarrRefreshQueued"));
     } catch (e) {
-      setStatus(`Error: ${e.message}`);
+      setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
       refreshRadarrBtn.removeAttribute("data-busy");
       updateArrRefreshButton(refreshRadarrBtn, configState.radarrConfigured);
@@ -11033,7 +11238,7 @@ if (refreshRadarrBtn) {
 if (refreshTautulliBtn) {
   refreshTautulliBtn.addEventListener("click", async () => {
     const label = getPlaybackLabel();
-    setStatus(`Refreshing ${label}...`);
+    setStatus(t("refreshingPlayback", "Refreshing %%(label)s…", { label }));
     try {
       const res = await fetch(apiUrl("/api/tautulli/refresh"), {
         method: "POST",
@@ -11051,16 +11256,16 @@ if (refreshTautulliBtn) {
         updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus(`${label} refresh started.`);
+      setStatus(t("playbackRefreshStarted", "%%(label)s refresh started.", { label }));
     } catch (e) {
-      setStatus(`Error: ${e.message}`);
+      setStatus(t("errorPrefix", "Error: ") + e.message);
     }
   });
 }
 if (deepRefreshTautulliBtn) {
   deepRefreshTautulliBtn.addEventListener("click", async () => {
     const label = getPlaybackLabel();
-    setStatus(`Refreshing ${label} data...`);
+    setStatus(t("refreshingPlaybackData", "Refreshing %%(label)s data...", { label }));
     try {
       const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
         method: "POST",
@@ -11078,19 +11283,23 @@ if (deepRefreshTautulliBtn) {
         updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus(`${label} refresh started. This can take a while.`);
+      setStatus(t("playbackDeepRefreshStarted", "%%(label)s refresh started. This can take a while.", { label }));
     } catch (e) {
-      setStatus(`Error: ${e.message}`);
+      setStatus(t("errorPrefix", "Error: ") + e.message);
     }
   });
 }
 if (clearCachesBtn) {
   clearCachesBtn.addEventListener("click", async () => {
-    const playbackLabel = playbackProvider ? getPlaybackLabel() : "playback";
-    if (!window.confirm(`Clear all Sortarr caches and rebuild from Sonarr/Radarr (and ${playbackLabel} if configured)?`)) {
-      return;
-    }
-    setStatus("Clearing caches...");
+    const playbackLabel = playbackProvider ? getPlaybackLabel() : t("playbackLabel", "playback");
+    if (!window.confirm(
+      t(
+        "confirmClearCaches",
+        "Clear all Sortarr caches and rebuild from Sonarr/Radarr (and %(playback)s if configured)?",
+        { playback: playbackLabel }
+      )
+    )) return;
+    setStatus(t("clearingCaches", "Clearing caches..."));
     try {
       const res = await fetch(apiUrl("/api/caches/clear"), {
         method: "POST",
@@ -11120,7 +11329,7 @@ if (clearCachesBtn) {
       }
       load(true);
       fetchStatus({ silent: true });
-      setStatus("Caches cleared. Reloading...");
+      setStatus(t("cachesClearedReloading", "Caches cleared. Reloading..."));
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
@@ -11254,28 +11463,58 @@ async function prefetch(app, refresh, options = {}) {
 
 function updatePlaybackLabels() {
   const label = getPlaybackLabel();
+
   playbackLabelEls.forEach(el => {
     el.textContent = label;
   });
+
   playbackTitleEls.forEach(el => {
-    el.textContent = playbackProvider ? `Playback (${label})` : "Playback";
+    el.textContent = playbackProvider
+      ? t("playbackTitleWithLabel", "Playback (%(label)s)", { label })
+      : t("playbackTitle", "Playback");
   });
+
   playbackMatchTitleEls.forEach(el => {
-    el.textContent = playbackProvider ? `Match (${label})` : "Match";
+    el.textContent = playbackProvider
+      ? t("matchTitleWithLabel", "Match (%(label)s)", { label })
+      : t("matchTitle", "Match");
   });
+
   if (refreshTautulliBtn) {
-    refreshTautulliBtn.textContent = playbackProvider ? `Refresh ${label}` : "Refresh playback";
+    refreshTautulliBtn.textContent = playbackProvider
+      ? t("refreshPlaybackProvider", "Refresh %(label)s", { label })
+      : t("refreshPlayback", "Refresh playback");
+
     refreshTautulliBtn.title = playbackProvider
-      ? `Refresh ${label} library data and rebuild matches`
-      : "Refresh playback library data and rebuild matches";
+      ? t(
+        "refreshPlaybackProviderTitle",
+        "Refresh %(label)s library data and rebuild matches",
+        { label }
+      )
+      : t(
+        "refreshPlaybackTitle",
+        "Refresh playback library data and rebuild matches"
+      );
   }
+
   if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.textContent = playbackProvider ? `Refresh ${label} data` : "Refresh playback data";
+    deepRefreshTautulliBtn.textContent = playbackProvider
+      ? t("deepRefreshPlaybackProvider", "Refresh %(label)s data", { label })
+      : t("deepRefreshPlayback", "Refresh playback data");
+
     deepRefreshTautulliBtn.title = playbackProvider
-      ? `Refresh ${label} library data and rebuild matches`
-      : "Refresh playback library data and rebuild matches";
+      ? t(
+        "refreshPlaybackProviderTitle",
+        "Refresh %(label)s library data and rebuild matches",
+        { label }
+      )
+      : t(
+        "refreshPlaybackTitle",
+        "Refresh playback library data and rebuild matches"
+      );
   }
 }
+
 
 function setPlaybackProvider(provider) {
   playbackProvider = provider || "";
@@ -11586,13 +11825,12 @@ function setTheme(theme) {
   }
 }
 
-function updateRuntimeLabels() {
+function updateRuntimeLabels(fn = t) {
   const labelMap = {
-    ContentHours: "Runtime (hh:mm)",
-    RuntimeMins: "Runtime (hh:mm)",
-    WatchContentRatio: "Watch / Runtime (hh:mm)",
+    ContentHours: fn("label_runtime_hhmm", "Runtime (hh:mm)"),
+    RuntimeMins: fn("label_runtime_hhmm", "Runtime (hh:mm)"),
+    WatchContentRatio: fn("label_watch_over_runtime_hhmm", "Watch / Runtime (hh:mm)"),
   };
-
   const updateLabelText = (label, text) => {
     if (!label) return;
     const textNode = Array.from(label.childNodes).find(
@@ -11731,6 +11969,46 @@ let historyExpandBtn = null;
 let historyExportBtn = null;
 let historyTitleEl = null;
 
+// Background scroll lock for History (prevents iOS rubber-banding + keeps page fixed)
+let historyLockedScrollY = 0;
+let historyLockedPaddingRight = "";
+let historyScrollLocked = false;
+
+function lockBackgroundScrollForHistory() {
+  if (historyScrollLocked) return;
+  historyScrollLocked = true;
+
+  historyLockedScrollY = window.scrollY || window.pageYOffset || 0;
+
+  // Prevent layout shift when the scrollbar disappears (desktop)
+  historyLockedPaddingRight = document.body.style.paddingRight || "";
+  const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+  if (scrollbarWidth > 0) {
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
+  }
+
+  document.body.style.position = "fixed";
+  document.body.style.top = `-${historyLockedScrollY}px`;
+  document.body.style.left = "0";
+  document.body.style.right = "0";
+  document.body.style.width = "100%";
+}
+
+function unlockBackgroundScrollForHistory() {
+  if (!historyScrollLocked) return;
+  historyScrollLocked = false;
+
+  document.body.style.position = "";
+  document.body.style.top = "";
+  document.body.style.left = "";
+  document.body.style.right = "";
+  document.body.style.width = "";
+  document.body.style.paddingRight = historyLockedPaddingRight;
+
+  window.scrollTo(0, historyLockedScrollY);
+}
+
+
 function buildHistoryButton(row, app) {
   if (app === "radarr") {
     const movieId = row.MovieId ?? row.movieId;
@@ -11772,12 +12050,45 @@ function ensureHistoryDrawer() {
   `;
   historyDrawerEl = historyOverlayEl.querySelector(".history-drawer");
   historyBodyEl = historyOverlayEl.querySelector('[data-role="history-body"]');
+
   historySummaryEl = historyOverlayEl.querySelector('[data-role="history-summary"]');
   historyExpandBtn = historyOverlayEl.querySelector('[data-role="history-expand"]');
   historyExportBtn = historyOverlayEl.querySelector('[data-role="history-export"]');
   historyTitleEl = historyOverlayEl.querySelector('[data-role="history-title"]');
   document.body.appendChild(historyOverlayEl);
+  // Prevent wheel/trackpad from scrolling the page behind the overlay (and stop scroll chaining at edges)
+  historyOverlayEl.addEventListener(
+    "wheel",
+    ev => {
+      if (!historyBodyEl) {
+        ev.preventDefault();
+        return;
+      }
+
+      const inDrawerScroll = ev.target && ev.target.closest && ev.target.closest('[data-role="history-body"]');
+      if (!inDrawerScroll) {
+        // Wheel over scrim / header / anywhere outside the scroll container: never scroll background
+        ev.preventDefault();
+        return;
+      }
+
+      // Wheel over the drawer scroll container: allow scrolling, but block chaining at the ends
+      const el = historyBodyEl;
+      const deltaY = ev.deltaY || 0;
+
+      const atTop = el.scrollTop <= 0;
+      const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+
+      if ((deltaY < 0 && atTop) || (deltaY > 0 && atBottom)) {
+        ev.preventDefault();
+      }
+    },
+    { passive: false }
+  );
+
 }
+
+
 
 function setHistoryExpanded(expanded) {
   historyDrawerState.expanded = expanded;
@@ -11920,8 +12231,10 @@ function closeHistoryDrawer() {
   historyDrawerState.data = null;
   historyDrawerState.loading = false;
   if (historyOverlayEl) historyOverlayEl.classList.add("hidden");
+  unlockBackgroundScrollForHistory();
   document.body.classList.remove("history-open");
 }
+
 
 async function fetchHistoryData(target) {
   const params = new URLSearchParams();
@@ -12008,6 +12321,7 @@ async function openHistoryFromButton(btn) {
   if (historyTitleEl) historyTitleEl.textContent = title || "History";
   if (historyOverlayEl) historyOverlayEl.classList.remove("hidden");
   document.body.classList.add("history-open");
+  lockBackgroundScrollForHistory();
   renderHistoryContent();
   try {
     const data = await fetchHistoryData(target);
@@ -12125,6 +12439,13 @@ document.addEventListener("keydown", event => {
     queuePrefetch(otherApp, false);
   }
   await load(false);
-  enableTablePinchZoom();
-  enableTableScrollChaining();
-})()
+  //if (typeof lockPageZoomIOSButAllowTableCustomZoom === "function") {
+  //  lockPageZoomIOSButAllowTableCustomZoom();
+  // }
+  //if (typeof enableTablePinchZoom === "function") {
+  //  enableTablePinchZoom();
+  //}
+  if (!IS_IOS && typeof enableTableScrollChaining === "function") {
+    enableTableScrollChaining();
+  }
+})();

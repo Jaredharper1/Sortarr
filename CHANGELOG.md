@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.7.11] - 2026-01-27
+
+- Fixed JS init stability issues and guarded optional UI helpers to prevent startup crashes.
+- Replaced buggy table pinch-zoom logic with a deterministic implementation and fixed early self-disable behavior.
+- Improved iOS table interaction and Radarr view stability
+- Expanded German translation coverage
+- Resolved several graphic glitches introduced through translation implementation
+- Corrected CSS grid definition for .history-summary-row to explicitly support label, main content, and delta columns (80px 1fr auto).
+
 
 ## [0.7.10] - 2026-01-26
 

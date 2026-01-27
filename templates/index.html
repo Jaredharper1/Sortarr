@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="{{ get_locale() }}" data-theme="dark">
 
 <head>
   <meta charset="utf-8" />
@@ -43,7 +43,7 @@
             </label>
           </div>
           <div class="column-group">
-            <div class="column-group-title">Core</div>
+            <div class="column-group-title">{{ _('Core') }}</div>
             <label class="column-row"><input type="checkbox" data-col="Title" /> {{ _('Title') }}</label>
             <label class="column-row"><input type="checkbox" data-col="DateAdded" /> {{ _('Date Added') }}</label>
             <label class="column-row"><input type="checkbox" data-col="Instance" /> {{ _('Instance') }}</label>
@@ -95,10 +95,10 @@
 
 
           <div class="column-group" data-app="radarr">
-            <div class="column-group-title">Radarr</div>
+            <div class="column-group-title">{{ _('Radarr') }}</div>
 
             <label class="column-row column-row--group">
-              <input type="checkbox" data-col-group="radarr" /> Radarr columns
+              <input type="checkbox" data-col-group="radarr" /> {{ _('Radarr columns') }}
             </label>
 
             <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> {{ _('Runtime (hh:mm)')
@@ -141,9 +141,9 @@
 
 
           <div class="column-group">
-            <div class="column-group-title">Video</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="video" /> Video
-              columns</label>
+            <div class="column-group-title">{{ _('Video') }}</div>
+            <label class="column-row column-row--group"><input type="checkbox" data-col-group="video" /> {{ _('Video
+              columns') }}</label>
             <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> {{ _('Video Quality') }}</label>
             <label class="column-row"><input type="checkbox" data-col="Resolution" /> {{ _('Resolution') }}</label>
             <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> {{ _('Video Codec') }}</label>
@@ -391,18 +391,17 @@
         </div>
       </div>
       <div class="filters-footer">
-        <button id="filtersToggleBtn" type="button" class="filters-toggle-btn"
-          title="{{ _('Hide filters and chips') }}">
+        <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide filters and chips') }}"
           aria-expanded="true" aria-controls="filtersPanel">▴</button>
         <div class="tabs">
-          <button class="tab active" id="tabSonarr">Sonarr</button>
-          <button class="tab" id="tabRadarr">Radarr</button>
+          <button class="tab active" id="tabSonarr">{{ _('Sonarr') }}</button>
+          <button class="tab" id="tabRadarr">{{ _('Radarr') }}</button>
           <span class="spacer"></span>
           <button id="exportCsvBtn">{{ _('Export CSV') }}</button>
         </div>
         <div class="filters-footer-chips">
           <div class="status-pill status-pill--hidden" id="statusPill" title="{{ _('Hover to expand data status') }}">
-            Data status
+            {{ _('Data status') }}
           </div>
           <div class="health-badges-slot" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
         </div>
@@ -443,176 +442,269 @@
     <div class="status-banner hidden" id="fastModeBanner">
       {{ _('Sonarr fast mode enabled. Codec and language details may be missing.') }}</div>
 
-    <div class="table-wrap" id="tableWrap">
-      <table class="stable-columns">
-        <thead>
-          <tr>
-            <th data-sort="Title" data-col="Title">{{ _('Title') }} <span class="sort-indicator"></span></th>
-            <th data-sort="DateAdded" data-col="DateAdded">{{ _('Date Added') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="InstanceName" data-col="Instance">{{ _('Instance') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">{{ _('Series Type') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="Studio" data-app="sonarr" data-col="Studio">{{ _('Studio') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">{{ _('Original Language') }}
-              <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="Genres" data-app="sonarr" data-col="Genres">{{ _('Genres') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="LastAired" data-app="sonarr" data-col="LastAired">{{ _('Last Aired') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="MissingCount" data-app="sonarr" data-col="MissingCount"
-              title="{{ _('Episodes missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="CutoffUnmetCount" data-app="sonarr" data-col="CutoffUnmetCount"
-              title="{{ _('Episodes where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours"
-              title="{{ _('Total content hours based on non-special episodes.') }}">{{ _('Runtime (hh:mm)') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted"
-              title="{{ _('Episode count excludes specials.') }}">{{ _('Episodes') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount"
-              title="{{ _('Season count excludes specials and only counts seasons with files.') }}">{{ _('Seasons') }}
-              <span class="sort-indicator"></span>
-            </th>
-            <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg / Ep
-              (GiB)') }}
-              <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB" title="Total size includes specials.">
-              {{ _('Total (GiB)') }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="GBPerHour" data-app="sonarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="BitrateMbps" data-app="sonarr" data-col="BitrateMbps"
-              title="{{ _('Estimated series bitrate from total size and runtime.') }}">{{ _('Bitrate (Mbps)') }} <span
-                class="sort-indicator"></span></th>
+    <div class="table-wrap table-wrap-y" id="tableWrap">
+      <div class="table-wrap-x" id="tableWrapX">
+        <div class="table-zoom" id="tableZoom">
+          <table class="stable-columns">
+            <thead>
+              <tr>
+                <th data-sort="Title" data-col="Title">{{ _('Title') }} <span class="sort-indicator"></span></th>
+                <th data-sort="DateAdded" data-col="DateAdded">{{ _('Date Added') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="InstanceName" data-col="Instance">{{ _('Instance') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="SeriesType" data-app="sonarr" data-col="SeriesType">{{ _('Series Type') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="Studio" data-app="sonarr" data-col="Studio">{{ _('Studio') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="OriginalLanguage" data-app="sonarr" data-col="OriginalLanguage">{{ _('Original Language')
+                  }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="Genres" data-app="sonarr" data-col="Genres">{{ _('Genres') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="LastAired" data-app="sonarr" data-col="LastAired">{{ _('Last Aired') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="MissingCount" data-app="sonarr" data-col="MissingCount"
+                  title="{{ _('Episodes missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="CutoffUnmetCount" data-app="sonarr" data-col="CutoffUnmetCount"
+                  title="{{ _('Episodes where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="ContentHours" data-app="sonarr" data-col="ContentHours"
+                  title="{{ _('Total content hours based on non-special episodes.') }}">{{ _('Runtime (hh:mm)') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="EpisodesCounted" data-app="sonarr" data-col="EpisodesCounted"
+                  title="{{ _('Episode count excludes specials.') }}">{{ _('Episodes') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount"
+                  title="{{ _('Season count excludes specials and only counts seasons with files.') }}">{{ _('Seasons')
+                  }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg /
+                  Ep
+                  (GiB)') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB"
+                  title="{{ _('Total size includes specials.') }}">
+                  {{ _('Total (GiB)') }} <span class="sort-indicator"></span></th>
+                <th class="right" data-sort="GBPerHour" data-app="sonarr" data-col="GBPerHour">{{ _('GiB / Hour') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="BitrateMbps" data-app="sonarr" data-col="BitrateMbps"
+                  title="{{ _('Estimated series bitrate from total size and runtime.') }}">{{ _('Bitrate (Mbps)') }}
+                  <span class="sort-indicator"></span>
+                </th>
 
-            <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime (hh:mm)')
-              }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">{{ _('Size (GiB)') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">{{ _('GiB / Hour') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate (Mbps)') }}
-              <span class="sort-indicator"></span>
-            </th>
+                <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime
+                  (hh:mm)')
+                  }} <span class="sort-indicator"></span></th>
+                <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">{{ _('Size (GiB)') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">{{ _('GiB / Hour') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate
+                  (Mbps)') }}
+                  <span class="sort-indicator"></span>
+                </th>
 
-            <th data-sort="Status" data-col="Status">{{ _('Status') }} <span class="sort-indicator"></span></th>
-            <th data-sort="Monitored" data-col="Monitored">{{ _('Monitored') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="Tags" data-col="Tags">{{ _('Tags') }} <span class="sort-indicator"></span></th>
-            <th data-sort="ReleaseGroup" data-col="ReleaseGroup">{{ _('Release Group') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="QualityProfile" data-col="QualityProfile">{{ _('Quality Profile') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="Studio" data-app="radarr" data-col="Studio">{{ _('Studio') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="OriginalLanguage" data-app="radarr" data-col="OriginalLanguage">{{ _('Original Language') }}
-              <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="Genres" data-app="radarr" data-col="Genres">{{ _('Genres') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="MissingCount" data-app="radarr" data-col="MissingCount"
-              title="{{ _('Movies missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="CutoffUnmetCount" data-app="radarr" data-col="CutoffUnmetCount"
-              title="{{ _('Movies where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="HasFile" data-app="radarr" data-col="HasFile">{{ _('Has File') }} <span
-                class="sort-indicator"></span>
-            </th>
-            <th data-sort="IsAvailable" data-app="radarr" data-col="IsAvailable">{{ _('Available') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="InCinemas" data-app="radarr" data-col="InCinemas">{{ _('In Cinemas') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="LastSearchTime" data-app="radarr" data-col="LastSearchTime">{{ _('Last Search') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="Edition" data-app="radarr" data-col="Edition">{{ _('Edition') }} <span
-                class="sort-indicator"></span>
-            </th>
-            <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">{{ _('Custom Formats') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">{{ _('Custom
-              Format Score') }} <span class="sort-indicator"></span></th>
-            <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not Met')
-              }} <span class="sort-indicator"></span></th>
-            <th data-sort="Languages" data-app="radarr" data-col="Languages">{{ _('Audio Languages') }} <span
-                class="sort-indicator"></span></th>
+                <th data-sort="Status" data-col="Status">{{ _('Status') }} <span class="sort-indicator"></span></th>
+                <th data-sort="Monitored" data-col="Monitored">{{ _('Monitored') }} <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="Tags" data-col="Tags">{{ _('Tags') }} <span class="sort-indicator"></span></th>
+                <th data-sort="ReleaseGroup" data-col="ReleaseGroup">{{ _('Release Group') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="QualityProfile" data-col="QualityProfile">{{ _('Quality Profile') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="Studio" data-app="radarr" data-col="Studio">{{ _('Studio') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="OriginalLanguage" data-app="radarr" data-col="OriginalLanguage">{{ _('Original Language')
+                  }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="Genres" data-app="radarr" data-col="Genres">{{ _('Genres') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="MissingCount" data-app="radarr" data-col="MissingCount"
+                  title="{{ _('Movies missing on disk.') }}">{{ _('Missing') }} <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="CutoffUnmetCount" data-app="radarr" data-col="CutoffUnmetCount"
+                  title="{{ _('Movies where the quality cutoff is unmet.') }}">{{ _('Cutoff Unmet') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="HasFile" data-app="radarr" data-col="HasFile">{{ _('Has File') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="IsAvailable" data-app="radarr" data-col="IsAvailable">{{ _('Available') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="InCinemas" data-app="radarr" data-col="InCinemas">{{ _('In Cinemas') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="LastSearchTime" data-app="radarr" data-col="LastSearchTime">{{ _('Last Search') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="Edition" data-app="radarr" data-col="Edition">{{ _('Edition') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">{{ _('Custom Formats') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">{{
+                  _('Custom
+                  Format Score') }} <span class="sort-indicator"></span></th>
+                <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not
+                  Met')
+                  }} <span class="sort-indicator"></span></th>
+                <th data-sort="Languages" data-app="radarr" data-col="Languages">{{ _('Audio Languages') }} <span
+                    class="sort-indicator"></span></th>
 
-            <th data-sort="VideoQuality" data-col="VideoQuality">{{ _('Video Quality') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="Resolution" data-col="Resolution">{{ _('Resolution') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="VideoCodec" data-col="VideoCodec">{{ _('Video Codec') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="VideoHDR" data-col="VideoHDR">{{ _('Video HDR') }} <span class="sort-indicator"></span></th>
-            <th data-sort="AudioCodec" data-col="AudioCodec">{{ _('Audio Codec') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="AudioChannels" data-col="AudioChannels">{{ _('Audio Channels') }} <span
-                class="sort-indicator"></span>
-            </th>
-            <th data-sort="AudioLanguages" data-app="sonarr" data-col="AudioLanguages">{{ _('Audio Languages') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">{{ _('Subtitle Languages') }} <span
-                class="sort-indicator"></span></th>
-            <th data-col="Diagnostics">{{ _('Diagnostics') }}</th>
-            <th class="right" data-sort="PlayCount" data-col="PlayCount">{{ _('Times Watched') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="LastWatched" data-col="LastWatched">{{ _('Last Watched') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">{{ _('Days Since') }} <span
-                class="sort-indicator"></span></th>
-            <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time (hh:mm)')
-              }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime (hh:mm)')
-              }} <span class="sort-indicator"></span></th>
-            <th class="right" data-sort="UsersWatched" data-col="UsersWatched">{{ _('Users Watched') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">{{ _('Title Slug') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="TmdbId" data-col="TmdbId">{{ _('TMDB ID') }} <span class="sort-indicator"></span></th>
-            <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">{{ _('Audio Codec Mixed') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">{{ _('Audio Languages Mixed') }} <span
-                class="sort-indicator"></span></th>
-            <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages Mixed') }}
-              <span class="sort-indicator"></span>
-            </th>
+                <th data-sort="VideoQuality" data-col="VideoQuality">{{ _('Video Quality') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="Resolution" data-col="Resolution">{{ _('Resolution') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="VideoCodec" data-col="VideoCodec">{{ _('Video Codec') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="VideoHDR" data-col="VideoHDR">{{ _('Video HDR') }} <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="AudioCodec" data-col="AudioCodec">{{ _('Audio Codec') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="AudioChannels" data-col="AudioChannels">{{ _('Audio Channels') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="AudioLanguages" data-app="sonarr" data-col="AudioLanguages">{{ _('Audio Languages') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="SubtitleLanguages" data-col="SubtitleLanguages">{{ _('Subtitle Languages') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-col="Diagnostics">{{ _('Diagnostics') }}</th>
+                <th class="right" data-sort="PlayCount" data-col="PlayCount">{{ _('Times Watched') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="LastWatched" data-col="LastWatched">{{ _('Last Watched') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">{{ _('Days Since') }} <span
+                    class="sort-indicator"></span></th>
+                <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time
+                  (hh:mm)')
+                  }} <span class="sort-indicator"></span></th>
+                <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime
+                  (hh:mm)')
+                  }} <span class="sort-indicator"></span></th>
+                <th class="right" data-sort="UsersWatched" data-col="UsersWatched">{{ _('Users Watched') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="TitleSlug" data-app="sonarr" data-col="TitleSlug">{{ _('Title Slug') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="TmdbId" data-col="TmdbId">{{ _('TMDB ID') }} <span class="sort-indicator"></span></th>
+                <th data-sort="AudioCodecMixed" data-col="AudioCodecMixed">{{ _('Audio Codec Mixed') }} <span
+                    class="sort-indicator"></span></th>
+                <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">{{ _('Audio Languages Mixed') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages
+                  Mixed') }}
+                  <span class="sort-indicator"></span>
+                </th>
 
-            <th data-sort="RootFolder" data-col="RootFolder">{{ _('Root Folder') }} <span class="sort-indicator"></span>
-            </th>
-            <th data-sort="Path" data-col="Path">{{ _('Path') }} <span class="sort-indicator"></span></th>
-          </tr>
-        </thead>
-        <tbody id="tbody"></tbody>
-      </table>
-    </div>
-
-  </div>
-
-  <template id="sonarrSeriesExpansionTemplate">
-    <div class="series-expansion">
-      <div class="series-expansion-header">
-        <div class="series-expansion-poster">
-          <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
-            decoding="async" />
-        </div>
-        <div class="series-expansion-title">{{ _("Seasons") }}</div>
-        <div class="series-expansion-actions">
-          <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
+                <th data-sort="RootFolder" data-col="RootFolder">{{ _('Root Folder') }} <span
+                    class="sort-indicator"></span>
+                </th>
+                <th data-sort="Path" data-col="Path">{{ _('Path') }} <span class="sort-indicator"></span></th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
         </div>
       </div>
-      <div class="series-expansion-body" data-role="series-expansion-body"></div>
     </div>
-  </template>
+
+    <template id="sonarrSeriesExpansionTemplate">
+      <div class="series-expansion">
+        <div class="series-expansion-header">
+          <div class="series-expansion-poster">
+            <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
+              decoding="async" />
+          </div>
+          <div class="series-expansion-title">{{ _("Seasons") }}</div>
+          <div class="series-expansion-actions">
+            <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
+          </div>
+        </div>
+        <div class="series-expansion-body" data-role="series-expansion-body"></div>
+      </div>
+    </template>
 
 
 
 
-  <script id="i18n-json" type="application/json">
+    <script id="i18n-json" type="application/json">
   {{ {
+
+    "label_extras": _("Extras"),
+    "sonarr_failed_load_episodes": _("Failed to load episodes."),
+    "sonarr_no_episodes_available": _("No episodes available."),
+    "sonarr_fast_mode_limited": _("Fast mode: file details limited."),
+    "sonarr_failed_load_seasons": _("Failed to load seasons."),
+    "sonarr_no_seasons_available": _("No seasons available."),
+
+    "series_expansion_title_seasons": _("Seasons"),
+    "series_failed_to_load": _("Failed to load."),
+    "episode_grid_column_episode_title": _("Episode"),
+    "episode_title_untitled": _("Untitled"),
+    "label_season_number": _("Season %(num)s", num="%(num)s"),
+
+    "playbackTitle": _("Playback"),
+    "playbackTitleWithLabel": _("Playback (%(label)s)", label="%(label)s"),
+
+    "matchTitle": _("Match"),
+    "matchTitleWithLabel": _("Match (%(label)s)", label="%(label)s"),
+
+    "refreshPlayback": _("Refresh playback"),
+    "deepRefreshPlayback": _("Refresh playback data"),
+
+    "refreshPlaybackProvider": _("Refresh %(label)s", label="%(label)s"),
+    "deepRefreshPlaybackProvider": _("Refresh %(label)s data", label="%(label)s"),
+
+    "refreshPlaybackTitle": _("Refresh playback library data and rebuild matches"),
+    "refreshPlaybackProviderTitle": _("Refresh %(label)s library data and rebuild matches", label="%(label)s"),
+
+
+
+    "refreshArrData": _("Refresh %(appLabel)s data", appLabel="%(appLabel)s"),
+    "refreshArrDataTitle": _("Refresh %(appLabel)s metadata, reload %(appLabel)s data, and update the cache.", appLabel="%(appLabel)s"),
+
+    "appNotConfigured": _("%(app)s is not configured.", app="%(app)s"),
+    "refreshingAppData": _("Refreshing %(app)s data...", app="%(app)s"),
+    "appMetadataRefreshQueued": _("%(app)s metadata refresh queued.", app="%(app)s"),
+    "label_runtime_hhmm": _("Runtime (hh:mm)"),
+    "label_watch_over_runtime_hhmm": _("Watchtime / Runtime (hh:mm)"),
+
+    "askArrRefreshMetadata": _("Ask %(app)s to refresh metadata?", app="%(app)s"),
+    "refreshingAppData": _("Refreshing %(app)s data...", app="%(app)s"),
+    "appRefreshQueued": _("%(app)s refresh queued.", app="%(app)s"),
+
+    "errorPrefix": _("Error: "),
+
+
+    "refreshingSonarr": _("Refreshing Sonarr..."),
+    "sonarrRefreshQueued": _("Sonarr refresh queued."),
+    "refreshingRadarr": _("Refreshing Radarr..."),
+    "radarrRefreshQueued": _("Radarr refresh queued."),
+
+    "Runtime": _("Runtime"),
+    "Size": _("Size"),
+    "Video Quality": _("Video Quality"),
+    "Languages": _("Languages"),
+    "Subtitles": _("Subtitles"),
+    "Air Date": _("Air Date"),
+    "Cutoff": _("Cutoff"),
+    "Last Search": _("Last Search"),
+    "Edition": _("Edition"),
+    "Custom Formats": _("Custom Formats"),
+    "CF Score": _("CF Score"),
+
     "notConfigured": _("Not configured"),
     "noCachedData": _("No cached data"),
     "awaitingData": _("Awaiting data"),
@@ -776,11 +868,11 @@
 
 
 
-  <script>
-    window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
-  </script>
+    <script>
+      window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
+    </script>
 
-  <script src="/static/app.js?v={{ app_version }}"></script>
+    <script src="/static/app.js?v={{ app_version }}"></script>
 </body>
 
 </html>

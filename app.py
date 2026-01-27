@@ -19,7 +19,7 @@ from functools import wraps
 import requests
 # Session hinzugefügt für die dauerhafte Sprachwahl
 from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g, session
-from flask_babel import Babel, _
+from flask_babel import Babel, _, get_locale
 from flask_compress import Compress
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -27,8 +27,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 
+
+
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.10"
+APP_VERSION = "0.7.11"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -45,6 +47,8 @@ app = Flask(__name__)
 # Secret Key ermöglicht das Speichern der Sprachwahl im Browser-Cookie
 app.secret_key = secrets.token_hex(16)
 app.config["BABEL_TRANSLATION_DIRECTORIES"] = os.path.join(app.root_path, "translations")
+# Make get_locale() available in Jinja templates
+app.jinja_env.globals["get_locale"] = get_locale
 
 from babel import Locale
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode

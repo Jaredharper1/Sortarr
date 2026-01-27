@@ -2154,6 +2154,26 @@ html[data-theme="dark"] .column-panel {
 
 }
 
+/* iOS/WebKit: prevent diagnostics button from inflating row height */
+@supports (-webkit-touch-callout: none) {
+  .match-diag-btn {
+    min-height: 0;
+    /* beats any coarse-pointer min-height */
+    height: 20px;
+    /* pick the visual target */
+    line-height: 1;
+    padding-top: 0;
+    padding-bottom: 0;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+}
+
+
 
 
 .match-diag-btn:hover,
@@ -2263,6 +2283,33 @@ html[data-theme="dark"] .column-panel {
   justify-content: center;
   opacity: 0.7;
   cursor: pointer;
+}
+
+/* iOS/WebKit: prevent diagnostics button from inflating row height */
+@supports (-webkit-touch-callout: none) {
+  button.series-expander {
+    min-height: 0 !important;
+    /* beat coarse-pointer UA rules */
+    height: 20px;
+    padding: 0 !important;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    line-height: 1;
+    font-size: 14px;
+    /* ensure glyph box is small */
+
+    -webkit-appearance: none;
+    appearance: none;
+  }
+
+  /* Ensure the + span itself doesn't expand the line box */
+  .series-expander>span {
+    line-height: 1;
+    display: block;
+  }
 }
 
 tbody tr:hover .series-expander,
@@ -2437,8 +2484,9 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
   border: 1px solid var(--border);
 
   background: transparent;
-
-  padding: 1px 6px;
+  padding: 2px 6px;
+  -webkit-appearance: none;
+  appearance: none;
 
   border-radius: 999px;
 
@@ -2448,6 +2496,24 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
 
   margin-left: 6px;
 
+}
+
+@supports (-webkit-touch-callout: none) {
+  .lang-toggle {
+    display: inline-flex;
+    align-items: center;
+
+    line-height: 1;
+    /* key: stops tall line box */
+    padding-top: 3px;
+    /* visual height control */
+    padding-bottom: 3px;
+
+    height: auto;
+    min-height: 0;
+    /* key: overrides UA min heights */
+    vertical-align: middle;
+  }
 }
 
 
@@ -3275,6 +3341,14 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
   max-width: 100%;
 
+}
+
+/* iOS Safari only: give the table area more minimum vertical space */
+@supports (-webkit-touch-callout: none) {
+  .table-wrap {
+    min-height: 60svh;
+    max-height: calc(100dvh - 180px);
+  }
 }
 
 .table-wrap:focus {
@@ -5168,8 +5242,12 @@ table[data-app="radarr"] td[data-col="LastWatched"] {
 }
 
 .table-wrap {
-  /* Allow pinch-zoom on iOS Safari inside the table */
-  touch-action: pan-y;
+  /* instead of pan-y */
+  overscroll-behavior: contain;
+}
+
+html.is-ios .table-wrap {
+  -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
 
@@ -5177,32 +5255,49 @@ table[data-app="radarr"] td[data-col="LastWatched"] {
   touch-action: pan-y;
 }
 
-/* Touch devices: increase tap targets and prevent iOS input zoom */
 @media (pointer: coarse) {
   .column-row {
     padding: 10px 10px;
-    min-height: 44px;
     gap: 12px;
-    font-size: 1rem;
+    /* remove min-height and font-size inflation */
   }
+}
 
-  .column-row input[type="checkbox"] {
-    width: 22px;
-    height: 22px;
-    flex: 0 0 auto;
-  }
+html.is-ios table[data-app="radarr"] .match-diag-btn,
+html.is-ios table[data-app="radarr"] .row-refresh-btn--title,
+html.is-ios table[data-app="radarr"] .history-btn,
+html.is-ios table[data-app="radarr"] .lang-toggle,
+html.is-ios table[data-app="sonarr"] .series-season-toggle,
+html.is-ios table[data-app="sonarr"] .series-expansion-toggle {
+  min-height: 0;
+  font-size: inherit;
+  /* avoid the 16px bump affecting line boxes */
+  line-height: 1;
+  padding-top: 0;
+  padding-bottom: 0;
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+}
 
-  button,
-  select,
-  input[type="text"],
-  input[type="search"] {
-    min-height: 44px;
-    font-size: 16px;
-  }
 
-  .table-wrap {
-    font-size: 0.95rem;
-  }
+.column-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+button,
+select,
+input[type="text"],
+input[type="search"] {
+  min-height: 44px;
+  font-size: 16px;
+}
+
+.table-wrap {
+  font-size: 0.95rem;
 }
 
 /* Safari: containment and content-visibility can cause broken scrolling and hit testing */
@@ -5299,12 +5394,15 @@ html.is-ios .perf-overlay {
 .history-drawer {
   width: min(440px, 80vw);
   max-height: 100vh;
-  overflow-y: auto;
-  overflow-x: hidden;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding: 16px;
   backdrop-filter: blur(12px);
   border-left: 1px solid var(--border-color, #444);
 }
+
 
 .history-header {
   display: flex;
@@ -5348,6 +5446,7 @@ html.is-ios .perf-overlay {
 }
 
 .history-summary-row {
+  min-width: 0;
   display: grid;
   grid-template-columns: 80px 1fr;
   gap: 8px;
@@ -5376,6 +5475,14 @@ html.is-ios .perf-overlay {
   color: var(--muted-color, #aaa);
 }
 
+/* Prevent right-edge clipping in Latest/Previous on narrow screens */
+.history-summary-line>span,
+.history-summary-sub>span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .history-summary-delta {
   text-align: right;
   color: var(--accent, #7dd1ff);
@@ -5386,6 +5493,34 @@ html.is-ios .perf-overlay {
   display: grid;
   gap: 10px;
   margin-top: 10px;
+
+  /* single vertical scroll owner */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  /* instead of auto */
+  overflow-x: hidden;
+
+  /* native momentum scrolling (iOS) + no scroll chaining */
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE/Edge legacy */
+
+  align-content: start;
+  grid-auto-rows: max-content;
+
+  /* ensure vertical pans scroll the drawer */
+  touch-action: pan-y;
+  padding-bottom: calc(125px + env(safe-area-inset-bottom));
+
+}
+
+.history-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .history-row {
@@ -5410,13 +5545,19 @@ html.is-ios .perf-overlay {
   margin-top: 4px;
 }
 
+/* Prevent long tokens (e.g. DL ids) from being clipped on narrow screens */
+.history-row-meta>span,
+.history-row-primary>span {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .history-note {
   margin-top: 4px;
 }
 
 body.history-open {
   overflow: hidden;
-  touch-action: none;
 }
 
 .title-control-wrap {
