@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.12] - 2026-01-29
+
+
+- UI filtering shortcut: Progress/status text can act as a clickable shortcut to toggle filters (matchstatus:matched / -matchstatus:matched), only when the UI is not actively refreshing.
+- Tautulli state handling: Fixed logic that treated empty-but-valid cached Tautulli data as missing; timestamp validation now explicitly checks for None instead of falsy values.
+- Localization: Updated German translation files (translations/de/...messages.po and .mo) for new and modified UI strings.
+- Added support for separate internal (API) and external (UI) Sonarr/Radarr URLs.
+- New env vars: SONARR_URL_API[_N], SONARR_URL_EXTERNAL[_N], RADARR_URL_API[_N], RADARR_URL_EXTERNAL[_N].
+- Internal URLs are used for API communication; external URLs are used for UI hyperlinks.
+- Backward compatible with existing SONARR_URL / RADARR_URL configurations.
+- Added External URL fields for Sonarr and Radarr instances in the setup UI.
+
+
 ## [0.7.11] - 2026-01-27
 
 - Fixed JS init stability issues and guarded optional UI helpers to prevent startup crashes.

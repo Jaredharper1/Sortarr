@@ -30,7 +30,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.11"
+APP_VERSION = "0.7.12"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -233,9 +233,10 @@ class CacheManager:
     def get_tautulli_state(self) -> tuple[dict | None, int]:
         with self._lock:
             entry = self._store["tautulli"]
-            data = entry.get("data") or None
-            ts = self._safe_int(entry.get("ts")) if data else 0
-            return data, ts
+            data = entry.get("data")
+            if data is None:
+                return None, 0
+            return data, self._safe_int(entry.get("ts"))
 
     def set_tautulli(self, data: dict | None, ts: float | int) -> None:
         with self._lock:
@@ -1401,21 +1402,27 @@ def _write_env_file(path: str, values: dict):
 
     standard_keys = [
         "SONARR_URL",
+        "SONARR_URL_EXTERNAL",
         "SONARR_API_KEY",
         "SONARR_NAME",
         "SONARR_URL_2",
+        "SONARR_URL_EXTERNAL_2",
         "SONARR_API_KEY_2",
         "SONARR_NAME_2",
         "SONARR_URL_3",
+        "SONARR_URL_EXTERNAL_3",
         "SONARR_API_KEY_3",
         "SONARR_NAME_3",
         "RADARR_URL",
+        "RADARR_URL_EXTERNAL",
         "RADARR_API_KEY",
         "RADARR_NAME",
         "RADARR_URL_2",
+        "RADARR_URL_EXTERNAL_2",
         "RADARR_API_KEY_2",
         "RADARR_NAME_2",
         "RADARR_URL_3",
+        "RADARR_URL_EXTERNAL_3",
         "RADARR_API_KEY_3",
         "RADARR_NAME_3",
         "SONARR_PATH_MAP",
@@ -1646,11 +1653,23 @@ def _apply_startup_migrations() -> None:
 def _collect_instance_indexes(prefix: str) -> list[int]:
     indexes = set()
     for key in os.environ.keys():
-        if key.startswith(f"{prefix}_URL_") or key.startswith(f"{prefix}_API_KEY_") or key.startswith(f"{prefix}_NAME_"):
+        if (
+            key.startswith(f"{prefix}_URL_")
+            or key.startswith(f"{prefix}_URL_API_")
+            or key.startswith(f"{prefix}_URL_EXTERNAL_")
+            or key.startswith(f"{prefix}_API_KEY_")
+            or key.startswith(f"{prefix}_NAME_")
+        ):
             suffix = key.split("_")[-1]
             if suffix.isdigit():
                 indexes.add(int(suffix))
-    if os.environ.get(f"{prefix}_URL") or os.environ.get(f"{prefix}_API_KEY") or os.environ.get(f"{prefix}_NAME"):
+    if (
+        os.environ.get(f"{prefix}_URL")
+        or os.environ.get(f"{prefix}_URL_API")
+        or os.environ.get(f"{prefix}_URL_EXTERNAL")
+        or os.environ.get(f"{prefix}_API_KEY")
+        or os.environ.get(f"{prefix}_NAME")
+    ):
         indexes.add(1)
     return sorted(indexes)
 
@@ -1700,21 +1719,29 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
     instances = []
     for idx in _collect_instance_indexes(prefix):
         suffix = "" if idx == 1 else f"_{idx}"
-        url = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
+        url_api = _normalize_url(os.environ.get(f"{prefix}_URL_API{suffix}", ""))
+        if not url_api:
+            url_api = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
+        url_external = _normalize_url(os.environ.get(f"{prefix}_URL_EXTERNAL{suffix}", ""))
+        if not url_external:
+            url_external = url_api
         api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
         name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
         path_map_raw = str(os.environ.get(f"{prefix}_PATH_MAP{suffix}") or "").strip()
         path_maps = _parse_path_map_entries(path_map_raw)
         path_map = path_maps[0] if path_maps else None
 
-        if not (url and api_key):
+        if not (url_api and api_key):
             continue
         instances.append(
             {
                 "id": f"{label.lower()}-{idx}",
                 "index": idx,
                 "name": name,
-                "url": url,
+                # Internal URL used for API calls.
+                "url": url_api,
+                # External URL used for UI link generation.
+                "external_url": url_external,
                 "api_key": api_key,
                 "path_map": path_map,
                 "path_maps": path_maps,
@@ -1736,7 +1763,8 @@ def _public_instances(instances: list[dict]) -> list[dict]:
         {
             "id": inst.get("id", ""),
             "name": inst.get("name", ""),
-            "url": inst.get("url", ""),
+            # Prefer external URL for the browser, but fall back to the API URL.
+            "url": inst.get("external_url") or inst.get("url", ""),
         }
         for inst in instances
     ]
@@ -1767,12 +1795,15 @@ def _get_config():
     jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
     return {
         "sonarr_url": sonarr_primary["url"] if sonarr_primary else _normalize_url(os.environ.get("SONARR_URL", "")),
+        "sonarr_url_external": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL", "")),
         "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else os.environ.get("SONARR_API_KEY", ""),
         "sonarr_name": os.environ.get("SONARR_NAME", ""),
         "sonarr_url_2": _normalize_url(os.environ.get("SONARR_URL_2", "")),
+        "sonarr_url_external_2": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_2", "")),
         "sonarr_api_key_2": os.environ.get("SONARR_API_KEY_2", ""),
         "sonarr_name_2": os.environ.get("SONARR_NAME_2", ""),
         "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
+        "sonarr_url_external_3": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_3", "")),
         "sonarr_api_key_3": os.environ.get("SONARR_API_KEY_3", ""),
         "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
         "sonarr_path_map": sonarr_path_map,
@@ -1782,12 +1813,15 @@ def _get_config():
         "sonarr_path_map_3": sonarr_path_map_3,
         "sonarr_path_maps_3": _split_path_map_entries(sonarr_path_map_3),
         "radarr_url": radarr_primary["url"] if radarr_primary else _normalize_url(os.environ.get("RADARR_URL", "")),
+        "radarr_url_external": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL", "")),
         "radarr_api_key": radarr_primary["api_key"] if radarr_primary else os.environ.get("RADARR_API_KEY", ""),
         "radarr_name": os.environ.get("RADARR_NAME", ""),
         "radarr_url_2": _normalize_url(os.environ.get("RADARR_URL_2", "")),
+        "radarr_url_external_2": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_2", "")),
         "radarr_api_key_2": os.environ.get("RADARR_API_KEY_2", ""),
         "radarr_name_2": os.environ.get("RADARR_NAME_2", ""),
         "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
+        "radarr_url_external_3": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_3", "")),
         "radarr_api_key_3": os.environ.get("RADARR_API_KEY_3", ""),
         "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
         "radarr_path_map": radarr_path_map,
@@ -7789,24 +7823,30 @@ def setup():
         data = {
             "SONARR_NAME": request.form.get("sonarr_name", "").strip(),
             "SONARR_URL": _normalize_url(request.form.get("sonarr_url", "")),
+            "SONARR_URL_EXTERNAL": _normalize_url(request.form.get("sonarr_url_external", "")),
             "SONARR_API_KEY": request.form.get("sonarr_api_key", "").strip(),
             "SONARR_NAME_2": request.form.get("sonarr_name_2", "").strip(),
             "SONARR_URL_2": _normalize_url(request.form.get("sonarr_url_2", "")),
+            "SONARR_URL_EXTERNAL_2": _normalize_url(request.form.get("sonarr_url_external_2", "")),
             "SONARR_API_KEY_2": request.form.get("sonarr_api_key_2", "").strip(),
             "SONARR_NAME_3": request.form.get("sonarr_name_3", "").strip(),
             "SONARR_URL_3": _normalize_url(request.form.get("sonarr_url_3", "")),
+            "SONARR_URL_EXTERNAL_3": _normalize_url(request.form.get("sonarr_url_external_3", "")),
             "SONARR_API_KEY_3": request.form.get("sonarr_api_key_3", "").strip(),
             "SONARR_PATH_MAP": sonarr_path_map,
             "SONARR_PATH_MAP_2": sonarr_path_map_2,
             "SONARR_PATH_MAP_3": sonarr_path_map_3,
             "RADARR_NAME": request.form.get("radarr_name", "").strip(),
             "RADARR_URL": _normalize_url(request.form.get("radarr_url", "")),
+            "RADARR_URL_EXTERNAL": _normalize_url(request.form.get("radarr_url_external", "")),
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
             "RADARR_NAME_2": request.form.get("radarr_name_2", "").strip(),
             "RADARR_URL_2": _normalize_url(request.form.get("radarr_url_2", "")),
+            "RADARR_URL_EXTERNAL_2": _normalize_url(request.form.get("radarr_url_external_2", "")),
             "RADARR_API_KEY_2": request.form.get("radarr_api_key_2", "").strip(),
             "RADARR_NAME_3": request.form.get("radarr_name_3", "").strip(),
             "RADARR_URL_3": _normalize_url(request.form.get("radarr_url_3", "")),
+            "RADARR_URL_EXTERNAL_3": _normalize_url(request.form.get("radarr_url_external_3", "")),
             "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
             "RADARR_PATH_MAP": radarr_path_map,
             "RADARR_PATH_MAP_2": radarr_path_map_2,
@@ -7944,14 +7984,28 @@ def api_config():
     cfg = _get_config()
     provider = _playback_provider(cfg)
     playback_enabled = bool(provider)
+    # The frontend uses sonarr_url/radarr_url as a base for generating clickable links.
+    # If split URLs are configured, prefer the external URL, but fall back to the API URL.
+    sonarr_instances_public = _public_instances(cfg.get("sonarr_instances", []))
+    radarr_instances_public = _public_instances(cfg.get("radarr_instances", []))
+    sonarr_public_base = (
+        sonarr_instances_public[0].get("url", "")
+        if sonarr_instances_public
+        else _normalize_url(os.environ.get("SONARR_URL_EXTERNAL") or "") or cfg["sonarr_url"]
+    )
+    radarr_public_base = (
+        radarr_instances_public[0].get("url", "")
+        if radarr_instances_public
+        else _normalize_url(os.environ.get("RADARR_URL_EXTERNAL") or "") or cfg["radarr_url"]
+    )
     return jsonify(
         {
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
-            "sonarr_url": cfg["sonarr_url"],
-            "radarr_url": cfg["radarr_url"],
-            "sonarr_instances": _public_instances(cfg.get("sonarr_instances", [])),
-            "radarr_instances": _public_instances(cfg.get("radarr_instances", [])),
+            "sonarr_url": sonarr_public_base,
+            "radarr_url": radarr_public_base,
+            "sonarr_instances": sonarr_instances_public,
+            "radarr_instances": radarr_instances_public,
             "tautulli_configured": playback_enabled,
             "playback_configured": playback_enabled,
             "playback_provider": provider,

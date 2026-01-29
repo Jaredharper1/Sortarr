@@ -38,7 +38,7 @@ td.right,
 
   --accent: #f0bbfd;
 
-  --accent-rgb: 245, 158, 11;
+  --accent-rgb: 240, 187, 253;
 
   --match-ok: #16a34a;
 
@@ -313,6 +313,8 @@ body {
   padding: 0;
 
   background: var(--page-bg);
+
+  touch-action: auto;
 
   background-repeat: no-repeat;
 
@@ -1290,16 +1292,11 @@ html[data-theme="dark"] .advanced-warnings {
       rgba(0, 0, 0, 0.10) 100%),
     var(--glass-surface);
   padding: 2px calc(6px + var(--chip-prefix-space));
-  border-radius: 15x;
+  border-radius: 15px;
   font-size: 0.90em;
   font-weight: 500;
   z-index: 15;
 }
-
-
-
-
-
 
 .chip:hover {
   transform: translateY(-1px);
@@ -1310,18 +1307,6 @@ html[data-theme="dark"] .advanced-warnings {
   box-shadow:
     inset 0 2px 8px rgba(0, 0, 0, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.06);
-}
-
-
-
-
-
-
-
-
-.chip>* {
-  position: relative;
-  z-index: 1;
 }
 
 .chip--pos:hover {
@@ -1346,14 +1331,9 @@ html[data-theme="dark"] .advanced-warnings {
   border-color: rgba(255, 255, 255, 0.45);
 }
 
-
-
 html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
   border-color: #f0bbfd;
 }
-
-
-
 
 .chip::after {
   opacity: 0.18;
@@ -1363,8 +1343,6 @@ html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
       rgba(255, 255, 255, 0.10) 22%,
       rgba(255, 255, 255, 0.00) 55%);
 }
-
-
 
 /* Ensure chip content sits above the ::after layer */
 .chip>* {
@@ -1819,7 +1797,7 @@ html[data-theme="dark"] .column-panel {
 
 .mixed-badge-inline {
 
-  margin-left: 6px;
+  margin-left: 0;
 
 }
 
@@ -2346,184 +2324,145 @@ tbody tr:focus-within .row-refresh-btn--title {
 
 }
 
-
-
 tbody tr.row-refresh-pending .row-refresh-btn--title span {
-
   animation: row-refresh-spin 0.85s linear infinite;
-
   transform-origin: center;
-
 }
-
-
 
 tbody tr.row-refresh-pending .row-refresh-btn--title {
-
   color: var(--row-refresh-icon-hover);
-
   opacity: 1;
-
   pointer-events: auto;
-
 }
 
-
-
-.lang-cell {
-
+/* Default: tight layout (no giant runway) */
+.lang-cell,
+.lang-cell-truncated {
   display: inline-flex;
-
   align-items: center;
-
   gap: 6px;
-
-  max-width: 100%;
-
-}
-
-
-
-
-.lang-cell .lang-list {
-  flex: 1 1 auto;
-  min-width: 0;
+  max-width: max-content;
 }
 
 .lang-cell .lang-toggle,
-.lang-cell .mixed-badge-inline {
-  flex: 0 0 auto;
+.lang-cell .mixed-badge-inline,
+.lang-cell-truncated .lang-toggle,
+.lang-cell-truncated .mixed-badge-inline {
+  margin-left: 0;
 }
 
-.lang-cell-truncated {
-
-  white-space: nowrap;
-
-}
-
-
-
-.lang-cell-truncated .lang-list {
-  flex: 1 1 auto;
-
+/* Pills (Show all / Mixed) base styling */
+.lang-cell .lang-toggle,
+.lang-cell .mixed-badge-inline,
+.lang-cell-truncated .lang-toggle,
+.lang-cell-truncated .mixed-badge-inline {
   display: inline-flex;
   align-items: center;
+  line-height: 1;
+  padding: 1px 6px;
+  border-radius: 999px;
+}
+
+/* Toggle button specifics */
+.lang-toggle {
+  border: 1px solid var(--border);
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  font-size: 0.75em;
+  color: var(--muted);
+}
+
+.lang-toggle:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+/* Truncation: make the list take remaining width and ellipsize */
+.lang-cell-truncated .lang-list {
+  flex: 1 1 auto;
   min-width: 0;
-  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.lang-cell-truncated.is-expanded {
-
-  .lang-summary {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-width: 0;
-    max-width: 100%;
-  }
-
-  .lang-main {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .lang-more {
-    flex: 0 0 auto;
-    white-space: nowrap;
-  }
-
-  white-space: normal;
-
-  flex-wrap: wrap;
-
+/* Only these columns: align pills to the right edge of the cell */
+td[data-col="VideoQuality"] .lang-cell,
+td[data-col="Resolution"] .lang-cell,
+td[data-col="VideoCodec"] .lang-cell,
+td[data-col="VideoHDR"] .lang-cell,
+td[data-col="VideoQuality"] .lang-cell-truncated,
+td[data-col="Resolution"] .lang-cell-truncated,
+td[data-col="VideoCodec"] .lang-cell-truncated,
+td[data-col="VideoHDR"] .lang-cell-truncated {
+  display: flex;
+  width: 100%;
+  gap: 2px;
+  /* tighter pill spacing */
 }
 
+/* In those columns, push the toggle(s) to the right */
+td[data-col="VideoQuality"] .lang-cell .lang-toggle,
+td[data-col="Resolution"] .lang-cell .lang-toggle,
+td[data-col="VideoCodec"] .lang-cell .lang-toggle,
+td[data-col="VideoHDR"] .lang-cell .lang-toggle,
+td[data-col="VideoQuality"] .lang-cell-truncated .lang-toggle,
+td[data-col="Resolution"] .lang-cell-truncated .lang-toggle,
+td[data-col="VideoCodec"] .lang-cell-truncated .lang-toggle,
+td[data-col="VideoHDR"] .lang-cell-truncated .lang-toggle {
+  margin-left: auto;
+}
 
+/* Expanded state: allow wrapping and show full text */
+.lang-cell-truncated.is-expanded {
+  white-space: normal;
+  flex-wrap: wrap;
+}
 
 .lang-cell-truncated.is-expanded .lang-list {
-
   white-space: normal;
-
   overflow: visible;
-
   text-overflow: clip;
-
 }
 
-
-
-
+/* If you have these sub-elements, flatten the selectors (no nesting) */
 .lang-cell-truncated.is-expanded .lang-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: max-content;
   flex-wrap: wrap;
   white-space: normal;
 }
 
 .lang-cell-truncated.is-expanded .lang-main {
+  min-width: 0;
   overflow: visible;
   text-overflow: clip;
   white-space: normal;
 }
 
+.lang-cell-truncated.is-expanded .lang-more {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Global language list formatting (non-truncated contexts) */
 .lang-list {
-
   white-space: normal;
-
   word-break: break-word;
-
 }
 
-
-
-.lang-toggle {
-
-  border: 1px solid var(--border);
-
-  background: transparent;
-  padding: 2px 6px;
-  -webkit-appearance: none;
-  appearance: none;
-
-  border-radius: 999px;
-
-  font-size: 0.75em;
-
-  color: var(--muted);
-
-  margin-left: 6px;
-
-}
-
+/* iOS padding tweak */
 @supports (-webkit-touch-callout: none) {
-  .lang-toggle {
-    display: inline-flex;
-    align-items: center;
 
-    line-height: 1;
-    /* key: stops tall line box */
+  .lang-cell .mixed-badge-inline,
+  .lang-cell .mixed-badge {
     padding-top: 3px;
-    /* visual height control */
     padding-bottom: 3px;
-
-    height: auto;
-    min-height: 0;
-    /* key: overrides UA min heights */
-    vertical-align: middle;
   }
-}
-
-
-
-.lang-toggle:hover {
-
-  border-color: var(--accent);
-
-  color: var(--text);
-
 }
 
 
@@ -2531,15 +2470,10 @@ tbody tr.row-refresh-pending .row-refresh-btn--title {
 button {
 
   background: var(--button-bg);
-
   color: var(--text);
-
   border: 1px solid var(--border);
-
   padding: 6px 10px;
-
   border-radius: 10px;
-
   cursor: pointer;
 
 }
@@ -2555,21 +2489,13 @@ button:hover {
 input {
 
   background: var(--panel);
-
   color: var(--text);
-
   border: 1px solid var(--border);
-
   padding: 6px 8px;
-
   border-radius: 4px;
-
   min-width: 220px;
-
   transition: border-color var(--motion-fast) var(--motion-ease),
-
     box-shadow var(--motion-fast) var(--motion-ease),
-
     background-image var(--motion-fast) var(--motion-ease);
 
 }
@@ -2801,8 +2727,8 @@ button:disabled {
   overflow: auto;
 
   position: relative;
-  z-index: 3;
-  touch-action: pan-y;
+  z-index: 50;
+  touch-action: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 
@@ -2831,8 +2757,6 @@ button:disabled {
   opacity: 0;
 
   animation: status-complete-flash-inner 2.6s var(--motion-ease);
-
-  pointer-events: none;
 
 }
 
@@ -2982,7 +2906,7 @@ button:disabled {
 
   visibility: hidden;
 
-  pointer-events: none;
+
 
 }
 
@@ -3002,7 +2926,6 @@ button:disabled {
 
   padding-bottom: 0;
 
-  pointer-events: none;
 
 }
 
@@ -3060,7 +2983,7 @@ button:disabled {
 
   transform: translateY(-6px);
 
-  pointer-events: none;
+
 
   max-height: 0;
 
@@ -3102,23 +3025,24 @@ button:disabled {
 /* Light mode visibility pass for animated status pills */
 html:not([data-theme="dark"]) .status-pill.status-pill--pending {
   /* darker text for contrast on light backgrounds */
-  color: rgba(80, 60, 0, 0.92);
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 60%, black);
+
 
   /* stronger, warmer border so it reads on white */
   border-color: rgba(var(--accent-rgb), 0.85);
 
   /* more opaque fill, less “washed out” */
   background: linear-gradient(120deg,
-      rgba(var(--accent-rgb), 0.18),
-      rgba(var(--accent-rgb), 0.34),
-      rgba(var(--accent-rgb), 0.18));
+      rgba(var(--accent-rgb), 0.16),
+      rgba(var(--accent-rgb), 0.60),
+      rgba(var(--accent-rgb), 0.16));
 
   background-size: 200% 100%;
 
   /* subtle inner edge so it doesn't disappear on pale surfaces */
   box-shadow:
     inset 0 0 0 1px rgba(var(--accent-rgb), 0.22),
-    0 1px 0 rgba(0, 0, 0, 0.06);
+    0 1px 0 rgba(110, 19, 19, 0.06);
 
   animation: status-pill-sheen 2.8s var(--motion-ease) infinite;
 }
@@ -3129,7 +3053,7 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
   background: linear-gradient(120deg,
       rgba(var(--match-ok-rgb), 0.16),
-      rgba(var(--match-ok-rgb), 0.30),
+      rgba(var(--match-ok-rgb), 0.60),
       rgba(var(--match-ok-rgb), 0.16));
 
   background-size: 200% 100%;
@@ -3222,6 +3146,8 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
   margin-top: 8px;
 
+  max-width: max-content;
+
   padding: 8px 12px;
 
   border-radius: 8px;
@@ -3234,6 +3160,29 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
   font-size: 0.9em;
 
+}
+
+html:not([data-theme="dark"]) .status-banner {
+  color: color-mix(in srgb, rgb(var(--accent-rgb)) 60%, black);
+  max-width: max-content;
+
+  /* stronger, warmer border so it reads on white */
+  border-color: rgba(var(--accent-rgb), 0.85);
+
+  /* more opaque fill, less “washed out” */
+  background: linear-gradient(120deg,
+      rgba(var(--accent-rgb), 0.18),
+      rgba(var(--accent-rgb), 0.60),
+      rgba(var(--accent-rgb), 0.18));
+
+  background-size: 200% 100%;
+
+  /* subtle inner edge so it doesn't disappear on pale surfaces */
+  box-shadow:
+    inset 0 0 0 1px rgba(var(--accent-rgb), 0.22),
+    0 1px 0 rgba(0, 0, 0, 0.06);
+
+  animation: status-pill-sheen 2.8s var(--motion-ease) infinite;
 }
 
 
@@ -3340,6 +3289,10 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
   scrollbar-gutter: stable;
 
   max-width: 100%;
+
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+
 
 }
 
@@ -3512,7 +3465,7 @@ td {
 
   border-right: 1px solid var(--col-divider-color);
 
-  text-align: center;
+  text-align: left;
 
   font-size: 0.95em;
 
@@ -3521,6 +3474,16 @@ td {
 }
 
 
+
+td[data-col="AudioChannels"],
+th[data-col="AudioChannels"] {
+  text-align: left;
+
+}
+
+.audio-channels-cell {
+  text-align: center;
+}
 
 th:last-child,
 
@@ -3620,8 +3583,6 @@ td[data-col="Title"] {
 
   min-width: 0;
 
-  text-align: center;
-
 
 }
 
@@ -3674,7 +3635,7 @@ td[data-col="Title"] {
 
 .num-frac {
 
-  text-align: left;
+  text-align: center;
 
   min-width: var(--num-frac-width, 0ch);
 
@@ -3941,7 +3902,7 @@ tbody tr.row-refresh-focus td {
 
 
 td[data-col="AudioCodec"] {
-  max-width: 360px;
+  max-width: max-content;
 }
 
 td[data-col="RootFolder"],
@@ -3978,21 +3939,15 @@ td[data-col="VideoCodec"],
 td[data-col="VideoHDR"],
 td[data-col="AudioCodec"] {
 
+
+
+
   white-space: nowrap;
 
   overflow: hidden;
 
   text-overflow: ellipsis;
 
-}
-
-td[data-col="Genres"] .lang-cell:not(.is-expanded) .lang-list {
-  display: inline-block;
-  max-width: 100%;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 
@@ -4567,15 +4522,6 @@ tr.series-child-row--open .series-expansion {
   display: block;
 }
 
-.series-episode-runtime {
-  font-variant-numeric: var(--font-sans);
-}
-
-.series-episode-custom-score,
-.series-episode-cutoff,
-.series-episode-monitored {
-  font-variant-numeric: var(--font-sans);
-}
 
 .series-episode-size {
   font-family: var(--font-sans);
@@ -4712,7 +4658,7 @@ th[data-col="AudioLanguagesMixed"],
 td[data-col="AudioLanguagesMixed"],
 th[data-col="SubtitleLanguagesMixed"],
 td[data-col="SubtitleLanguagesMixed"] {
-  width: 220px;
+  width: auto;
 }
 
 /* Let inner content shrink correctly (prevents hard clipping in flex/grid) */
@@ -4761,11 +4707,6 @@ th[data-col="TitleSlug"] {
    Keep all column widths in one place, like a spreadsheet config panel.
    Edit the variables below (the mapping rules reference only these vars).
    =========================== */
-
-/* Per-app knob: Sonarr has an expander gutter, Radarr does not. */
-table[data-app="radarr"] {
-  --title-expand-gutter: 0px;
-}
 
 /* Default caps (shared). Override inside table[data-app="sonarr"] or table[data-app="radarr"] if needed. */
 table[data-app] {
@@ -4825,11 +4766,16 @@ td[data-col="Title"] {
 
 }
 
+th[data-col="TotalSizeGB"],
+td[data-col="TotalSizeGB"] {
+  text-align: center;
+}
+
 th[data-col="RootFolder"],
 td[data-col="RootFolder"] {
-  width: var(--w-RootFolder);
-  min-width: var(--w-RootFolder);
-  max-width: var(--w-RootFolder);
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
   text-align: left;
 }
 
@@ -5038,16 +4984,16 @@ td[data-col="OriginalLanguage"] {
 
 th[data-col="Genres"],
 td[data-col="Genres"] {
-  width: var(--w-OriginalLanguage);
-  min-width: var(--w-OriginalLanguage);
-  max-width: var(--w-OriginalLanguage);
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 th[data-col="Genre"],
 td[data-col="Genre"] {
-  width: var(--w-OriginalLanguage);
-  min-width: var(--w-OriginalLanguage);
-  max-width: var(--w-OriginalLanguage);
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 th[data-col="Edition"],
@@ -5066,23 +5012,23 @@ td[data-col="CustomFormats"] {
 
 th[data-col="Languages"],
 td[data-col="Languages"] {
-  min-width: 100px;
+  min-width: 220px;
   width: var(--w-OriginalLanguage);
-  max-width: none;
+  max-width: max-content;
 }
 
 th[data-col="AudioLanguages"],
 td[data-col="AudioLanguages"] {
-  min-width: 100px;
+  min-width: 220px;
   width: var(--w-OriginalLanguage);
-  max-width: 300px;
+  max-width: max-content;
 }
 
 th[data-col="SubtitleLanguages"],
 td[data-col="SubtitleLanguages"] {
-  min-width: 100px;
+  min-width: 220px;
   width: var(--w-OriginalLanguage);
-  max-width: 300px;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] {
@@ -5097,7 +5043,7 @@ table[data-app="radarr"] {
 th[data-col="UsersWatched"],
 td[data-col="UsersWatched"] {
   min-width: 120px;
-  width: var(--w-OriginalLanguage);
+  width: auto;
   max-width: none;
 }
 
@@ -5105,30 +5051,27 @@ td[data-col="UsersWatched"] {
 th[data-col="watchtimehours"],
 td[data-col="watchtimehours"] {
   min-width: 100px;
-  width: var(--w-OriginalLanguage);
-  max-width: 100px;
+  width: auto;
 }
 
 th[data-col="totalwatchtime"],
 td[data-col="totalwatchtime"] {
   min-width: 100px;
-  width: var(--w-OriginalLanguage);
-  max-width: 100px;
+  width: auto;
 }
 
 
 th[data-col="LastWatched"],
 td[data-col="LastWatched"] {
   min-width: 100px;
-  width: var(--w-OriginalLanguage);
+  width: auto;
   max-width: none;
 }
 
 table[data-app="radarr"] th[data-col="Studio"],
 table[data-app="radarr"] td[data-col="Studio"] {
   min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: 220px;
+  width: auto;
 }
 
 table[data-app="radarr"] {
@@ -5137,44 +5080,44 @@ table[data-app="radarr"] {
 
 table[data-app="radarr"] th[data-col="Genres"],
 table[data-app="radarr"] td[data-col="Genres"] {
-  min-width: 300px;
-  width: var(--w-OriginalLanguage);
-  max-width: 300px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] th[data-col="LastSearchTime"],
 table[data-app="radarr"] td[data-col="LastSearchTime"] {
-  min-width: 150px;
-  width: var(--w-OriginalLanguage);
-  max-width: 150px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] th[data-col="Languages"],
 table[data-app="radarr"] td[data-col="Languages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: 220px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] th[data-col="AudioLanguages"],
 table[data-app="radarr"] td[data-col="AudioLanguages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: 220px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] th[data-col="SubtitleLanguages"],
 table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: 220px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 table[data-app="radarr"] th[data-col="LastWatched"],
 table[data-app="radarr"] td[data-col="LastWatched"] {
-  min-width: 150px;
-  width: var(--w-OriginalLanguage);
-  max-width: 150px;
+  width: auto;
+  min-width: auto;
+  max-width: max-content;
 }
 
 .radarr-poster-tooltip {
@@ -5252,7 +5195,7 @@ html.is-ios .table-wrap {
 }
 
 .column-panel {
-  touch-action: pan-y;
+  touch-action: auto;
 }
 
 /* iOS only: increase tap targets and prevent iOS input zoom */
@@ -5284,8 +5227,8 @@ html.is-ios table[data-app="sonarr"] .series-expansion-toggle {
   font-size: inherit;
   /* avoid the 16px bump affecting line boxes */
   line-height: 1;
-  padding-top: 0;
-  padding-bottom: 0;
+  padding-top: 2px;
+  padding-bottom: 2px;
   -webkit-appearance: none;
   appearance: none;
   display: inline-flex;
@@ -5391,7 +5334,7 @@ html.is-ios .perf-overlay {
 .history-scrim {
   flex: 1;
   background: rgba(0, 0, 0, 0.45);
-  touch-action: none;
+  touch-action: auto;
 }
 
 .history-drawer {
@@ -5516,7 +5459,7 @@ html.is-ios .perf-overlay {
   grid-auto-rows: max-content;
 
   /* ensure vertical pans scroll the drawer */
-  touch-action: pan-y;
+  touch-action: auto;
   padding-bottom: calc(125px + env(safe-area-inset-bottom));
 
 }
@@ -5618,4 +5561,26 @@ tr[data-app="radarr"] td[data-col="Title"] {
 
 tr[data-app="radarr"] .title-orb-wrap .title-text {
   max-width: calc(100% - 16px);
+}
+
+/* Progress status clickable filters */
+.progress-link {
+  color: inherit;
+  /* remove blue/purple */
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: text-decoration-thickness 0.15s ease, opacity 0.15s ease;
+}
+
+.progress-link:hover,
+.progress-link:focus-visible {
+  text-decoration-thickness: 2px;
+  opacity: 0.85;
+}
+
+/* Mobile tap feedback */
+.progress-link:active {
+  opacity: 0.7;
 }

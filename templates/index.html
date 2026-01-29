@@ -5,7 +5,8 @@
   <meta charset="utf-8" />
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>{{ app_name }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
@@ -54,7 +55,7 @@
 
 
           <div class="column-group" data-app="sonarr">
-            <div class="column-group-title">Sonarr</div>
+            <div class="column-group-title">{{ _('Sonarr') }}</div>
 
             <label class="column-row column-row--group">
               <input type="checkbox" data-col-group="sonarr" /> {{ _('Sonarr columns') }}
@@ -226,7 +227,7 @@
             <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
               }}</button>
             <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
-            <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">?</button>
+            <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">{{ _('?') }}</button>
           </div>
         </div>
         <div class="filter-builder" id="filterBuilder">
@@ -241,24 +242,23 @@
             </div>
             <div class="filter-builder-field">
               <label for="filterValueInput">{{ _('Value') }}</label>
-              <select id="filterValueSelect" class="hidden" aria-label="Value"></select>
-              <input id="filterValueInput" placeholder="Value" />
+              <select id="filterValueSelect" class="hidden" aria-label="{{ _('Value') }}"></select>
+              <input id="filterValueInput" placeholder="{{ _('Value') }}" />
             </div>
             <button id="filterAddBtn" class="filter-add-btn" type="button">{{ _('Add') }}</button>
           </div>
           <div class="active-filters hidden" id="activeFilters" aria-live="polite"></div>
         </div>
         <div id="advancedHelp" class="advanced-help hidden">
-          Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact).
+          {{ _('Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact).
           gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples:
           dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb
-          seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true
-          Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile,
-          tags,
+          seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true Fields: title,
+          titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags,
           releasegroup, seriestype, originallanguage, genres, lastaired, videoquality, videocodec, videohdr, resolution,
           audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang,
           subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes,
-          seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours
+          seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours') }}
         </div>
         <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="chip-wrap">
@@ -266,12 +266,12 @@
             <div class="chip-group">
               <div class="chip-group-title">{{ _('Audio') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-query="audio:Atmos">Atmos</button>
-                <button class="chip" type="button" data-query="audio:eac3">DD+</button>
-                <button class="chip" type="button" data-query="audio:truehd">TrueHD</button>
-                <button class="chip" type="button" data-query="audiochannels>=6">5.1+</button>
-                <button class="chip" type="button" data-query="audiochannels>=8">7.1+</button>
-                <button class="chip" type="button" data-query="audiochannels<=2">Stereo</button>
+                <button class="chip" type="button" data-query="audio:Atmos">{{ _('Atmos') }}</button>
+                <button class="chip" type="button" data-query="audio:eac3">{{ _('DD+') }}</button>
+                <button class="chip" type="button" data-query="audio:truehd">{{ _('TrueHD') }}</button>
+                <button class="chip" type="button" data-query="audiochannels>=6">{{ _('5.1+') }}</button>
+                <button class="chip" type="button" data-query="audiochannels>=8">{{ _('7.1+') }}</button>
+                <button class="chip" type="button" data-query="audiochannels<=2">{{ _('Stereo') }}</button>
               </div>
             </div>
             <div class="chip-group">
@@ -353,8 +353,8 @@
               <div class="chip-row">
                 <button class="chip" type="button" data-query="videocodec:x265">x265</button>
                 <button class="chip" type="button" data-query="videocodec:x264">x264</button>
-                <button class="chip" type="button" data-query="videohdr:dolby">Dolby Vision</button>
-                <button class="chip" type="button" data-query="videohdr:hdr">HDR</button>
+                <button class="chip" type="button" data-query="videohdr:dolby">{{ _('Dolby Vision') }}</button>
+                <button class="chip" type="button" data-query="videohdr:hdr">{{ _('HDR') }}</button>
               </div>
             </div>
             <div class="chip-group" data-app="sonarr">
@@ -641,7 +641,9 @@
 
     <script id="i18n-json" type="application/json">
   {{ {
-
+    "ariaRemoveFilter": "Remove filter %(label)s",
+    "statusLoadedCounts": _("Loaded %(rows)s / %(total)s", rows="%(rows)s", total="%(total)s"),
+    "dataLoadedHidingIn": _("Data loaded. Hiding in %(seconds)s…", seconds="%(seconds)s"),
     "label_extras": _("Extras"),
     "sonarr_failed_load_episodes": _("Failed to load episodes."),
     "sonarr_no_episodes_available": _("No episodes available."),
@@ -670,13 +672,10 @@
     "refreshPlaybackTitle": _("Refresh playback library data and rebuild matches"),
     "refreshPlaybackProviderTitle": _("Refresh %(label)s library data and rebuild matches", label="%(label)s"),
 
-
-
     "refreshArrData": _("Refresh %(appLabel)s data", appLabel="%(appLabel)s"),
     "refreshArrDataTitle": _("Refresh %(appLabel)s metadata, reload %(appLabel)s data, and update the cache.", appLabel="%(appLabel)s"),
 
     "appNotConfigured": _("%(app)s is not configured.", app="%(app)s"),
-    "refreshingAppData": _("Refreshing %(app)s data...", app="%(app)s"),
     "appMetadataRefreshQueued": _("%(app)s metadata refresh queued.", app="%(app)s"),
     "label_runtime_hhmm": _("Runtime (hh:mm)"),
     "label_watch_over_runtime_hhmm": _("Watchtime / Runtime (hh:mm)"),
@@ -686,7 +685,6 @@
     "appRefreshQueued": _("%(app)s refresh queued.", app="%(app)s"),
 
     "errorPrefix": _("Error: "),
-
 
     "refreshingSonarr": _("Refreshing Sonarr..."),
     "sonarrRefreshQueued": _("Sonarr refresh queued."),
@@ -723,12 +721,7 @@
     "dataLoadedHover": _("Data loaded. Hover to expand status."),
 
     "receivingPlaybackDataHover": _("Receiving %(label)s data. Hover to expand status.", label="%(label)s"),
-    "matchingInProgressHoverProcessed": _(
-      "%(label)s matching in progress (%(processed)s/%(total)s processed). Hover to expand status.",
-      label="%(label)s",
-      processed="%(processed)s",
-      total="%(total)s"
-    ),
+    "matchingInProgressHoverProcessed": _("%(label)s matching in progress (%(processed)s/%(total)s processed). Hover to expand status.", label="%(label)s", processed="%(processed)s", total="%(total)s"),
 
     "cacheAwaitingData": _("%(label)s: Awaiting data", label="%(label)s"),
     "cacheAgeAgo": _("%(label)s: %(age)s ago", label="%(label)s", age="%(age)s"),
@@ -861,6 +854,42 @@
 
     "advancedHelpBase": _("Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours"),
     "advancedHelpTautulli": _("Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples: dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 Fields: title, titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour"),
+
+    "Close": _("Close"),
+    "Copy match diagnostics": _("Copy match diagnostics"),
+    "Custom...": _("Custom..."),
+    "Episode": _("Episode"),
+    "Estimated from file size and runtime": _("Estimated from file size and runtime"),
+    "Expand seasons": _("Expand seasons"),
+    "Failed to load history.": _("Failed to load history."),
+    "Fetching history...": _("Fetching history..."),
+    "Hide filters and chips": _("Hide filters and chips"),
+    "Hide quick chips": _("Hide quick chips"),
+    "History": _("History"),
+    "n/a": _("n/a"),
+    "No events available.": _("No events available."),
+    "No file history yet—will populate on next grab/import.": _("No file history yet—will populate on next grab/import."),
+    "No health issues reported.": _("No health issues reported."),
+    "No history yet—will populate on next grab/import.": _("No history yet—will populate on next grab/import."),
+    "No runtime": _("No runtime"),
+    "No watch data": _("No watch data"),
+    "Not Reported": _("Not Reported"),
+    "Not reported": _("Not reported"),
+    "Not reported by Arr": _("Not reported by Arr"),
+    "Radarr": _("Radarr"),
+    "Refresh in Arr (and playback if supported)": _("Refresh in Arr (and playback if supported)"),
+    "Refresh item": _("Refresh item"),
+    "Remove filter %(label)s": _("Remove filter %(label)s", label="%(label)s"),
+    "Select": _("Select"),
+    "Show all": _("Show all"),
+    "Show all events": _("Show all events"),
+    "Show filters and chips": _("Show filters and chips"),
+    "Show latest vs previous": _("Show latest vs previous"),
+    "Show less": _("Show less"),
+    "Show quick chips": _("Show quick chips"),
+    "Sonarr": _("Sonarr"),
+    "Value": _("Value"),
+
 
     
   }|tojson }}
