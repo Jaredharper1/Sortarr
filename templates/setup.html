@@ -59,15 +59,20 @@
             placeholder="{{ _('Regular / Standard / Live Action (example names only; optional unless instance 2 or 3 is configured)') }}"
             value="{{ values.sonarr_name }}" />
         </label>
-        <label>
-          {{ _('Sonarr URL') }}
-          <input name="sonarr_url" placeholder="{{ _('http://192.168.1.120:8989') }}" value="{{ values.sonarr_url }}" />
-        </label>
-            <label>
-              {{ _('Sonarr External URL (optional)') }}
-              <input name="sonarr_url_external" placeholder="{{ _('https://sonarr.domain.tld') }}"
-                value="{{ values.sonarr_url_external }}" />
-            </label>
+         <label>
+           {{ _('Sonarr URL') }}
+           <input name="sonarr_url" placeholder="{{ _('http://192.168.1.120:8989') }}" value="{{ values.sonarr_url }}" />
+         </label>
+         <label>
+           {{ _('Sonarr API URL (optional)') }}
+           <input name="sonarr_url_api" placeholder="{{ _('http://sonarr.sonarr.svc.cluster.local:8989') }}"
+             value="{{ values.sonarr_url_api }}" />
+         </label>
+             <label>
+               {{ _('Sonarr External URL (optional)') }}
+               <input name="sonarr_url_external" placeholder="{{ _('https://sonarr.domain.tld') }}"
+                 value="{{ values.sonarr_url_external }}" />
+             </label>
         <label>
           {{ _('Sonarr API key') }}
           <input name="sonarr_api_key" type="password" autocomplete="off" spellcheck="false"
@@ -111,6 +116,11 @@
               {{ _('Sonarr URL') }}
               <input name="sonarr_url_2" placeholder="{{ _('http://192.168.1.120:8989') }}"
                 value="{{ values.sonarr_url_2 }}" />
+            </label>
+            <label>
+              {{ _('Sonarr API URL (optional)') }}
+              <input name="sonarr_url_api_2" placeholder="{{ _('http://sonarr.sonarr.svc.cluster.local:8989') }}"
+                value="{{ values.sonarr_url_api_2 }}" />
             </label>
             <label>
               {{ _('Sonarr External URL (optional)') }}
@@ -158,6 +168,11 @@
               {{ _('Sonarr URL') }}
               <input name="sonarr_url_3" placeholder="{{ _('http://192.168.1.120:8989') }}"
                 value="{{ values.sonarr_url_3 }}" />
+            </label>
+            <label>
+              {{ _('Sonarr API URL (optional)') }}
+              <input name="sonarr_url_api_3" placeholder="{{ _('http://sonarr.sonarr.svc.cluster.local:8989') }}"
+                value="{{ values.sonarr_url_api_3 }}" />
             </label>
             <label>
               {{ _('Sonarr External URL (optional)') }}
@@ -213,10 +228,15 @@
           <input name="radarr_url" placeholder="{{ _('http://192.168.1.120:7878') }}" value="{{ values.radarr_url }}" />
         </label>
             <label>
-              {{ _('Radarr External URL (optional)') }}
-              <input name="radarr_url_external" placeholder="{{ _('https://radarr.domain.tld') }}"
-                value="{{ values.radarr_url_external }}" />
+              {{ _('Radarr API URL (optional)') }}
+              <input name="radarr_url_api" placeholder="{{ _('http://radarr.radarr.svc.cluster.local:7878') }}"
+                value="{{ values.radarr_url_api }}" />
             </label>
+             <label>
+               {{ _('Radarr External URL (optional)') }}
+               <input name="radarr_url_external" placeholder="{{ _('https://radarr.domain.tld') }}"
+                 value="{{ values.radarr_url_external }}" />
+             </label>
         <label>
           {{ _('Radarr API key') }}
           <input name="radarr_api_key" type="password" autocomplete="off" spellcheck="false"
@@ -260,6 +280,11 @@
               {{ _('Radarr URL') }}
               <input name="radarr_url_2" placeholder="{{ _('http://192.168.1.120:7878') }}"
                 value="{{ values.radarr_url_2 }}" />
+            </label>
+            <label>
+              {{ _('Radarr API URL (optional)') }}
+              <input name="radarr_url_api_2" placeholder="{{ _('http://radarr.radarr.svc.cluster.local:7878') }}"
+                value="{{ values.radarr_url_api_2 }}" />
             </label>
             <label>
               {{ _('Radarr External URL (optional)') }}
@@ -307,6 +332,11 @@
               {{ _('Radarr URL') }}
               <input name="radarr_url_3" placeholder="{{ _('http://192.168.1.120:7878') }}"
                 value="{{ values.radarr_url_3 }}" />
+            </label>
+            <label>
+              {{ _('Radarr API URL (optional)') }}
+              <input name="radarr_url_api_3" placeholder="{{ _('http://radarr.radarr.svc.cluster.local:7878') }}"
+                value="{{ values.radarr_url_api_3 }}" />
             </label>
             <label>
               {{ _('Radarr External URL (optional)') }}

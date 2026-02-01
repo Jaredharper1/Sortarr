@@ -87,6 +87,7 @@ const filtersEl = document.getElementById("filtersPanel");
 
 const logoEl = document.getElementById("brandLogo");
 const themeBtn = document.getElementById("themeBtn");
+const tableFullscreenBtn = document.getElementById("tableFullscreenBtn");
 const root = document.documentElement; // <html>
 const IS_IOS = root.classList.contains("is-ios");
 const tableEl = document.querySelector("table");
@@ -99,6 +100,114 @@ const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
 const I18N = window.I18N || {};
 window.I18N = I18N;
+
+
+let tableUnfullscreenBtn = null;
+
+function syncTableUnfullscreenBtnHost() {
+  if (!tableUnfullscreenBtn) return;
+  if (tableUnfullscreenBtn.parentNode !== document.body) {
+    document.body.appendChild(tableUnfullscreenBtn);
+  }
+}
+
+function ensureTableUnfullscreenBtn() {
+  if (tableUnfullscreenBtn) return tableUnfullscreenBtn;
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "table-unfullscreen-btn";
+  btn.id = "tableUnfullscreenBtn";
+  btn.textContent = "✕";
+  btn.title = t("Exit fullscreen", "Exit fullscreen");
+  btn.setAttribute("aria-label", t("Exit fullscreen", "Exit fullscreen"));
+
+  btn.addEventListener("click", () => {
+    setTableFullscreenEnabled(false);
+    if (document.fullscreenElement) {
+      exitTrueFullscreenIfPossible();
+      return;
+    }
+    applyTableFullscreen(false);
+  });
+
+  tableUnfullscreenBtn = btn;
+  syncTableUnfullscreenBtnHost();
+  return btn;
+}
+
+
+const TABLE_FULLSCREEN_STORAGE_KEY = "Sortarr-table-fullscreen";
+
+function isTableFullscreenEnabled() {
+  try {
+    return localStorage.getItem(TABLE_FULLSCREEN_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setTableFullscreenEnabled(enabled) {
+  try {
+    localStorage.setItem(TABLE_FULLSCREEN_STORAGE_KEY, enabled ? "1" : "0");
+  } catch { }
+}
+
+function measureTableFullscreenTop() {
+  const toolbar = document.querySelector(".toolbar");
+  if (!toolbar) return 0;
+  const rect = toolbar.getBoundingClientRect();
+  // Keep a small breathing room so the table header isn't glued to the toolbar border.
+  return Math.max(0, Math.round(rect.bottom + 8));
+}
+
+function applyTableFullscreen(enabled) {
+  ensureTableUnfullscreenBtn();
+  syncTableUnfullscreenBtnHost();
+
+  root.classList.toggle("table-fullscreen", enabled);
+
+  // Toolbar is hidden in fullscreen, so table should start at top of viewport.
+  const topPx = enabled ? 0 : measureTableFullscreenTop();
+  root.style.setProperty("--table-fullscreen-top", `${topPx}px`);
+
+  // IMPORTANT: when fullscreen, remove JS max-height clamps
+  if (tableWrapEl) {
+    tableWrapEl.style.maxHeight = enabled ? "" : tableWrapEl.style.maxHeight;
+  }
+
+  scheduleTableWrapLayout();
+}
+
+function canUseElementFullscreen() {
+  const el = document.documentElement;
+  return !!(document.fullscreenEnabled && el && el.requestFullscreen);
+}
+
+async function enterTrueFullscreenIfPossible() {
+  if (!canUseElementFullscreen()) return false;
+  if (IS_IOS) return false; // iOS Safari unreliable
+
+  try {
+    await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function exitTrueFullscreenIfPossible() {
+  if (!document.fullscreenElement) return;
+  try { await document.exitFullscreen(); } catch { }
+}
+
+document.addEventListener("fullscreenchange", () => {
+  const isFs = !!document.fullscreenElement;
+  setTableFullscreenEnabled(isFs);
+  applyTableFullscreen(isFs);
+  try { syncHistoryOverlayHost(); } catch { }
+});
+
 
 if (progressStatusEl) {
   progressStatusEl.addEventListener("click", (e) => {
@@ -534,6 +643,12 @@ function closeAllCustomSelects() {
     state.menu.classList.add("hidden");
     state.trigger.setAttribute("aria-expanded", "false");
     state.wrapper.classList.remove("custom-select--open");
+    if (state.searchInput) {
+      state.searchInput.value = "";
+      state.menu.querySelectorAll(".custom-select-option").forEach(btn => {
+        btn.style.display = "";
+      });
+    }
   });
   activeCustomSelectState = null;
 }
@@ -548,11 +663,24 @@ function openCustomSelect(state) {
   activeCustomSelectState = state;
   scheduleCustomSelectPosition();
   window.requestAnimationFrame(scheduleCustomSelectPosition);
+  if (state.searchInput) {
+    try { state.searchInput.focus({ preventScroll: true }); } catch { state.searchInput.focus(); }
+    return;
+  }
   const selected = state.menu.querySelector(".custom-select-option.is-selected");
   const target = selected || state.menu.querySelector(".custom-select-option");
   if (target) {
     try { target.focus({ preventScroll: true }); } catch { target.focus(); }
   }
+}
+
+function applyCustomSelectSearchFilter(state) {
+  if (!state?.searchInput) return;
+  const query = String(state.searchInput.value || "").trim().toLowerCase();
+  state.menu.querySelectorAll(".custom-select-option").forEach(btn => {
+    const label = String(btn.textContent || "").toLowerCase();
+    btn.style.display = !query || label.includes(query) ? "" : "none";
+  });
 }
 
 function updateCustomSelect(selectEl) {
@@ -569,6 +697,9 @@ function updateCustomSelect(selectEl) {
   const selectedOption = options.find(opt => opt.value === selectEl.value) || options[0];
   state.label.textContent = selectedOption ? selectedOption.textContent : t("Select");
   state.menu.textContent = "";
+  if (state.searchWrap) {
+    state.menu.appendChild(state.searchWrap);
+  }
   options.forEach(option => {
     const btn = document.createElement("button");
     btn.type = "button";
@@ -593,6 +724,7 @@ function updateCustomSelect(selectEl) {
     });
     state.menu.appendChild(btn);
   });
+  applyCustomSelectSearchFilter(state);
   if (state === activeCustomSelectState) {
     ensureCustomSelectPortal(state);
     scheduleCustomSelectPosition();
@@ -640,6 +772,31 @@ function initCustomSelect(selectEl) {
 
   const state = { select: selectEl, wrapper, trigger, label, menu };
   CUSTOM_SELECTS.set(selectEl, state);
+
+  if (selectEl === filterCategory) {
+    const searchWrap = document.createElement("div");
+    searchWrap.className = "custom-select-search-wrap";
+
+    const searchInput = document.createElement("input");
+    searchInput.type = "search";
+    searchInput.className = "custom-select-search";
+    searchInput.placeholder = t("Search categories…", "Search categories…");
+    searchInput.setAttribute("aria-label", t("Search categories", "Search categories"));
+    searchInput.autocomplete = "off";
+    searchInput.spellcheck = false;
+
+    searchInput.addEventListener("input", () => applyCustomSelectSearchFilter(state));
+    searchInput.addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        searchInput.value = "";
+        applyCustomSelectSearchFilter(state);
+      }
+    });
+
+    searchWrap.appendChild(searchInput);
+    state.searchWrap = searchWrap;
+    state.searchInput = searchInput;
+  }
 
   menu.addEventListener(
     "wheel",
@@ -786,7 +943,12 @@ function updateFilterValueOptions() {
 
 function updateFilterBuilderOptions() {
   if (!filterCategory) return;
-  const fields = getFilterBuilderFields();
+  const fields = getFilterBuilderFields()
+    .slice()
+    .sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }));
   const current = filterCategory.value;
   filterCategory.textContent = "";
   fields.forEach(field => {
@@ -1049,6 +1211,14 @@ function applyViewState(app) {
 
 function updateTableWrapMaxHeight() {
   if (!tableWrapEl) return;
+
+  // Fullscreen mode: CSS owns sizing; don't apply maxHeight clamps.
+  if (root.classList.contains("table-fullscreen")) {
+    tableWrapEl.style.maxHeight = "";
+    scheduleTableLayoutSync({ force: false, skipIfUnchanged: true });
+    return;
+  }
+
   const rect = tableWrapEl.getBoundingClientRect();
   const bottomPadding = 12;
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
@@ -1753,6 +1923,20 @@ function loadHealthDismissed() {
       if (parsed.radarr && typeof parsed.radarr === "object") healthState.dismissed.radarr = parsed.radarr;
     }
   } catch (_) { }
+
+  // Migration: older builds stored category-level keys (error/warning/notice/unreachable).
+  // Keep only per-alert keys plus the optional "ok" dismissal.
+  const clean = (obj) => {
+    const next = {};
+    if (!obj || typeof obj !== "object") return next;
+    for (const [k, v] of Object.entries(obj)) {
+      if (k === "ok") next[k] = v;
+      else if (String(k).startsWith("alert:")) next[k] = v;
+    }
+    return next;
+  };
+  healthState.dismissed.sonarr = clean(healthState.dismissed.sonarr);
+  healthState.dismissed.radarr = clean(healthState.dismissed.radarr);
 }
 
 function saveHealthDismissed() {
@@ -2407,6 +2591,12 @@ const FILTER_BUILDER_FIELDS = [
     placeholder: "1",
   },
   {
+    id: "bitrate",
+    label: t("Bitrate (Mbps)"),
+    type: "number",
+    placeholder: "5",
+  },
+  {
     id: "instance",
     label: t("Instance"),
     type: "string",
@@ -2674,13 +2864,14 @@ function setupRadarrPosterTooltipDelegation() {
   document.addEventListener("pointerover", (e) => {
     const target = e.target;
     if (!target || !(target instanceof Element)) return;
-    const cell = target.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
+    const titleEl = target.closest('a.title-link.title-text, span.title-text');
+    if (!titleEl) return;
+    const cell = titleEl.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
     if (!cell) return;
     const table = cell.closest('table[data-app="radarr"]');
     if (!table) return;
     const rowEl = cell.closest('tr[data-row-key], tr[data-id], tr[data-movie-id]');
     if (!rowEl) return;
-    if (target.closest("button, a, input, select, textarea")) return;
 
     const key = rowEl.dataset.rowKey || rowEl.dataset.id || rowEl.dataset.movieId || "";
     const row = key ? (rowCacheByApp.radarr.get(key) || findRowByKey("radarr", key)) : null;
@@ -2690,7 +2881,7 @@ function setupRadarrPosterTooltipDelegation() {
       rowEl.dataset.movieId ?? rowEl.dataset.id;
     if (!movieId) return;
     const instId = row?.InstanceId ?? row?.instanceId ?? rowEl.dataset.instanceId ?? "radarr-1";
-    const anchorRect = cell.getBoundingClientRect();
+    const anchorRect = titleEl.getBoundingClientRect();
 
     if (radarrPosterHoverTimer) clearTimeout(radarrPosterHoverTimer);
     const hoverKey = `${String(instId)}:${String(movieId)}`;
@@ -2709,10 +2900,14 @@ function setupRadarrPosterTooltipDelegation() {
   document.addEventListener("pointerout", (e) => {
     const target = e.target;
     if (!target || !(target instanceof Element)) return;
-    const cell = target.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
+    const titleEl = target.closest('a.title-link.title-text, span.title-text');
+    if (!titleEl) return;
+    const cell = titleEl.closest('td[data-col="Title"], td[data-col="Name"], td.col-title, td.col-name, td.title, td.name');
     if (!cell) return;
+    const table = cell.closest('table[data-app="radarr"]');
+    if (!table) return;
     const related = e.relatedTarget;
-    if (related && related instanceof Element && cell.contains(related)) return;
+    if (related && related instanceof Element && titleEl.contains(related)) return;
     hideRadarrPosterTooltip();
   });
 
@@ -4294,6 +4489,55 @@ function healthSignature(data, type) {
   return parts.join("\n");
 }
 
+function healthAlertKey(app, inst, alert) {
+  const appKey = String(app || "").trim().toLowerCase() || "unknown";
+  const instId = String(inst?.id || inst?.name || "").trim() || "unknown";
+  const type = String(alert?.type || "").trim().toLowerCase() || "unknown";
+  const source = String(alert?.source || "").trim() || "";
+  const id = String(alert?.id || "").trim();
+  const msg = String(alert?.message || "").trim();
+
+  // Prefer stable IDs if provided by Arr; fall back to message-based key.
+  const tail = id || (source ? `${source}:${msg}` : msg) || "unknown";
+  return `alert:${appKey}:${instId}:${type}:${tail}`;
+}
+
+function healthAlertSig(alert) {
+  const type = String(alert?.type || "").trim().toLowerCase() || "unknown";
+  const source = String(alert?.source || "").trim() || "";
+  const id = String(alert?.id || "").trim() || "";
+  const msg = String(alert?.message || "").trim() || "";
+  const wiki = String(alert?.wikiUrl || "").trim() || "";
+  return `${type}|${source}|${id}|${msg}|${wiki}`;
+}
+
+function formatHealthBadgeText(instName, type, msg) {
+  const name = String(instName || "").trim();
+  const message = String(msg || "").trim();
+  const t = String(type || "").trim().toLowerCase();
+  const icon = t === "error" ? "⛔" : t === "warning" ? "⚠️" : "ℹ️";
+  if (!name) return `${icon} ${message}`.trim();
+  if (!message) return `${icon} ${name}`.trim();
+  return `${icon} ${name}: ${message}`.trim();
+}
+
+function formatHealthBadgeTitle(instName, type, msg, wikiUrl = "") {
+  const name = String(instName || "").trim();
+  const message = String(msg || "").trim();
+  const t = String(type || "").trim().toLowerCase();
+  const wiki = String(wikiUrl || "").trim();
+  const head = name ? `${name} [${t}]` : `[${t}]`;
+  return wiki ? `${head}: ${message}\n${wiki}`.trim() : `${head}: ${message}`.trim();
+}
+
+function getHealthBadgeClass(type) {
+  const t = String(type || "").trim().toLowerCase();
+  if (t === "error") return "health-badge--error";
+  if (t === "warning") return "health-badge--warning";
+  if (t === "notice") return "health-badge--notice";
+  return "health-badge--notice";
+}
+
 
 
 
@@ -4316,30 +4560,14 @@ function renderHealthStatus(app, data) {
     return;
   }
 
-  const counts = data.counts || {};
-  const unreachable = Number(data.unreachable || 0) || 0;
-  const errorCount = Number(counts.error || 0) || 0;
-  const warningCount = Number(counts.warning || 0) || 0;
-  const noticeCount = Number(counts.notice || 0) || 0;
   const total = Number(data.total || 0) || 0;
+  const unreachable = Number(data.unreachable || 0) || 0;
 
   const dismissed = healthState.dismissed?.[app] || {};
 
-  const errSig = healthSignature(data, "error");
-  const warnSig = healthSignature(data, "warning");
-  const noticeSig = healthSignature(data, "notice");
-
-  const show = {
-    unreachable: unreachable > 0 && dismissed.unreachable !== `unreachable:${unreachable}`,
-    error: errorCount > 0 && dismissed.error !== errSig,
-    warning: warningCount > 0 && dismissed.warning !== warnSig,
-    notice: noticeCount > 0 && dismissed.notice !== noticeSig,
-    ok: total === 0 && unreachable === 0 && dismissed.ok !== "1",
-  };
-
   const container = healthBadgesEl;
 
-  function buildBadge({ key, text, cls, tooltipTypes = null }) {
+  function buildBadge({ key, text, cls, title = "", dismissSig = "1" }) {
     const b = document.createElement("span");
     b.className = `health-badge ${cls}`;
     b.setAttribute("data-key", key);
@@ -4368,59 +4596,17 @@ function renderHealthStatus(app, data) {
         });
       }, 180);
 
-      const sig =
-        key === "error" ? healthSignature(data, "error")
-          : key === "warning" ? healthSignature(data, "warning")
-            : key === "notice" ? healthSignature(data, "notice")
-              : key === "unreachable" ? `unreachable:${unreachable}`
-                : "1";
-
-      healthState.dismissed[app] = { ...(healthState.dismissed[app] || {}), [key]: sig };
+      healthState.dismissed[app] = { ...(healthState.dismissed[app] || {}), [key]: dismissSig };
       saveHealthDismissed();
     });
 
     b.appendChild(label);
     b.appendChild(close);
 
-    const typesSet = tooltipTypes ? new Set(tooltipTypes) : null;
-    b.title = buildHealthTooltip(data, typesSet);
+    b.title = title || "";
     if (key === "ok") b.title = t("No health issues reported.");
 
     return b;
-  }
-
-  function summarizeHealthForBadge(data, type, maxLen = 28) {
-    if (!data) return "";
-    const instances = Array.isArray(data.instances) ? data.instances : [];
-
-    const parts = [];
-
-    for (const inst of instances) {
-      const name = inst?.name || inst?.id || "";
-
-      // Treat unreachable as an error item
-      if (type === "error" && inst?.error) {
-        parts.push(`${name}: ${inst.error}`.trim());
-        continue;
-      }
-
-      const alerts = Array.isArray(inst?.alerts) ? inst.alerts : [];
-      for (const a of alerts) {
-        const t = (a?.type || "").toLowerCase();
-        if (t !== type) continue;
-        const msg = (a?.message || "").toString().trim();
-        if (!msg) continue;
-        parts.push(`${name}: ${msg}`.trim());
-      }
-    }
-
-    if (!parts.length) return "";
-
-    const extra = parts.length > 1 ? ` (+${parts.length - 1})` : "";
-    let s = `${parts[0]}${extra}`;
-
-    if (s.length > maxLen) s = s.slice(0, maxLen - 1).trimEnd() + "…";
-    return s;
   }
 
 
@@ -4428,61 +4614,58 @@ function renderHealthStatus(app, data) {
     container.innerHTML = "";
     container.classList.add("health-badges");
 
-    // Short summaries for pill text (truncated by summarizeHealthForBadge)
-    const errSummary = summarizeHealthForBadge(data, "error", 50);
-    const warnSummary = summarizeHealthForBadge(data, "warning", 50);
+    const instances = Array.isArray(data.instances) ? data.instances : [];
+    let visibleBadgeCount = 0;
 
-    if (show.unreachable) {
-      container.appendChild(
-        buildBadge({
-          key: "unreachable",
-          text: `Unreach: ${unreachable}`,
-          cls: "health-badge--error",
-          tooltipTypes: ["error"],
-        })
-      );
+    // One badge per alert so users can dismiss specific warnings/errors.
+    for (const inst of instances) {
+      const instName = inst?.name || inst?.id || "";
+
+      if (inst?.error) {
+        const alert = { type: "error", source: "instance", id: "unreachable", message: String(inst.error || "unreachable") };
+        const key = healthAlertKey(app, inst, alert);
+        const sig = healthAlertSig(alert);
+        if (dismissed[key] === sig) continue;
+
+        container.appendChild(
+          buildBadge({
+            key,
+            text: escapeHtml(formatHealthBadgeText(instName, "error", alert.message)),
+            cls: "health-badge--error",
+            title: formatHealthBadgeTitle(instName, "error", alert.message),
+            dismissSig: sig,
+          })
+        );
+        visibleBadgeCount += 1;
+        continue;
+      }
+
+      const alerts = Array.isArray(inst?.alerts) ? inst.alerts : [];
+      for (const a of alerts) {
+        const type = String(a?.type || "").toLowerCase();
+        if (!type || type === "ok") continue;
+        const msg = String(a?.message || "").trim();
+        if (!msg) continue;
+
+        const key = healthAlertKey(app, inst, a);
+        const sig = healthAlertSig(a);
+        if (dismissed[key] === sig) continue;
+
+        container.appendChild(
+          buildBadge({
+            key,
+            text: escapeHtml(formatHealthBadgeText(instName, type, msg)),
+            cls: getHealthBadgeClass(type),
+            title: formatHealthBadgeTitle(instName, type, msg, a?.wikiUrl || ""),
+            dismissSig: sig,
+          })
+        );
+        visibleBadgeCount += 1;
+      }
     }
 
-    if (show.ok) {
-      container.appendChild(buildBadge({ key: "ok", text: "OK", cls: "health-badge--ok", tooltipTypes: ["ok"] }));
-      return;
-    }
-
-    if (show.error) {
-      container.appendChild(
-        buildBadge({
-          key: "error",
-          text: errSummary
-            ? `<span class="health-badge__icon">⚠️</span> ${errSummary}`
-            : `⚠️ (${errorCount})`,
-          cls: "health-badge--error",
-          tooltipTypes: ["error"],
-        })
-      );
-    }
-
-    if (show.warning) {
-      container.appendChild(
-        buildBadge({
-          key: "warning",
-          text: warnSummary
-            ? `<span class="health-badge__icon">⚠️</span> ${warnSummary}`
-            : `⚠️ (${warningCount})`,
-          cls: "health-badge--warning",
-          tooltipTypes: ["warning"],
-        })
-      );
-    }
-
-    if (show.notice) {
-      container.appendChild(
-        buildBadge({
-          key: "notice",
-          text: `Note ${noticeCount}`,
-          cls: "health-badge--notice",
-          tooltipTypes: ["notice"],
-        })
-      );
+    if (visibleBadgeCount === 0 && total === 0 && unreachable === 0 && dismissed.ok !== "1") {
+      container.appendChild(buildBadge({ key: "ok", text: "OK", cls: "health-badge--ok", title: "", dismissSig: "1" }));
     }
   });
 
@@ -6407,6 +6590,7 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
           <div class="series-expansion-poster">
             <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy" decoding="async" />
           </div>
+          <button class="series-expansion-toggle hidden" type="button" data-role="series-expand-all-seasons" aria-pressed="false">${t("Expand all seasons", "Expand all seasons")}</button>
           <div class="series-expansion-title">${t("series_expansion_title_seasons", "Seasons")}</div>
           <div class="series-expansion-actions">
             <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
@@ -6426,6 +6610,33 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
   const statusEl = shell.querySelector('[data-role="series-expansion-status"]');
   const posterImg = shell.querySelector('[data-role="series-expansion-poster"]');
   return { shell, body, statusEl, posterImg };
+}
+
+function updateExpandAllSeasonsButton(expansion, seriesKey) {
+  if (!expansion) return;
+  const btn = expansion.querySelector('[data-role="series-expand-all-seasons"]');
+  if (!btn) return;
+
+  const blocks = Array.from(expansion.querySelectorAll(".series-season-block"));
+  if (blocks.length <= 1) {
+    btn.classList.add("hidden");
+    btn.disabled = true;
+    btn.setAttribute("aria-pressed", "false");
+    return;
+  }
+
+  const keys = blocks.map((block) => {
+    const seasonNumber = Number(block?.dataset?.season || 0);
+    return `${seriesKey}::${seasonNumber}`;
+  });
+  const allExpanded = keys.length > 0 && keys.every((k) => sonarrExpansionState.expandedSeasons.has(k));
+
+  btn.classList.remove("hidden");
+  btn.disabled = false;
+  btn.setAttribute("aria-pressed", allExpanded ? "true" : "false");
+  btn.textContent = allExpanded
+    ? t("Collapse all seasons", "Collapse all seasons")
+    : t("Expand all seasons", "Expand all seasons");
 }
 
 function setSeasonExtrasState(block, enabled) {
@@ -6582,6 +6793,7 @@ function renderSeasonList(container, seriesKey, seasons) {
     empty.className = "series-expansion-empty";
     empty.textContent = t("sonarr_no_seasons_available", "No seasons available.");
     container.appendChild(empty);
+    updateExpandAllSeasonsButton(expansion, seriesKey);
     return;
   }
   const frag = document.createDocumentFragment();
@@ -6670,6 +6882,7 @@ function renderSeasonList(container, seriesKey, seasons) {
     frag.appendChild(block);
   });
   container.appendChild(frag);
+  updateExpandAllSeasonsButton(expansion, seriesKey);
 }
 
 async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container, seriesKey) {
@@ -6845,6 +7058,7 @@ async function handleSeriesSeasonToggle(btn) {
       selectedEpisodeRowEl.classList.remove("series-episode-row--selected");
       selectedEpisodeRowEl = null;
     }
+    updateExpandAllSeasonsButton(expansion, seriesKey);
     return;
   }
 
@@ -6856,9 +7070,40 @@ async function handleSeriesSeasonToggle(btn) {
   renderSeriesSkeleton(episodesWrap, 3);
   if (!seriesId) {
     renderSeriesError(episodesWrap, "Series id missing.");
+    updateExpandAllSeasonsButton(expansion, seriesKey);
     return;
   }
   await loadSeasonEpisodes(seriesId, seasonNumber, instanceId, episodesWrap, seriesKey);
+  updateExpandAllSeasonsButton(expansion, seriesKey);
+}
+
+async function handleExpandAllSeasonsToggle(btn) {
+  const expansion = btn.closest(".series-expansion");
+  const seriesKey = expansion?.dataset?.seriesKey || "";
+  if (!expansion || !seriesKey) return;
+
+  const toggles = Array.from(expansion.querySelectorAll(".series-season-toggle"));
+  if (!toggles.length) return;
+
+  const keys = toggles.map((toggle) => {
+    const seasonNumber = Number(toggle?.dataset?.season || 0);
+    return `${seriesKey}::${seasonNumber}`;
+  });
+  const allExpanded = keys.length > 0 && keys.every((k) => sonarrExpansionState.expandedSeasons.has(k));
+
+  // Use existing toggle logic so state + fetch behavior stays consistent.
+  for (const toggle of toggles) {
+    const seasonNumber = Number(toggle?.dataset?.season || 0);
+    const seasonKey = `${seriesKey}::${seasonNumber}`;
+    const isExpanded = sonarrExpansionState.expandedSeasons.has(seasonKey);
+    if (!allExpanded && !isExpanded) {
+      await handleSeriesSeasonToggle(toggle);
+    } else if (allExpanded && isExpanded) {
+      await handleSeriesSeasonToggle(toggle);
+    }
+  }
+
+  updateExpandAllSeasonsButton(expansion, seriesKey);
 }
 
 function findRowElement(app, rowKey) {
@@ -11741,13 +11986,13 @@ if (advancedHelpBtn) {
 
 bindChipButtons();
 
-if (tbody) {
-  tbody.addEventListener("mouseover", e => {
-    const updated = updateSelectionFromPointer(e.target);
-    if (updated) {
-      focusTableWrapIfAllowed();
-    }
-  });
+  if (tbody) {
+    tbody.addEventListener("mouseover", e => {
+      const updated = updateSelectionFromPointer(e.target);
+      if (updated) {
+        focusTableWrapIfAllowed();
+      }
+    });
   document.addEventListener("mousemove", () => {
     if (!pointerSelectionEnabled) {
       pointerSelectionEnabled = true;
@@ -11756,6 +12001,11 @@ if (tbody) {
   tbody.addEventListener("click", e => {
     if (tableWrapEl && !e.target.closest("input, textarea, select, [contenteditable]")) {
       tableWrapEl.focus({ preventScroll: true });
+    }
+    const expandAllBtn = e.target.closest('[data-role="series-expand-all-seasons"]');
+    if (expandAllBtn) {
+      handleExpandAllSeasonsToggle(expandAllBtn);
+      return;
     }
     const seasonRow = e.target.closest(".series-season-row");
     if (seasonRow) {
@@ -12018,18 +12268,65 @@ themeBtn.addEventListener("click", () => {
   const current = root.getAttribute("data-theme") || "dark";
   setTheme(current === "dark" ? "light" : "dark");
 });
+if (tableFullscreenBtn) {
+  // Initialize from storage
+  applyTableFullscreen(isTableFullscreenEnabled());
+
+  tableFullscreenBtn.addEventListener("click", async () => {
+    const enabled = !root.classList.contains("table-fullscreen");
+    setTableFullscreenEnabled(enabled);
+
+    if (enabled) {
+      await enterTrueFullscreenIfPossible();
+      applyTableFullscreen(true);   // CSS fallback always
+    } else {
+      await exitTrueFullscreenIfPossible();
+      applyTableFullscreen(false);
+    }
+  });
+
+
+  document.addEventListener("keydown", async (e) => {
+    if (e.key === "Escape" && root.classList.contains("table-fullscreen")) {
+      setTableFullscreenEnabled(false);
+      await exitTrueFullscreenIfPossible(); // <-- add this
+      applyTableFullscreen(false);
+    }
+  });
+}
+
+
+async function exitTrueFullscreenIfPossible() {
+  if (!document.fullscreenElement) return;
+  try { await document.exitFullscreen(); } catch { }
+}
+
+document.addEventListener("fullscreenchange", () => {
+  const isFs = !!document.fullscreenElement;
+  setTableFullscreenEnabled(isFs);
+  applyTableFullscreen(isFs);
+});
+
+
 
 const savedFiltersCollapsed = localStorage.getItem(FILTERS_COLLAPSED_KEY) === "1";
 if (filtersEl) {
   setFiltersCollapsed(savedFiltersCollapsed);
 }
-const savedChipsEnabled = localStorage.getItem(CHIPS_ENABLED_KEY) === "1";
-setChipsEnabled(savedChipsEnabled);
 if (filtersToggleBtn) {
   filtersToggleBtn.addEventListener("click", () => {
     setFiltersCollapsed(!filtersCollapsed);
   });
 }
+
+let savedChipsEnabled = false;
+try {
+  savedChipsEnabled = localStorage.getItem(CHIPS_ENABLED_KEY) === "1";
+} catch {
+}
+setChipsEnabled(savedChipsEnabled);
+
+
 
 /* config load for link bases */
 async function loadConfig() {
@@ -12146,6 +12443,13 @@ function buildEpisodeHistoryButton(episode) {
   return `<button class="history-btn history-btn--episode" type="button" data-history-btn="1" data-app="sonarr" data-series-id="${escapeHtml(String(seriesId))}" data-episode-id="${escapeHtml(String(episodeId))}" data-instance-id="${escapeHtml(String(instanceId))}" data-history-title="${title}" aria-label="${escapeHtml(t("History"))}">H</button>`;
 }
 
+function syncHistoryOverlayHost() {
+  if (!historyOverlayEl) return;
+  if (historyOverlayEl.parentNode !== document.body) {
+    document.body.appendChild(historyOverlayEl);
+  }
+}
+
 function ensureHistoryDrawer() {
   if (historyOverlayEl && historyDrawerEl) return;
   historyOverlayEl = document.createElement("div");
@@ -12172,7 +12476,7 @@ function ensureHistoryDrawer() {
   historyExpandBtn = historyOverlayEl.querySelector('[data-role="history-expand"]');
   historyExportBtn = historyOverlayEl.querySelector('[data-role="history-export"]');
   historyTitleEl = historyOverlayEl.querySelector('[data-role="history-title"]');
-  document.body.appendChild(historyOverlayEl);
+  syncHistoryOverlayHost();
   // Prevent wheel/trackpad from scrolling the page behind the overlay (and stop scroll chaining at edges)
   historyOverlayEl.addEventListener(
     "wheel",
@@ -12415,6 +12719,7 @@ async function openHistoryFromButton(btn) {
   const app = (btn.dataset.app || "").toLowerCase();
   if (!app) return;
   ensureHistoryDrawer();
+  syncHistoryOverlayHost();
   const title = btn.dataset.historyTitle || "";
   const target = {
     app,

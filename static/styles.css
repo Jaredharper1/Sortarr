@@ -481,7 +481,8 @@ body {
 
 .filters-footer .filters-toggle-btn,
 .filters-footer .tabs button,
-.filters-footer .status-pill {
+.filters-footer .status-pill,
+.filters-footer .chip-advanced {
   height: var(--filters-footer-control-height);
   box-sizing: border-box;
 }
@@ -506,6 +507,10 @@ body {
 
   flex-wrap: wrap;
 
+}
+
+.filters-footer #chipsToggle {
+  margin-left: auto;
 }
 
 
@@ -550,6 +555,10 @@ body {
 
   margin-top: 0;
 
+}
+
+.filters.filters--collapsed #chipsToggle {
+  display: none;
 }
 
 
@@ -846,6 +855,30 @@ html.custom-selects .filter-builder select {
 
 .custom-select-menu.hidden {
   display: none;
+}
+
+.custom-select-search-wrap {
+  padding: 2px 2px 8px 2px;
+}
+
+.custom-select-search {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 10px;
+  padding: 6px 10px;
+  font: inherit;
+  background: var(--filter-select-surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.custom-select-search:focus,
+.custom-select-search:focus-visible {
+  outline: none;
+  border-color: var(--input-focus-border);
+  box-shadow: inset 0 0 0 1px var(--input-focus-border),
+    inset 0 0 14px var(--input-focus-glow);
+  background-image: linear-gradient(180deg, var(--input-focus-sheen), rgba(255, 255, 255, 0));
 }
 
 .custom-select-option {
@@ -1206,6 +1239,8 @@ html[data-theme="dark"] .advanced-warnings {
   display: flex;
 
   flex-wrap: wrap;
+
+  gap: 6px;
 
   justify-content: center;
 
@@ -1925,6 +1960,9 @@ html[data-theme="dark"] .column-panel {
   font-size: 0.75em;
   border: 1px solid var(--border);
   white-space: nowrap;
+  box-sizing: border-box;
+  /* Keep all health badges the same width and truncate long messages */
+  width: var(--health-badge-width, clamp(170px, 30vw, 280px));
 
   display: inline-flex;
   align-items: center;
@@ -3348,6 +3386,58 @@ html[data-theme="dark"] .table-wrap::-webkit-scrollbar-track {
 
 }
 
+/* Table fullscreen mode */
+html.table-fullscreen .toolbar,
+html.table-fullscreen .filters,
+html.table-fullscreen .status-row,
+html.table-fullscreen .status-banner {
+  display: none !important;
+}
+
+.table-unfullscreen-btn {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 10001;
+  /* above #tableWrap (9998) and tooltips (9999) */
+  display: none;
+
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel-surface-strong);
+  box-shadow: var(--panel-shadow);
+  color: var(--text);
+  cursor: pointer;
+}
+
+html.table-fullscreen .table-unfullscreen-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Remove outer padding so the fixed table really uses the screen */
+html.table-fullscreen .app {
+  padding: 0 !important;
+}
+
+/* Make the table area fill the viewport (top offset set by JS) */
+html.table-fullscreen #tableWrap.table-wrap {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--table-fullscreen-top, 0px);
+  bottom: 0;
+
+  margin-top: 0 !important;
+  border-radius: 0 !important;
+
+  max-height: none !important;
+  min-height: 0 !important;
+
+  z-index: 9998;
+}
 
 
 table {
@@ -4092,11 +4182,13 @@ th.active-sort .sort-indicator {
 
   width: auto;
 
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 
   min-width: 0;
 
   max-width: 100%;
+
+  display: inline-block;
 
 }
 
@@ -4210,7 +4302,7 @@ tbody tr.series-child-row:hover td {
 }
 
 tr.series-child-row--open .series-expansion {
-  max-height: 2000px;
+  max-height: 12000px;
   opacity: 1;
   transform: translate3d(0, 0, 0);
 }
@@ -4236,7 +4328,7 @@ tr.series-child-row--open .series-expansion {
 }
 
 .series-expansion-poster--empty {
-  opacity: 0.25;
+  display: none;
 }
 
 .series-expansion-poster-img {
@@ -5324,6 +5416,7 @@ html.is-ios .perf-overlay {
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
+  z-index: 20000;
   overflow: hidden;
 }
 
@@ -5346,6 +5439,7 @@ html.is-ios .perf-overlay {
   overflow: hidden;
   padding: 16px;
   backdrop-filter: blur(12px);
+  z-index: 20000;
   border-left: 1px solid var(--border-color, #444);
 }
 
@@ -5355,17 +5449,20 @@ html.is-ios .perf-overlay {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  z-index: 20000;
   margin-bottom: 12px;
 }
 
 .history-title {
   font-weight: 600;
   font-size: 16px;
+  z-index: 20000;
 }
 
 .history-actions {
   display: flex;
   gap: 8px;
+  z-index: 20000;
   align-items: center;
 }
 
@@ -5506,6 +5603,11 @@ body.history-open {
   overflow: hidden;
 }
 
+/* When History is open, freeze the table scroll container too (it has its own scrollbars). */
+body.history-open #tableWrap {
+  overflow: hidden !important;
+}
+
 .title-control-wrap {
   display: inline-flex;
   align-items: center;
@@ -5529,7 +5631,7 @@ body.history-open {
 }
 
 tr[data-app="radarr"] .title-control-wrap {
-  margin-right: 8px;
+  margin-right: 13px;
   position: relative;
   left: -4px;
   gap: 1px;
@@ -5538,6 +5640,7 @@ tr[data-app="radarr"] .title-control-wrap {
 tr[data-app="radarr"] .title-orb-wrap {
   position: relative;
   left: -4px;
+  gap: 11px;
 }
 
 tr[data-app="radarr"] .title-control-wrap .row-refresh-btn--title {

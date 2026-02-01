@@ -1,5 +1,5 @@
 # Sortarr
-![Version](https://img.shields.io/badge/version-0.7.12-blue)
+![Version](https://img.shields.io/badge/version-0.8.0-blue)
 
 Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps
 you understand how your media library uses storage. Sortarr provides storage efficiency analytics for Sonarr and Radarr libraries. It is not a Plex tool, but it is useful in Plex setups for spotting oversized series or movies and comparing quality vs. size trade-offs.
@@ -28,14 +28,18 @@ efficiency metrics, caches results for performance, and serves a small read-only
 -   Radarr movie size stats (file size and GiB per hour)
 -   Bitrate metric with estimated fallback indicator
 -   Filter builder dropdowns with active filter bubbles (quick chips optional)
+-   Filter builder Category dropdown is alphabetized and searchable (desktop custom dropdown)
 -   Optional Arr metadata columns (status, monitored, quality profile, tags, custom formats, release group, many more)
+-   Sonarr/Radarr health badges to surface instance warnings
 -   Sonarr series metadata and wanted columns (series type, original language, genres, last aired, missing/cutoff counts)
 -   Sonarr chips for missing, cutoff unmet, recently grabbed, scene numbering, and airing
 -   Fixed-width Title column with CSS ellipsis to keep large tables stable
+-   Fullscreen Data Table button to focus the table on small screens
 -   CSV export for Sonarr and Radarr (playback columns appear only when a playback provider is configured)
 -   Date added column for Sonarr and Radarr views
--   Compressed JSON/CSV API responses for large payloads
+-   Compressed CSV API responses for large payloads
 -   Multiple Sonarr/Radarr instances with optional friendly names
+-   Path mapping support for Docker volume paths (map container paths to host paths)
 -   Optional basic auth and configurable cache
 -   Optional Jellystat or Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
 -   Playback match status orbs beside titles to flag potential mismatches (only with Tautulli configured)
@@ -115,6 +119,15 @@ Support: until a forum thread exists, use GitHub Issues for Unraid support.
 
 The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
 
+## Deployment (Windows EXE)
+
+If you run Sortarr as a single-file EXE (PyInstaller `--onefile`), Sortarr stores config in a `.env` file next to the EXE (and creates it on first launch).
+
+Override the config path with either:
+
+- `SORTARR_CONFIG_PATH` (preferred), or
+- `ENV_FILE_PATH`
+
 
 
 ## Configuration
@@ -158,6 +171,9 @@ Sortarr writes and reads:
 - `SONARR_EPISODEFILE_CACHE_SECONDS` (default `600`)
 - `SONARR_TIMEOUT_SECONDS` (default `90`, `0` disables)
 - `SONARR_CACHE_PATH` (default `./data/Sortarr.sonarr_cache.json`)
+- `SONARR_PATH_MAP` (optional; map container paths to host paths for UI display, `src:dst`; multiple entries separated by `|`, `,`, or `;`)
+- `SONARR_PATH_MAP_2`
+- `SONARR_PATH_MAP_3`
 
 ### Radarr
 
@@ -185,6 +201,9 @@ Sortarr writes and reads:
 - `RADARR_INSTANCE_WORKERS` (default `1`)
 - `RADARR_TIMEOUT_SECONDS` (default `90`)
 - `RADARR_CACHE_PATH` (default `./data/Sortarr.radarr_cache.json`)
+- `RADARR_PATH_MAP` (optional; map container paths to host paths for UI display, `src:dst`; multiple entries separated by `|`, `,`, or `;`)
+- `RADARR_PATH_MAP_2`
+- `RADARR_PATH_MAP_3`
 
 ### Tautulli (optional)
 
@@ -204,7 +223,10 @@ Sortarr writes and reads:
 - `PUID`, `PGID`
 - `BASIC_AUTH_USER`, `BASIC_AUTH_PASS`
 - `ENV_FILE_PATH` (docker-compose sets `/data/Sortarr.env`)
+- `SORTARR_CONFIG_PATH` (preferred config path override; used before `ENV_FILE_PATH`)
 - `PORT` (default `8787`; Docker maps `9595` → `8787`)
+- `HOST` (default `0.0.0.0`)
+- `WAITRESS_THREADS` (default `4`)
 - `SORTARR_LOG_LEVEL`
 - `SORTARR_STRICT_INSTANCE_ERRORS`
 - `SORTARR_DEFER_WANTED`
@@ -248,16 +270,46 @@ RADARR_URL_EXTERNAL=https://radarr.domain.tld
 Behavior:
 - *_URL_API is used for Sortarr HTTP requests to Arr.
 - *_URL_EXTERNAL is used when generating clickable links in the Sortarr UI.
-- If *_URL_EXTERNAL is not set, Sortarr falls back to the API URL.
+- If *_URL_EXTERNAL is not set, Sortarr falls back to the legacy *_URL variables (and then to *_URL_API if *_URL is not set).
 - If *_URL_API is not set, Sortarr falls back to the legacy *_URL variables.
 
 
 This is fully backward compatible; existing SONARR_URL / RADARR_URL setups require no changes.
 
+Common configurations:
+
+1) Same URL works for Sortarr and your browser (most setups):
+
+```
+SONARR_URL=http://192.168.1.120:8989
+RADARR_URL=http://192.168.1.120:7878
+```
+
+2) Split network (Sortarr calls internal DNS, browser clicks ingress URL):
+
+```
+SONARR_URL=http://sonarr.sonarr.svc.cluster.local:8989
+SONARR_URL_EXTERNAL=https://series.sonarr.domain.tld
+
+RADARR_URL=http://radarr.radarr.svc.cluster.local:7878
+RADARR_URL_EXTERNAL=https://movies.radarr.domain.tld
+```
+
+3) Split network (you want SONARR_URL/RADARR_URL to be the external URL, but Sortarr should call an internal URL):
+
+```
+SONARR_URL=https://series.sonarr.domain.tld
+SONARR_URL_API=http://sonarr.sonarr.svc.cluster.local:8989
+
+RADARR_URL=https://movies.radarr.domain.tld
+RADARR_URL_API=http://radarr.radarr.svc.cluster.local:7878
+```
+
 
 ## Requirements and notes:
 
 - Basic auth is optional but recommended if exposed beyond your LAN
+- Docker image runs a single Waitress process with multiple threads (default `--threads=4`) to keep cache/refresh state consistent
 - Designed for on-demand queries with persistent caching; the UI only polls while Tautulli matching finishes
 - No database or media filesystem access required
 
@@ -268,6 +320,7 @@ This is fully backward compatible; existing SONARR_URL / RADARR_URL setups requi
 - Refresh playback data reloads both Sonarr and Radarr (and playback if configured) and updates the persistent cache, then rebuilds playback matching using cached provider data (Tautulli) or starts a playback refresh (Jellystat).
 - Clear caches & rebuild clears all cache files and starts a full rebuild, similar to a cold start. Recommended when inaccurate data is spotted.
 - Reset UI clears local UI settings and reloads using the cached data.
+- Fullscreen Data Table (⛶) hides panels and expands the table to fill the screen (press Escape or ✕ to exit).
 
 
 ## Notes continued:
@@ -344,6 +397,8 @@ Note: Language lists are shortened in the table; use "Show all" to expand them.
 - `/api/movies`
 - `/api/shows.csv`
 - `/api/movies.csv`
+- `/api/sonarr/health`
+- `/api/radarr/health`
 - `POST /api/sonarr/refresh` (optional `seriesId`, `instance_id`)
 - `POST /api/radarr/refresh` (optional `movieId`, `instance_id`)
 - `POST /api/tautulli/refresh_item` (rating_key or section_id)

@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.8.0] - 2026-01-31
+
+- Fullscreen Data Table: Added a toolbar button to hide panels and expand the table to fill the screen; Escape/✕ exits. Attempts true browser fullscreen when supported.
+- Deployment: Switched the Docker image from Gunicorn to Waitress (threaded, single-process) for simpler runtime behavior.
+- Split URL fallback: If `*_URL_API` is set and `*_URL_EXTERNAL` is not, UI hyperlinks now fall back to `*_URL` (legacy) instead of defaulting to `*_URL_API`.
+- Setup UI: Added `*_URL_API` fields (optional) so split-network configs can be edited without losing values.
+- Config persistence: `*_URL_API[_N]` values are now written to the `.env` file when saving setup.
+- Compression: Excluded CSS/JS (and JSON) from Flask-Compress to reduce overhead and avoid redundant compression.
+- UI: Increased perf overlay z-index so it stays visible above fullscreen table layouts.
+- UI (Filters): Category dropdown is alphabetized and searchable (desktop custom dropdown).
+- UI (Filters): Chips toggle moved into the filters footer and hides when the filters panel is collapsed.
+- UI (Sonarr): Prevent episode lists from being clipped when expanding multiple seasons in a series.
+- UI (Sonarr): Added an "Expand all seasons" toggle for series expansions (shown when multiple seasons are present).
+- UI (Radarr): Poster tooltip triggers only when hovering the title text (not the whole title cell).
+- UI (History): History drawer stays visible in fullscreen mode; table scrolling is locked while history is open.
+- UI: Health badges can now be dismissed per-alert and remain hidden until that specific alert changes.
+- Windows EXE: Default config path uses a `.env` next to the EXE for PyInstaller `--onefile` builds (and creates it on first launch).
+- Localization: Updated German translations for new and modified UI strings.
+
 ## [0.7.12] - 2026-01-29
 
 

@@ -30,7 +30,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.7.12"
+APP_VERSION = "0.8.0"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -44,6 +44,12 @@ SAFE_TAUTULLI_REFRESH_BUCKETS = {
 }
 
 app = Flask(__name__)
+app.config["COMPRESS_EXCLUDE_MIMETYPES"] = {
+    "text/css",
+    "application/javascript",
+    "text/javascript",
+    "application/json",  # optional
+}
 # Secret Key ermöglicht das Speichern der Sprachwahl im Browser-Cookie
 app.secret_key = secrets.token_hex(16)
 app.config["BABEL_TRANSLATION_DIRECTORIES"] = os.path.join(app.root_path, "translations")
@@ -106,6 +112,7 @@ if proxy_hops > 0:
         x_port=proxy_hops,
         x_prefix=proxy_hops,
     )
+
 
 
 # Then extensions
@@ -330,10 +337,31 @@ RADARR_LITE_FIELDS = {
     "TautulliMatched",
 }
 
-ENV_FILE_PATH = os.environ.get("SORTARR_CONFIG_PATH") or os.environ.get(
-    "ENV_FILE_PATH",
-    os.path.join(os.path.dirname(__file__), ".env"),
+def _default_env_file_path() -> str:
+    # When frozen into a single-file EXE (PyInstaller), __file__ lives in a temp extraction dir.
+    # Use the EXE folder so config persists across launches.
+    try:
+        if getattr(sys, "frozen", False):
+            return os.path.join(os.path.dirname(sys.executable), ".env")
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(__file__), ".env")
+
+
+ENV_FILE_PATH = (
+    os.environ.get("SORTARR_CONFIG_PATH")
+    or os.environ.get("ENV_FILE_PATH")
+    or _default_env_file_path()
 )
+
+# UX: for frozen EXE builds, create a blank .env on first launch so users can see where config is saved.
+try:
+    if getattr(sys, "frozen", False) and ENV_FILE_PATH and not os.path.exists(ENV_FILE_PATH):
+        os.makedirs(os.path.dirname(ENV_FILE_PATH) or ".", exist_ok=True)
+        with open(ENV_FILE_PATH, "a", encoding="utf-8"):
+            pass
+except OSError:
+    pass
 _env_loaded = False
 _env_mtime = None
 _env_lock = threading.Lock()
@@ -354,6 +382,8 @@ _arr_cache_save_state = {
     "sonarr": {"lock": threading.Lock(), "in_progress": False, "pending": None},
     "radarr": {"lock": threading.Lock(), "in_progress": False, "pending": None},
 }
+_arr_instance_fetch_locks: dict[str, threading.Lock] = {}
+_arr_instance_fetch_locks_lock = threading.Lock()
 _perf_sink_module = None
 _perf_sink_checked = False
 
@@ -374,6 +404,16 @@ def _get_perf_sink():
         logger.info("Perf sink unavailable: %s", exc)
         _perf_sink_module = None
     return _perf_sink_module
+
+
+def _get_arr_instance_fetch_lock(app_name: str, instance_id: str) -> threading.Lock:
+    key = f"{app_name}:{instance_id}"
+    with _arr_instance_fetch_locks_lock:
+        lock = _arr_instance_fetch_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _arr_instance_fetch_locks[key] = lock
+        return lock
 
 
 def _record_perf_entry(entry: dict) -> str | None:
@@ -1402,26 +1442,32 @@ def _write_env_file(path: str, values: dict):
 
     standard_keys = [
         "SONARR_URL",
+        "SONARR_URL_API",
         "SONARR_URL_EXTERNAL",
         "SONARR_API_KEY",
         "SONARR_NAME",
         "SONARR_URL_2",
+        "SONARR_URL_API_2",
         "SONARR_URL_EXTERNAL_2",
         "SONARR_API_KEY_2",
         "SONARR_NAME_2",
         "SONARR_URL_3",
+        "SONARR_URL_API_3",
         "SONARR_URL_EXTERNAL_3",
         "SONARR_API_KEY_3",
         "SONARR_NAME_3",
         "RADARR_URL",
+        "RADARR_URL_API",
         "RADARR_URL_EXTERNAL",
         "RADARR_API_KEY",
         "RADARR_NAME",
         "RADARR_URL_2",
+        "RADARR_URL_API_2",
         "RADARR_URL_EXTERNAL_2",
         "RADARR_API_KEY_2",
         "RADARR_NAME_2",
         "RADARR_URL_3",
+        "RADARR_URL_API_3",
         "RADARR_URL_EXTERNAL_3",
         "RADARR_API_KEY_3",
         "RADARR_NAME_3",
@@ -1719,12 +1765,9 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
     instances = []
     for idx in _collect_instance_indexes(prefix):
         suffix = "" if idx == 1 else f"_{idx}"
-        url_api = _normalize_url(os.environ.get(f"{prefix}_URL_API{suffix}", ""))
-        if not url_api:
-            url_api = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
-        url_external = _normalize_url(os.environ.get(f"{prefix}_URL_EXTERNAL{suffix}", ""))
-        if not url_external:
-            url_external = url_api
+        url_legacy = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
+        url_api = _normalize_url(os.environ.get(f"{prefix}_URL_API{suffix}", "")) or url_legacy
+        url_external = _normalize_url(os.environ.get(f"{prefix}_URL_EXTERNAL{suffix}", "")) or url_legacy or url_api
         api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
         name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
         path_map_raw = str(os.environ.get(f"{prefix}_PATH_MAP{suffix}") or "").strip()
@@ -1794,15 +1837,18 @@ def _get_config():
     jellystat_stats_page_size = _read_int_env("JELLYSTAT_STATS_PAGE_SIZE", 500)
     jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
     return {
-        "sonarr_url": sonarr_primary["url"] if sonarr_primary else _normalize_url(os.environ.get("SONARR_URL", "")),
+        "sonarr_url": _normalize_url(os.environ.get("SONARR_URL", "")),
+        "sonarr_url_api": _normalize_url(os.environ.get("SONARR_URL_API", "")),
         "sonarr_url_external": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL", "")),
         "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else os.environ.get("SONARR_API_KEY", ""),
         "sonarr_name": os.environ.get("SONARR_NAME", ""),
         "sonarr_url_2": _normalize_url(os.environ.get("SONARR_URL_2", "")),
+        "sonarr_url_api_2": _normalize_url(os.environ.get("SONARR_URL_API_2", "")),
         "sonarr_url_external_2": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_2", "")),
         "sonarr_api_key_2": os.environ.get("SONARR_API_KEY_2", ""),
         "sonarr_name_2": os.environ.get("SONARR_NAME_2", ""),
         "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
+        "sonarr_url_api_3": _normalize_url(os.environ.get("SONARR_URL_API_3", "")),
         "sonarr_url_external_3": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_3", "")),
         "sonarr_api_key_3": os.environ.get("SONARR_API_KEY_3", ""),
         "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
@@ -1812,15 +1858,18 @@ def _get_config():
         "sonarr_path_maps_2": _split_path_map_entries(sonarr_path_map_2),
         "sonarr_path_map_3": sonarr_path_map_3,
         "sonarr_path_maps_3": _split_path_map_entries(sonarr_path_map_3),
-        "radarr_url": radarr_primary["url"] if radarr_primary else _normalize_url(os.environ.get("RADARR_URL", "")),
+        "radarr_url": _normalize_url(os.environ.get("RADARR_URL", "")),
+        "radarr_url_api": _normalize_url(os.environ.get("RADARR_URL_API", "")),
         "radarr_url_external": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL", "")),
         "radarr_api_key": radarr_primary["api_key"] if radarr_primary else os.environ.get("RADARR_API_KEY", ""),
         "radarr_name": os.environ.get("RADARR_NAME", ""),
         "radarr_url_2": _normalize_url(os.environ.get("RADARR_URL_2", "")),
+        "radarr_url_api_2": _normalize_url(os.environ.get("RADARR_URL_API_2", "")),
         "radarr_url_external_2": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_2", "")),
         "radarr_api_key_2": os.environ.get("RADARR_API_KEY_2", ""),
         "radarr_name_2": os.environ.get("RADARR_NAME_2", ""),
         "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
+        "radarr_url_api_3": _normalize_url(os.environ.get("RADARR_URL_API_3", "")),
         "radarr_url_external_3": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_3", "")),
         "radarr_api_key_3": os.environ.get("RADARR_API_KEY_3", ""),
         "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
@@ -7215,141 +7264,146 @@ def _get_cached_instance(
     playback_label: str = "Tautulli",
 ) -> tuple[list[dict], bool]:
     instance_id = instance["id"]
-    entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_id)
-    if not force and entry_snapshot and entry_snapshot.get("data"):
-        rows = entry_snapshot["data"]
-        _apply_instance_meta(rows, instance)
-        return rows, False
+    # Dedupe cold-cache fetches: a single page load can issue multiple concurrent requests
+    # (foreground load + background prefetch + lite hydration). Without a lock, each request
+    # can start a full Arr fetch concurrently.
+    fetch_lock = _get_arr_instance_fetch_lock(app_name, instance_id)
+    with fetch_lock:
+        entry_snapshot = _cache.get_app_entry_snapshot(app_name, instance_id)
+        if not force and entry_snapshot and entry_snapshot.get("data"):
+            rows = entry_snapshot["data"]
+            _apply_instance_meta(rows, instance)
+            return rows, False
 
-    cached_entry = None if force else disk_cache.get(instance_id)
-    if cached_entry and isinstance(cached_entry.get("data"), list):
-        data = _clone_rows(cached_entry.get("data") or [])
-        entry_ts = _safe_int(cached_entry.get("ts")) or time.time()
-        entry_index_ts = _safe_int(cached_entry.get("tautulli_index_ts"))
-        temp_entry = {
-            "ts": entry_ts,
-            "tautulli_index_ts": entry_index_ts,
-            "data": data,
-        }
-        if tautulli_index:
+        cached_entry = None if force else disk_cache.get(instance_id)
+        if cached_entry and isinstance(cached_entry.get("data"), list):
+            data = _clone_rows(cached_entry.get("data") or [])
+            entry_ts = _safe_int(cached_entry.get("ts")) or time.time()
+            entry_index_ts = _safe_int(cached_entry.get("tautulli_index_ts"))
+            temp_entry = {
+                "ts": entry_ts,
+                "tautulli_index_ts": entry_index_ts,
+                "data": data,
+            }
+            if tautulli_index:
+                if app_name == "sonarr":
+                    _apply_tautulli_stats_once(
+                        temp_entry,
+                        tautulli_index,
+                        "shows",
+                        tautulli_index_ts,
+                        provider_label=playback_label,
+                    )
+                else:
+                    _apply_tautulli_stats_once(
+                        temp_entry,
+                        tautulli_index,
+                        "movies",
+                        tautulli_index_ts,
+                        provider_label=playback_label,
+                    )
+            _cache.set_app_entry(
+                app_name,
+                instance_id,
+                temp_entry["data"],
+                ts=entry_ts,
+                tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
+            )
+            rows = _clone_rows(temp_entry.get("data") or [])
+            _apply_instance_meta(rows, instance)
+            return rows, False
+        defer_wanted = log_cold_start and _read_bool_env("SORTARR_DEFER_WANTED", True)
+        wanted_cached = None
+        if defer_wanted:
             if app_name == "sonarr":
-                _apply_tautulli_stats_once(
-                    temp_entry,
-                    tautulli_index,
-                    "shows",
-                    tautulli_index_ts,
-                    provider_label=playback_label,
-                )
+                cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
+                cache_key = _sonarr_episodefile_cache_key(instance_id, instance.get("url") or "")
+                wanted_cached = _get_cached_sonarr_wanted(cache_key, cache_seconds)
             else:
-                _apply_tautulli_stats_once(
-                    temp_entry,
-                    tautulli_index,
-                    "movies",
-                    tautulli_index_ts,
-                    provider_label=playback_label,
-                )
+                cache_seconds = _read_int_env("CACHE_SECONDS", 300)
+                cache_key = _radarr_wanted_cache_key(instance_id, instance.get("url") or "")
+                wanted_cached = _get_cached_radarr_wanted(cache_key, cache_seconds)
+
+        now = time.time()
+        fetch_start = time.perf_counter()
+        if app_name == "sonarr":
+            data = _compute_sonarr(
+                instance["url"],
+                instance["api_key"],
+                exclude_specials=False,
+                instance_id=instance_id,
+                defer_wanted=defer_wanted,
+            )
+        else:
+            data = _compute_radarr(
+                instance["url"],
+                instance["api_key"],
+                instance_id=instance_id,
+                defer_wanted=defer_wanted,
+            )
+        fetch_elapsed = time.perf_counter() - fetch_start
+        if log_cold_start:
+            logger.info(
+                "Cold start %s fetch completed in %.2fs (rows=%s, instance=%s)",
+                app_name,
+                fetch_elapsed,
+                len(data or []),
+                instance_id,
+            )
+        temp_entry = {"ts": now, "tautulli_index_ts": 0, "data": data}
+        if tautulli_index:
+            if defer_tautulli_overlay:
+                if log_cold_start:
+                    logger.info(
+                        "Cold start %s deferring %s overlay (background matching).",
+                        app_name,
+                        playback_label,
+                    )
+            else:
+                overlay_start = time.perf_counter()
+                if app_name == "sonarr":
+                    applied = _apply_tautulli_stats_once(
+                        temp_entry,
+                        tautulli_index,
+                        "shows",
+                        tautulli_index_ts,
+                        provider_label=playback_label,
+                    )
+                else:
+                    applied = _apply_tautulli_stats_once(
+                        temp_entry,
+                        tautulli_index,
+                        "movies",
+                        tautulli_index_ts,
+                        provider_label=playback_label,
+                    )
+                overlay_elapsed = time.perf_counter() - overlay_start
+                if log_cold_start:
+                    logger.info(
+                        "Cold start %s %s overlay in %.2fs (applied=%s)",
+                        app_name,
+                        playback_label,
+                        overlay_elapsed,
+                        applied,
+                    )
         _cache.set_app_entry(
             app_name,
             instance_id,
-            temp_entry["data"],
-            ts=entry_ts,
+            temp_entry.get("data") or [],
+            ts=temp_entry.get("ts") or 0,
             tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
         )
+        disk_cache[instance_id] = {
+            "ts": temp_entry.get("ts") or 0,
+            "tautulli_index_ts": _safe_int(temp_entry.get("tautulli_index_ts")),
+            "data": temp_entry.get("data") or [],
+        }
+        if defer_wanted and not wanted_cached:
+            _start_wanted_background_refresh(app_name, instance, cache_path, log_cold_start=log_cold_start)
         rows = _clone_rows(temp_entry.get("data") or [])
-        _apply_instance_meta(rows, instance)
-        return rows, False
-
-    defer_wanted = log_cold_start and _read_bool_env("SORTARR_DEFER_WANTED", True)
-    wanted_cached = None
-    if defer_wanted:
-        if app_name == "sonarr":
-            cache_seconds = _read_int_env("SONARR_EPISODEFILE_CACHE_SECONDS", 600)
-            cache_key = _sonarr_episodefile_cache_key(instance_id, instance.get("url") or "")
-            wanted_cached = _get_cached_sonarr_wanted(cache_key, cache_seconds)
-        else:
-            cache_seconds = _read_int_env("CACHE_SECONDS", 300)
-            cache_key = _radarr_wanted_cache_key(instance_id, instance.get("url") or "")
-            wanted_cached = _get_cached_radarr_wanted(cache_key, cache_seconds)
-
-    now = time.time()
-    fetch_start = time.perf_counter()
-    if app_name == "sonarr":
-        data = _compute_sonarr(
-            instance["url"],
-            instance["api_key"],
-            exclude_specials=False,
-            instance_id=instance_id,
-            defer_wanted=defer_wanted,
-        )
-    else:
-        data = _compute_radarr(
-            instance["url"],
-            instance["api_key"],
-            instance_id=instance_id,
-            defer_wanted=defer_wanted,
-        )
-    fetch_elapsed = time.perf_counter() - fetch_start
-    if log_cold_start:
-        logger.info(
-            "Cold start %s fetch completed in %.2fs (rows=%s)",
-            app_name,
-            fetch_elapsed,
-            len(data or []),
-        )
-    temp_entry = {"ts": now, "tautulli_index_ts": 0, "data": data}
-    if tautulli_index:
-        if defer_tautulli_overlay:
-            if log_cold_start:
-                logger.info(
-                    "Cold start %s deferring %s overlay (background matching).",
-                    app_name,
-                    playback_label,
-                )
-        else:
-            overlay_start = time.perf_counter()
-            if app_name == "sonarr":
-                applied = _apply_tautulli_stats_once(
-                    temp_entry,
-                    tautulli_index,
-                    "shows",
-                    tautulli_index_ts,
-                    provider_label=playback_label,
-                )
-            else:
-                applied = _apply_tautulli_stats_once(
-                    temp_entry,
-                    tautulli_index,
-                    "movies",
-                    tautulli_index_ts,
-                    provider_label=playback_label,
-                )
-            overlay_elapsed = time.perf_counter() - overlay_start
-            if log_cold_start:
-                logger.info(
-                    "Cold start %s %s overlay in %.2fs (applied=%s)",
-                    app_name,
-                    playback_label,
-                    overlay_elapsed,
-                    applied,
-                )
-    _cache.set_app_entry(
-        app_name,
-        instance_id,
-        temp_entry.get("data") or [],
-        ts=temp_entry.get("ts") or 0,
-        tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
-    )
-    disk_cache[instance_id] = {
-        "ts": temp_entry.get("ts") or 0,
-        "tautulli_index_ts": _safe_int(temp_entry.get("tautulli_index_ts")),
-        "data": temp_entry.get("data") or [],
-    }
-    if defer_wanted and not wanted_cached:
-        _start_wanted_background_refresh(app_name, instance, cache_path, log_cold_start=log_cold_start)
-    rows = _clone_rows(temp_entry.get("data") or [])
-    if rows:
-        _apply_instance_meta(rows, instance)
-    return rows, True
+        if rows:
+            _apply_instance_meta(rows, instance)
+        return rows, True
 
 
 def _replace_arr_row(rows: list[dict], row: dict, app_name: str) -> None:
@@ -7823,14 +7877,17 @@ def setup():
         data = {
             "SONARR_NAME": request.form.get("sonarr_name", "").strip(),
             "SONARR_URL": _normalize_url(request.form.get("sonarr_url", "")),
+            "SONARR_URL_API": _normalize_url(request.form.get("sonarr_url_api", "")),
             "SONARR_URL_EXTERNAL": _normalize_url(request.form.get("sonarr_url_external", "")),
             "SONARR_API_KEY": request.form.get("sonarr_api_key", "").strip(),
             "SONARR_NAME_2": request.form.get("sonarr_name_2", "").strip(),
             "SONARR_URL_2": _normalize_url(request.form.get("sonarr_url_2", "")),
+            "SONARR_URL_API_2": _normalize_url(request.form.get("sonarr_url_api_2", "")),
             "SONARR_URL_EXTERNAL_2": _normalize_url(request.form.get("sonarr_url_external_2", "")),
             "SONARR_API_KEY_2": request.form.get("sonarr_api_key_2", "").strip(),
             "SONARR_NAME_3": request.form.get("sonarr_name_3", "").strip(),
             "SONARR_URL_3": _normalize_url(request.form.get("sonarr_url_3", "")),
+            "SONARR_URL_API_3": _normalize_url(request.form.get("sonarr_url_api_3", "")),
             "SONARR_URL_EXTERNAL_3": _normalize_url(request.form.get("sonarr_url_external_3", "")),
             "SONARR_API_KEY_3": request.form.get("sonarr_api_key_3", "").strip(),
             "SONARR_PATH_MAP": sonarr_path_map,
@@ -7838,14 +7895,17 @@ def setup():
             "SONARR_PATH_MAP_3": sonarr_path_map_3,
             "RADARR_NAME": request.form.get("radarr_name", "").strip(),
             "RADARR_URL": _normalize_url(request.form.get("radarr_url", "")),
+            "RADARR_URL_API": _normalize_url(request.form.get("radarr_url_api", "")),
             "RADARR_URL_EXTERNAL": _normalize_url(request.form.get("radarr_url_external", "")),
             "RADARR_API_KEY": request.form.get("radarr_api_key", "").strip(),
             "RADARR_NAME_2": request.form.get("radarr_name_2", "").strip(),
             "RADARR_URL_2": _normalize_url(request.form.get("radarr_url_2", "")),
+            "RADARR_URL_API_2": _normalize_url(request.form.get("radarr_url_api_2", "")),
             "RADARR_URL_EXTERNAL_2": _normalize_url(request.form.get("radarr_url_external_2", "")),
             "RADARR_API_KEY_2": request.form.get("radarr_api_key_2", "").strip(),
             "RADARR_NAME_3": request.form.get("radarr_name_3", "").strip(),
             "RADARR_URL_3": _normalize_url(request.form.get("radarr_url_3", "")),
+            "RADARR_URL_API_3": _normalize_url(request.form.get("radarr_url_api_3", "")),
             "RADARR_URL_EXTERNAL_3": _normalize_url(request.form.get("radarr_url_external_3", "")),
             "RADARR_API_KEY_3": request.form.get("radarr_api_key_3", "").strip(),
             "RADARR_PATH_MAP": radarr_path_map,
@@ -9443,4 +9503,16 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8787"))
-    app.run(host="0.0.0.0", port=port)
+    host = os.environ.get("HOST", "0.0.0.0")
+    use_waitress = os.environ.get("SORTARR_USE_WAITRESS", "1").strip() != "0"
+    if use_waitress:
+        try:
+            from waitress import serve  # type: ignore
+        except Exception:
+            logger.warning("Waitress not available; falling back to Flask dev server.")
+            app.run(host=host, port=port)
+        else:
+            threads = max(int(os.environ.get("WAITRESS_THREADS", "4") or 4), 1)
+            serve(app, host=host, port=port, threads=threads)
+    else:
+        app.run(host=host, port=port)

@@ -21,3 +21,5 @@ GEMINI.md
 release.ps1
 .gemini
 icon.ico
+run_waitress.py
+compile_exe.ps1

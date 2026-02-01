@@ -3,7 +3,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  Sortarr\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2026-01-29 11:04+1100\n"
+"POT-Creation-Date: 2026-02-01 12:14+1100\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: de\n"
@@ -14,13 +14,13 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.17.0\n"
 
-#: app.py:8155 templates/setup.html:487
+#: app.py:8171 templates/setup.html:517
 msgid "URL and API key are required."
 msgstr "URL und API-Key sind erforderlich."
 
 #: templates/index.html:23
 msgid "Media library insights"
-msgstr "Einblicke in die Medienbibliothek"
+msgstr "Bibliothek-Statistiken"
 
 #: templates/index.html:27
 msgid "Clear UI settings and reload cached data"
@@ -50,7 +50,7 @@ msgstr "Spalten"
 msgid "Search columns"
 msgstr "Spalten suchen"
 
-#: templates/index.html:37 templates/index.html:884
+#: templates/index.html:37 templates/index.html:888
 msgid "Show all"
 msgstr "Alle anzeigen"
 
@@ -70,29 +70,29 @@ msgstr "CSV-Spalten aktivieren"
 msgid "Core"
 msgstr "Basis"
 
-#: templates/index.html:48 templates/index.html:451 templates/index.html:742
+#: templates/index.html:48 templates/index.html:453 templates/index.html:746
 msgid "Title"
 msgstr "Titel"
 
-#: templates/index.html:49 templates/index.html:452 templates/index.html:745
+#: templates/index.html:49 templates/index.html:454 templates/index.html:749
 msgid "Date Added"
 msgstr "Hinzugefügt am"
 
-#: templates/index.html:50 templates/index.html:383 templates/index.html:387
-#: templates/index.html:455
+#: templates/index.html:50 templates/index.html:384 templates/index.html:388
+#: templates/index.html:457
 msgid "Instance"
 msgstr "Instanz"
 
-#: templates/index.html:51 templates/index.html:611 templates/index.html:747
+#: templates/index.html:51 templates/index.html:613 templates/index.html:751
 msgid "Root Folder"
 msgstr "Stammordner"
 
-#: templates/index.html:52 templates/index.html:614 templates/index.html:746
+#: templates/index.html:52 templates/index.html:616 templates/index.html:750
 msgid "Path"
 msgstr "Pfad"
 
-#: templates/index.html:58 templates/index.html:361 templates/index.html:397
-#: templates/index.html:890
+#: templates/index.html:58 templates/index.html:362 templates/index.html:398
+#: templates/index.html:894
 msgid "Sonarr"
 msgstr "Sonarr"
 
@@ -100,67 +100,67 @@ msgstr "Sonarr"
 msgid "Sonarr columns"
 msgstr "Sonarr-Spalten"
 
-#: templates/index.html:63 templates/index.html:458 templates/index.html:761
+#: templates/index.html:63 templates/index.html:460 templates/index.html:765
 msgid "Series Type"
 msgstr "Serientyp"
 
-#: templates/index.html:64 templates/index.html:118 templates/index.html:460
-#: templates/index.html:525 templates/index.html:793
+#: templates/index.html:64 templates/index.html:118 templates/index.html:462
+#: templates/index.html:527 templates/index.html:797
 msgid "Studio"
 msgstr "Studio"
 
-#: templates/index.html:65 templates/index.html:119 templates/index.html:466
-#: templates/index.html:531 templates/index.html:795
+#: templates/index.html:65 templates/index.html:119 templates/index.html:468
+#: templates/index.html:533 templates/index.html:799
 msgid "Genres"
 msgstr "Genres"
 
-#: templates/index.html:66 templates/index.html:468 templates/index.html:796
+#: templates/index.html:66 templates/index.html:470 templates/index.html:800
 msgid "Last Aired"
 msgstr "Zuletzt ausgestrahlt"
 
-#: templates/index.html:67 templates/index.html:471
+#: templates/index.html:67 templates/index.html:473
 msgid "Episodes missing on disk."
 msgstr "Episoden ohne Datei auf dem Datenträger."
 
-#: templates/index.html:68 templates/index.html:123 templates/index.html:363
-#: templates/index.html:374 templates/index.html:471 templates/index.html:534
-#: templates/index.html:780
+#: templates/index.html:68 templates/index.html:123 templates/index.html:364
+#: templates/index.html:375 templates/index.html:473 templates/index.html:536
+#: templates/index.html:784
 msgid "Missing"
 msgstr "Fehlend"
 
-#: templates/index.html:69 templates/index.html:474
+#: templates/index.html:69 templates/index.html:476
 msgid "Episodes where the quality cutoff is unmet."
 msgstr "Episoden, bei denen die Qualitätsgrenze nicht erreicht ist."
 
-#: templates/index.html:70 templates/index.html:125 templates/index.html:364
-#: templates/index.html:375 templates/index.html:474 templates/index.html:537
-#: templates/index.html:781
+#: templates/index.html:70 templates/index.html:125 templates/index.html:365
+#: templates/index.html:376 templates/index.html:476 templates/index.html:539
+#: templates/index.html:785
 msgid "Cutoff Unmet"
 msgstr "Qualitätsgrenze nicht erreicht"
 
-#: templates/index.html:71 templates/index.html:477
+#: templates/index.html:71 templates/index.html:479
 msgid "Total content hours based on non-special episodes."
 msgstr "Gesamte Inhaltsstunden basierend auf Episoden ohne Specials."
 
-#: templates/index.html:72 templates/index.html:105 templates/index.html:477
-#: templates/index.html:680
+#: templates/index.html:72 templates/index.html:105 templates/index.html:479
+#: templates/index.html:684
 msgid "Runtime (hh:mm)"
 msgstr "Laufzeit (hh:mm)"
 
-#: templates/index.html:73 templates/index.html:480
+#: templates/index.html:73 templates/index.html:482
 msgid "Episode count excludes specials."
 msgstr "Episodenanzahl ohne Specials."
 
-#: templates/index.html:74 templates/index.html:480 templates/index.html:797
+#: templates/index.html:74 templates/index.html:482 templates/index.html:801
 msgid "Episodes"
 msgstr "Episoden"
 
-#: templates/index.html:76 templates/index.html:483
+#: templates/index.html:76 templates/index.html:485
 msgid "Season count excludes specials and only counts seasons with files."
 msgstr "Staffelanzahl ohne Specials und nur Staffeln mit Dateien."
 
-#: templates/index.html:77 templates/index.html:483 templates/index.html:630
-#: templates/index.html:654 templates/index.html:798
+#: templates/index.html:77 templates/index.html:485 templates/index.html:634
+#: templates/index.html:658 templates/index.html:802
 msgid "Seasons"
 msgstr "Staffeln"
 
@@ -168,54 +168,54 @@ msgstr "Staffeln"
 msgid "Avg / Ep (GiB)"
 msgstr "Ø pro Episode (GiB)"
 
-#: templates/index.html:80 templates/index.html:493
+#: templates/index.html:80 templates/index.html:495
 msgid "Total size includes specials."
 msgstr "Gesamtgröße einschließlich Specials."
 
-#: templates/index.html:81 templates/index.html:494
+#: templates/index.html:81 templates/index.html:496
 msgid "Total (GiB)"
 msgstr "Gesamt (GiB)"
 
-#: templates/index.html:82 templates/index.html:108 templates/index.html:495
-#: templates/index.html:509
+#: templates/index.html:82 templates/index.html:108 templates/index.html:497
+#: templates/index.html:511
 msgid "GiB / Hour"
 msgstr "GiB pro Stunde"
 
-#: templates/index.html:83 templates/index.html:499
+#: templates/index.html:83 templates/index.html:501
 msgid "Estimated series bitrate from total size and runtime."
 msgstr "Geschätzte Serien-Bitrate aus Gesamtgröße und Laufzeit."
 
-#: templates/index.html:84 templates/index.html:109 templates/index.html:499
+#: templates/index.html:84 templates/index.html:109 templates/index.html:501
 msgid "Bitrate (Mbps)"
 msgstr "Bitrate (Mbit/s)"
 
-#: templates/index.html:85 templates/index.html:111 templates/index.html:517
-#: templates/index.html:748
+#: templates/index.html:85 templates/index.html:111 templates/index.html:519
+#: templates/index.html:752
 msgid "Status"
 msgstr "Status"
 
-#: templates/index.html:86 templates/index.html:112 templates/index.html:518
-#: templates/index.html:758
+#: templates/index.html:86 templates/index.html:112 templates/index.html:520
+#: templates/index.html:762
 msgid "Monitored"
 msgstr "Überwacht"
 
-#: templates/index.html:87 templates/index.html:113 templates/index.html:520
-#: templates/index.html:791
+#: templates/index.html:87 templates/index.html:113 templates/index.html:522
+#: templates/index.html:795
 msgid "Tags"
 msgstr "Tags"
 
-#: templates/index.html:88 templates/index.html:114 templates/index.html:521
-#: templates/index.html:792
+#: templates/index.html:88 templates/index.html:114 templates/index.html:523
+#: templates/index.html:796
 msgid "Release Group"
 msgstr "Release-Gruppe"
 
-#: templates/index.html:89 templates/index.html:115 templates/index.html:523
-#: templates/index.html:790
+#: templates/index.html:89 templates/index.html:115 templates/index.html:525
+#: templates/index.html:794
 msgid "Quality Profile"
 msgstr "Qualitätsprofil"
 
-#: templates/index.html:99 templates/index.html:372 templates/index.html:398
-#: templates/index.html:879
+#: templates/index.html:99 templates/index.html:373 templates/index.html:399
+#: templates/index.html:883
 msgid "Radarr"
 msgstr "Radarr"
 
@@ -223,39 +223,39 @@ msgstr "Radarr"
 msgid "Radarr columns"
 msgstr "Radarr-Spalten"
 
-#: templates/index.html:107 templates/index.html:506
+#: templates/index.html:107 templates/index.html:508
 msgid "Size (GiB)"
 msgstr "Größe (GiB)"
 
-#: templates/index.html:121 templates/index.html:534
+#: templates/index.html:121 templates/index.html:536
 msgid "Movies missing on disk."
 msgstr "Filme ohne Datei auf dem Datenträger."
 
-#: templates/index.html:124 templates/index.html:537
+#: templates/index.html:124 templates/index.html:539
 msgid "Movies where the quality cutoff is unmet."
 msgstr "Filme, bei denen die Qualitätsgrenze nicht erreicht ist."
 
-#: templates/index.html:127 templates/index.html:539 templates/index.html:778
+#: templates/index.html:127 templates/index.html:541 templates/index.html:782
 msgid "Has File"
 msgstr "Datei vorhanden"
 
-#: templates/index.html:128 templates/index.html:379 templates/index.html:542
+#: templates/index.html:128 templates/index.html:380 templates/index.html:544
 msgid "Available"
 msgstr "Verfügbar"
 
-#: templates/index.html:129 templates/index.html:544 templates/index.html:753
+#: templates/index.html:129 templates/index.html:546 templates/index.html:757
 msgid "In Cinemas"
 msgstr "Im Kino"
 
-#: templates/index.html:130 templates/index.html:546 templates/index.html:701
+#: templates/index.html:130 templates/index.html:548 templates/index.html:705
 msgid "Last Search"
 msgstr "Letzte Suche"
 
-#: templates/index.html:131 templates/index.html:548 templates/index.html:702
+#: templates/index.html:131 templates/index.html:550 templates/index.html:706
 msgid "Edition"
 msgstr "Edition"
 
-#: templates/index.html:132 templates/index.html:551 templates/index.html:703
+#: templates/index.html:132 templates/index.html:553 templates/index.html:707
 msgid "Custom Formats"
 msgstr "Benutzerdefinierte Formate"
 
@@ -277,20 +277,20 @@ msgid ""
 "              columns"
 msgstr "Video-Spalten"
 
-#: templates/index.html:148 templates/index.html:562 templates/index.html:696
+#: templates/index.html:148 templates/index.html:564 templates/index.html:700
 msgid "Video Quality"
 msgstr "Videoqualität"
 
-#: templates/index.html:149 templates/index.html:334 templates/index.html:564
-#: templates/index.html:816
+#: templates/index.html:149 templates/index.html:335 templates/index.html:566
+#: templates/index.html:820
 msgid "Resolution"
 msgstr "Auflösung"
 
-#: templates/index.html:150 templates/index.html:567 templates/index.html:817
+#: templates/index.html:150 templates/index.html:569 templates/index.html:821
 msgid "Video Codec"
 msgstr "Video-Codec"
 
-#: templates/index.html:151 templates/index.html:570 templates/index.html:818
+#: templates/index.html:151 templates/index.html:572 templates/index.html:822
 msgid "Video HDR"
 msgstr "HDR"
 
@@ -304,8 +304,8 @@ msgid ""
 "              columns"
 msgstr "Sprachspalten"
 
-#: templates/index.html:160 templates/index.html:462 templates/index.html:527
-#: templates/index.html:794
+#: templates/index.html:160 templates/index.html:464 templates/index.html:529
+#: templates/index.html:798
 msgid "Original Language"
 msgstr "Originalsprache"
 
@@ -315,15 +315,15 @@ msgid ""
 "              Languages"
 msgstr "Audiosprachen"
 
-#: templates/index.html:164 templates/index.html:572 templates/index.html:822
+#: templates/index.html:164 templates/index.html:574 templates/index.html:826
 msgid "Audio Codec"
 msgstr "Audio-Codec"
 
-#: templates/index.html:165 templates/index.html:575 templates/index.html:827
+#: templates/index.html:165 templates/index.html:577 templates/index.html:831
 msgid "Audio Channels"
 msgstr "Audiokanäle"
 
-#: templates/index.html:169 templates/index.html:581 templates/index.html:830
+#: templates/index.html:169 templates/index.html:583 templates/index.html:834
 msgid "Subtitle Languages"
 msgstr "Untertitelsprachen"
 
@@ -340,8 +340,8 @@ msgid ""
 "              Mixed"
 msgstr "Gemischte Untertitelsprachen"
 
-#: templates/index.html:180 templates/index.html:317 templates/index.html:417
-#: templates/index.html:660
+#: templates/index.html:180 templates/index.html:318 templates/index.html:419
+#: templates/index.html:664
 msgid "Playback"
 msgstr "Wiedergabe"
 
@@ -351,19 +351,19 @@ msgid ""
 "              columns"
 msgstr "Wiedergabe-Spalten"
 
-#: templates/index.html:184 templates/index.html:583
+#: templates/index.html:184 templates/index.html:585
 msgid "Diagnostics"
 msgstr "Diagnostik"
 
-#: templates/index.html:185 templates/index.html:584
+#: templates/index.html:185 templates/index.html:586
 msgid "Times Watched"
 msgstr "Anzahl Wiedergaben"
 
-#: templates/index.html:186 templates/index.html:586 templates/index.html:809
+#: templates/index.html:186 templates/index.html:588 templates/index.html:813
 msgid "Last Watched"
 msgstr "Zuletzt angesehen"
 
-#: templates/index.html:187 templates/index.html:810
+#: templates/index.html:187 templates/index.html:814
 msgid "Days Since Watched"
 msgstr "Tage seit Wiedergabe"
 
@@ -379,13 +379,13 @@ msgid ""
 "              (hh:mm)"
 msgstr "Wiedergabe / Laufzeit (hh:mm)"
 
-#: templates/index.html:193 templates/index.html:596 templates/index.html:814
+#: templates/index.html:193 templates/index.html:598 templates/index.html:818
 msgid "Users Watched"
 msgstr "Zuschauer"
 
-#: templates/index.html:196 templates/index.html:227
+#: templates/index.html:196 templates/index.html:229
 msgid "Advanced"
-msgstr "Erweiterte"
+msgstr "Erweitert"
 
 #: templates/index.html:197
 msgid ""
@@ -393,11 +393,11 @@ msgid ""
 "              Slug"
 msgstr "Titel-Slug"
 
-#: templates/index.html:199 templates/index.html:600 templates/index.html:744
+#: templates/index.html:199 templates/index.html:602 templates/index.html:748
 msgid "TMDB ID"
 msgstr "TMDB-ID"
 
-#: templates/index.html:200 templates/index.html:601 templates/index.html:826
+#: templates/index.html:200 templates/index.html:603 templates/index.html:830
 msgid "Audio Codec Mixed"
 msgstr "Audio-Codec gemischt"
 
@@ -405,19 +405,23 @@ msgstr "Audio-Codec gemischt"
 msgid "Toggle theme"
 msgstr "Design umschalten"
 
-#: templates/index.html:209
-msgid "Sonarr & Radarr efficiency view"
-msgstr "Effizienzansicht für Sonarr und Radarr"
+#: templates/index.html:207 templates/index.html:208
+msgid "Fullscreen Data Table"
+msgstr ""
 
-#: templates/index.html:220
+#: templates/index.html:211
+msgid "Sonarr & Radarr efficiency view"
+msgstr "Sortier-Übersicht für Sonarr und Radarr"
+
+#: templates/index.html:222
 msgid "Filter title (supports * and ?)"
 msgstr "Titel filtern (* und ? unterstützt)"
 
-#: templates/index.html:221
+#: templates/index.html:223
 msgid "Filter path (supports * and ?)"
 msgstr "Pfad filtern (* und ? unterstützt)"
 
-#: templates/index.html:224
+#: templates/index.html:226
 msgid ""
 "Advanced filtering examples: path:C:\\ | rootfolder:/data | "
 "dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-"
@@ -433,32 +437,28 @@ msgstr ""
 "gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | "
 "resolution:2160p | instance:sonarr-2"
 
-#: templates/index.html:229
-msgid "Chips"
-msgstr "Filter-Chips"
-
-#: templates/index.html:230
+#: templates/index.html:231
 msgid "?"
 msgstr "?"
 
-#: templates/index.html:236
+#: templates/index.html:237
 msgid "Category"
 msgstr "Kategorie"
 
-#: templates/index.html:240
+#: templates/index.html:241
 msgid "Condition"
 msgstr "Bedingung"
 
-#: templates/index.html:244 templates/index.html:245 templates/index.html:246
-#: templates/index.html:891
+#: templates/index.html:245 templates/index.html:246 templates/index.html:247
+#: templates/index.html:895
 msgid "Value"
 msgstr "Wert"
 
-#: templates/index.html:248
+#: templates/index.html:249
 msgid "Add"
 msgstr "Hinzufügen"
 
-#: templates/index.html:253
+#: templates/index.html:254
 msgid ""
 "Use field:value for wildcards and comparisons. Numeric fields treat "
 "field:value as >= (use = for exact).\n"
@@ -481,8 +481,8 @@ msgid ""
 msgstr ""
 "Verwende feld:wert für Platzhalter und Vergleiche. Numerische Felder "
 "behandeln feld:wert als >= (verwende = für exakt).\n"
-"          gbperhour/totalsize mit Ganzzahlen nutzen einen Ganzzahl-Bucket "
-"(z. B. gbperhour:1 = 1.0-1.99). Beispiele:\n"
+"          gbperhour/totalsize mit Ganzzahlen nutzen einen Ganzzahl-Bucket"
+" (z. B. gbperhour:1 = 1.0-1.99). Beispiele:\n"
 "          dateadded:2024 status:continuing monitored:true qualityprofile"
 ":HD-1080p tags:kids releasegroup:ntb\n"
 "          seriestype:anime originallanguage:eng genres:drama missing:true"
@@ -498,388 +498,398 @@ msgstr ""
 "          seasons, totalsize, avgepisode, runtime, filesize, gbperhour, "
 "contenthours"
 
-#: templates/index.html:267
+#: templates/index.html:268
 msgid "Audio"
 msgstr "Audio"
 
-#: templates/index.html:269 templates/index.html:823
+#: templates/index.html:270 templates/index.html:827
 msgid "Atmos"
 msgstr "Atmos"
 
-#: templates/index.html:270 templates/index.html:824
+#: templates/index.html:271 templates/index.html:828
 msgid "DD+"
 msgstr "DD+"
 
-#: templates/index.html:271 templates/index.html:825
+#: templates/index.html:272 templates/index.html:829
 msgid "TrueHD"
 msgstr "TrueHD"
 
-#: templates/index.html:272
+#: templates/index.html:273
 msgid "5.1+"
 msgstr "5.1+"
 
-#: templates/index.html:273
+#: templates/index.html:274
 msgid "7.1+"
 msgstr "7.1+"
 
-#: templates/index.html:274
+#: templates/index.html:275
 msgid "Stereo"
 msgstr "Stereo"
 
-#: templates/index.html:278
+#: templates/index.html:279
 msgid "Audio Language"
 msgstr "Audiosprache"
 
-#: templates/index.html:280 templates/index.html:290 templates/index.html:842
+#: templates/index.html:281 templates/index.html:291 templates/index.html:846
 msgid "English"
 msgstr "Englisch"
 
-#: templates/index.html:281 templates/index.html:291 templates/index.html:843
+#: templates/index.html:282 templates/index.html:292 templates/index.html:847
 msgid "Spanish"
 msgstr "Spanisch"
 
-#: templates/index.html:282 templates/index.html:292 templates/index.html:844
+#: templates/index.html:283 templates/index.html:293 templates/index.html:848
 msgid "French"
 msgstr "Französisch"
 
-#: templates/index.html:283 templates/index.html:293 templates/index.html:845
+#: templates/index.html:284 templates/index.html:294 templates/index.html:849
 msgid "German"
 msgstr "Deutsch"
 
-#: templates/index.html:284 templates/index.html:294 templates/index.html:846
+#: templates/index.html:285 templates/index.html:295 templates/index.html:850
 msgid "Japanese"
 msgstr "Japanisch"
 
-#: templates/index.html:288 templates/index.html:698
+#: templates/index.html:289 templates/index.html:702
 msgid "Subtitles"
 msgstr "Untertitel"
 
-#: templates/index.html:295 templates/index.html:787
+#: templates/index.html:296 templates/index.html:791
 msgid "No Subtitles"
 msgstr "Keine Untertitel"
 
-#: templates/index.html:299 templates/index.html:663 templates/index.html:806
+#: templates/index.html:300 templates/index.html:667 templates/index.html:810
 msgid "Match"
 msgstr "Übereinstimmung"
 
-#: templates/index.html:301 templates/index.html:716 templates/index.html:769
+#: templates/index.html:302 templates/index.html:720 templates/index.html:773
 msgid "Matched"
 msgstr "Zugeordnet"
 
-#: templates/index.html:304
+#: templates/index.html:305
 msgid ""
 "Potential\n"
 "                  Mismatch"
 msgstr "Mögliche Abweichung"
 
-#: templates/index.html:306
+#: templates/index.html:307
 msgid ""
 "Future\n"
 "                  Release"
 msgstr "Zukünftige Veröffentlichung"
 
-#: templates/index.html:308
+#: templates/index.html:309
 msgid ""
 "Not On\n"
 "                  Disk"
 msgstr "Nicht auf Datenträger"
 
-#: templates/index.html:310
+#: templates/index.html:311
 msgid ""
 "Not\n"
 "                  Checked"
 msgstr "Nicht geprüft"
 
-#: templates/index.html:313 templates/index.html:772
+#: templates/index.html:314 templates/index.html:776
 msgid "Unavailable"
 msgstr "Nicht verfügbar"
 
-#: templates/index.html:319
+#: templates/index.html:320
 msgid ""
 "Never\n"
 "                  Watched"
 msgstr "Nie angesehen"
 
-#: templates/index.html:321
+#: templates/index.html:322
 msgid "Watched"
 msgstr "Angesehen"
 
-#: templates/index.html:323
+#: templates/index.html:324
 msgid "Rewatched"
 msgstr "Erneut angesehen"
 
-#: templates/index.html:325
+#: templates/index.html:326
 msgid ""
 "Recent\n"
 "                  (30d)"
 msgstr "Kürzlich (30 Tage)"
 
-#: templates/index.html:327
+#: templates/index.html:328
 msgid ""
 "Heavy (10+\n"
 "                  hrs)"
 msgstr "Vielnutzer (10+ Std.)"
 
-#: templates/index.html:329
+#: templates/index.html:330
 msgid "Multi-user"
 msgstr "Mehrbenutzer"
 
-#: templates/index.html:343
+#: templates/index.html:344
 msgid "Source"
 msgstr "Quelle"
 
-#: templates/index.html:352
+#: templates/index.html:353
 msgid "Video Tags"
 msgstr "Video-Tags"
 
-#: templates/index.html:356 templates/index.html:820
+#: templates/index.html:357 templates/index.html:824
 msgid "Dolby Vision"
 msgstr "Dolby Vision"
 
-#: templates/index.html:357 templates/index.html:819
+#: templates/index.html:358 templates/index.html:823
 msgid "HDR"
 msgstr "HDR"
 
-#: templates/index.html:365 templates/index.html:376 templates/index.html:783
+#: templates/index.html:366 templates/index.html:377 templates/index.html:787
 msgid "Recently Grabbed"
 msgstr "Kürzlich abgerufen"
 
-#: templates/index.html:367 templates/index.html:378 templates/index.html:785
+#: templates/index.html:368 templates/index.html:379 templates/index.html:789
 msgid "Scene"
 msgstr "Szene"
 
-#: templates/index.html:368
+#: templates/index.html:369
 msgid "Airing"
 msgstr "Wird ausgestrahlt"
 
-#: templates/index.html:394 templates/index.html:866
+#: templates/index.html:395 templates/index.html:870
 msgid "Hide filters and chips"
-msgstr "Filter und Chips ausblenden"
+msgstr "Filter und Schnellfilter ausblenden"
 
-#: templates/index.html:400
+#: templates/index.html:401
 msgid "Export CSV"
 msgstr "CSV exportieren"
 
-#: templates/index.html:403 templates/index.html:719
+#: templates/index.html:404 templates/index.html:723
 msgid "Hover to expand data status"
 msgstr "Zum Erweitern des Datenstatus darüberfahren"
 
-#: templates/index.html:404 templates/index.html:709
+#: templates/index.html:405 templates/index.html:713
 msgid "Data status"
 msgstr "Datenstatus"
 
-#: templates/index.html:406
+#: templates/index.html:407
 msgid "Health badges"
 msgstr "Gesundheits-Badges"
 
-#: templates/index.html:413
+#: templates/index.html:409
+msgid "Chips"
+msgstr "Schnellfilter"
+
+#: templates/index.html:415
 msgid "Progress"
 msgstr "Fortschritt"
 
-#: templates/index.html:421
+#: templates/index.html:423
 msgid "Cache"
 msgstr "Cache"
 
-#: templates/index.html:427
-#~ msgid "Refresh the active app metadata, reload its data, and update the cache"
-#~ msgstr "Metadaten der aktiven App aktualisieren, Daten neu laden und Cache aktualisieren"
+#: templates/index.html:429
+# python-format
+msgid "Refresh the active app metadata, reload its data, and update the cache"
+msgstr "Aktualisieren Sie die Metadaten der aktiven App, laden Sie die Daten neu und aktualisieren Sie den Cache"
 
-#: templates/index.html:427
+#: templates/index.html:429
 msgid ""
 "Refresh\n"
 "            Sonarr data"
 msgstr "Sonarr-Daten aktualisieren"
 
-#: templates/index.html:429 templates/index.html:672
+#: templates/index.html:431 templates/index.html:676
 msgid "Refresh playback library data and rebuild matches"
 msgstr "Wiedergabedaten aktualisieren und Zuordnungen neu erstellen"
 
-#: templates/index.html:430
+#: templates/index.html:432
 msgid ""
 "Refresh playback\n"
 "            data"
 msgstr "Wiedergabedaten aktualisieren"
 
-#: templates/index.html:433
+#: templates/index.html:435
 msgid "Clear all Sortarr cache files and rebuild everything from scratch"
 msgstr "Alle Sortarr-Cache-Dateien löschen und alles neu aufbauen"
 
-#: templates/index.html:433
+#: templates/index.html:435
 msgid ""
 "Clear\n"
 "            caches & rebuild"
 msgstr "Caches löschen und neu aufbauen"
 
-#: templates/index.html:437
+#: templates/index.html:439
 msgid "All data is up to date. Hiding in 5s…"
 msgstr "Alle Daten sind aktuell. Wird in 5 Sekunden ausgeblendet…"
 
-#: templates/index.html:441
-msgid "Partial playback data loaded. Matching will continue in the background."
-msgstr "Teilweise Wiedergabedaten geladen. Der Abgleich läuft im Hintergrund weiter."
-
-
 #: templates/index.html:443
+msgid "Partial playback data loaded. Matching will continue in the background."
+msgstr ""
+"Teilweise Wiedergabedaten geladen. Der Abgleich läuft im Hintergrund "
+"weiter."
+
+#: templates/index.html:445
 msgid "Sonarr fast mode enabled. Codec and language details may be missing."
 msgstr ""
 "Sonarr-Schnellmodus aktiv. Codec- und Sprachdetails können fehlen.Sonarr-"
 "Schnellmodus aktiviert. Codec- und Sprachdetails können fehlen."
 
-#: templates/index.html:487
+#: templates/index.html:489
 msgid ""
 "Avg /\n"
 "                  Ep\n"
 "                  (GiB)"
 msgstr "Ø pro Episode (GiB)"
 
-#: templates/index.html:503
+#: templates/index.html:505
 msgid ""
 "Runtime\n"
 "                  (hh:mm)"
 msgstr "Laufzeit (hh:mm)"
 
-#: templates/index.html:512
+#: templates/index.html:514
 msgid ""
 "Bitrate\n"
 "                  (Mbps)"
 msgstr "Bitrate (Mbps)"
 
-#: templates/index.html:554
+#: templates/index.html:556
 msgid ""
 "Custom\n"
 "                  Format Score"
 msgstr "Custom-Format-Punktzahl"
 
-#: templates/index.html:556
+#: templates/index.html:558
 msgid ""
 "Cutoff Not\n"
 "                  Met"
 msgstr "Cutoff nicht erreicht"
 
-#: templates/index.html:559 templates/index.html:578 templates/index.html:828
+#: templates/index.html:561 templates/index.html:580 templates/index.html:832
 msgid "Audio Languages"
 msgstr "Audiosprachen"
 
-#: templates/index.html:588
+#: templates/index.html:590
 msgid "Days Since"
 msgstr "Tage seit"
 
-#: templates/index.html:590
+#: templates/index.html:592
 msgid ""
 "Watch Time\n"
 "                  (hh:mm)"
 msgstr "Wiedergabezeit (hh:mm)"
 
-#: templates/index.html:593
+#: templates/index.html:595
 msgid ""
 "Watch / Runtime\n"
 "                  (hh:mm)"
 msgstr "Wiedergabe / Laufzeit (hh:mm)"
 
-#: templates/index.html:598 templates/index.html:743
+#: templates/index.html:600 templates/index.html:747
 msgid "Title Slug"
 msgstr "Titelschlüssel"
 
-#: templates/index.html:603 templates/index.html:829
+#: templates/index.html:605 templates/index.html:833
 msgid "Audio Languages Mixed"
 msgstr "Gemischte Audiosprachen"
 
-#: templates/index.html:606
+#: templates/index.html:608
 msgid ""
 "Subtitle Languages\n"
 "                  Mixed"
 msgstr "Gemischte Untertitelsprachen"
 
-#: templates/index.html:645
+#: templates/index.html:633
+msgid "Expand all seasons"
+msgstr "Alle Staffeln erweitern"
+
+#: templates/index.html:649
 #, python-format
 msgid "Loaded %(rows)s / %(total)s"
 msgstr "Geladen: %(rows)s / %(total)s"
 
-#: templates/index.html:646
+#: templates/index.html:650
 #, python-format
 msgid "Data loaded. Hiding in %(seconds)s…"
 msgstr "Daten geladen. Ausblenden in %(seconds)s…"
 
-#: templates/index.html:647
+#: templates/index.html:651
 msgid "Extras"
 msgstr "Zusatzspalten"
 
-#: templates/index.html:648
+#: templates/index.html:652
 msgid "Failed to load episodes."
 msgstr "Episoden konnten nicht geladen werden."
 
-#: templates/index.html:649
+#: templates/index.html:653
 msgid "No episodes available."
 msgstr "Keine Episoden verfügbar."
 
-#: templates/index.html:650
+#: templates/index.html:654
 msgid "Fast mode: file details limited."
 msgstr "Schnellmodus: Dateidetails sind eingeschränkt."
 
-#: templates/index.html:651
+#: templates/index.html:655
 msgid "Failed to load seasons."
 msgstr "Staffeln konnten nicht geladen werden."
 
-#: templates/index.html:652
+#: templates/index.html:656
 msgid "No seasons available."
 msgstr "Keine Staffeln verfügbar."
 
-#: templates/index.html:655
+#: templates/index.html:659
 msgid "Failed to load."
 msgstr "Laden fehlgeschlagen."
 
-#: templates/index.html:656 templates/index.html:861
+#: templates/index.html:660 templates/index.html:865
 msgid "Episode"
 msgstr "Folge"
 
-#: templates/index.html:657
+#: templates/index.html:661
 msgid "Untitled"
 msgstr "Ohne Titel"
 
-#: templates/index.html:658
+#: templates/index.html:662
 #, python-format
 msgid "Season %(num)s"
 msgstr "Staffel %(num)s"
 
-#: templates/index.html:661
+#: templates/index.html:665
 #, python-format
 msgid "Playback (%(label)s)"
 msgstr "Wiedergabe (%(label)s)"
 
-#: templates/index.html:664
+#: templates/index.html:668
 #, python-format
 msgid "Match (%(label)s)"
 msgstr "Abgleich (%(label)s)"
 
-#: templates/index.html:666
+#: templates/index.html:670
 msgid "Refresh playback"
 msgstr "Wiedergabe aktualisieren"
 
-#: templates/index.html:667
+#: templates/index.html:671
 msgid "Refresh playback data"
 msgstr "Wiedergabedaten aktualisieren"
 
-#: templates/index.html:669
+#: templates/index.html:673
 #, python-format
 msgid "Refresh %(label)s"
 msgstr "%(label)s aktualisieren"
 
-#: templates/index.html:670
+#: templates/index.html:674
 #, python-format
 msgid "Refresh %(label)s data"
 msgstr "%(label)s-Daten aktualisieren"
 
-#: templates/index.html:673
+#: templates/index.html:677
 #, python-format
 msgid "Refresh %(label)s library data and rebuild matches"
-msgstr "%(label)s-Bibliotheksdaten aktualisieren und Abgleiche neu erstellen"
+msgstr "%(label)s-Mediatheksdaten aktualisieren und Abgleiche neu erstellen"
 
-#: templates/index.html:675
+#: templates/index.html:679
 #, python-format
 msgid "Refresh %(appLabel)s data"
 msgstr "%(appLabel)s-Daten aktualisieren"
 
-#: templates/index.html:676
+#: templates/index.html:680
 #, python-format
 msgid ""
 "Refresh %(appLabel)s metadata, reload %(appLabel)s data, and update the "
@@ -888,131 +898,131 @@ msgstr ""
 "%(appLabel)s-Metadaten aktualisieren, %(appLabel)s-Daten neu laden und "
 "den Cache aktualisieren."
 
-#: templates/index.html:678
+#: templates/index.html:682
 #, python-format
 msgid "%(app)s is not configured."
 msgstr "%(app)s ist nicht konfiguriert."
 
-#: templates/index.html:679
+#: templates/index.html:683
 #, python-format
 msgid "%(app)s metadata refresh queued."
 msgstr "Aktualisierung der %(app)s-Metadaten eingereiht."
 
-#: templates/index.html:681
+#: templates/index.html:685
 msgid "Watchtime / Runtime (hh:mm)"
 msgstr "Wiedergabezeit / Laufzeit (hh:mm)"
 
-#: templates/index.html:683
+#: templates/index.html:687
 #, python-format
 msgid "Ask %(app)s to refresh metadata?"
 msgstr "%(app)s bitten, die Metadaten zu aktualisieren?"
 
-#: templates/index.html:684
+#: templates/index.html:688
 #, python-format
 msgid "Refreshing %(app)s data..."
 msgstr "Daten für %(app)s werden aktualisiert..."
 
-#: templates/index.html:685
+#: templates/index.html:689
 #, python-format
 msgid "%(app)s refresh queued."
 msgstr "Aktualisierung für %(app)s eingereiht."
 
-#: templates/index.html:687
+#: templates/index.html:691
 msgid "Error: "
 msgstr "Fehler: "
 
-#: templates/index.html:689
+#: templates/index.html:693
 msgid "Refreshing Sonarr..."
 msgstr "Sonarr wird aktualisiert..."
 
-#: templates/index.html:690
+#: templates/index.html:694
 msgid "Sonarr refresh queued."
 msgstr "Sonarr-Aktualisierung eingereiht."
 
-#: templates/index.html:691
+#: templates/index.html:695
 msgid "Refreshing Radarr..."
 msgstr "Radarr wird aktualisiert..."
 
-#: templates/index.html:692
+#: templates/index.html:696
 msgid "Radarr refresh queued."
 msgstr "Radarr-Aktualisierung eingereiht."
 
-#: templates/index.html:694
+#: templates/index.html:698
 msgid "Runtime"
 msgstr "Laufzeit"
 
-#: templates/index.html:695
+#: templates/index.html:699
 msgid "Size"
 msgstr "Größe"
 
-#: templates/index.html:697
+#: templates/index.html:701
 msgid "Languages"
 msgstr "Sprachen"
 
-#: templates/index.html:699
+#: templates/index.html:703
 msgid "Air Date"
 msgstr "Erstausstrahlung"
 
-#: templates/index.html:700
+#: templates/index.html:704
 msgid "Cutoff"
 msgstr "Qualitätsgrenze"
 
-#: templates/index.html:704
+#: templates/index.html:708
 msgid "CF Score"
 msgstr "CF-Score"
 
-#: templates/index.html:706
+#: templates/index.html:710
 msgid "Not configured"
 msgstr "Nicht konfiguriert"
 
-#: templates/index.html:707
+#: templates/index.html:711
 msgid "No cached data"
 msgstr "Keine zwischengespeicherten Daten"
 
-#: templates/index.html:708
+#: templates/index.html:712
 msgid "Awaiting data"
 msgstr "Warte auf Daten"
 
-#: templates/index.html:710
+#: templates/index.html:714
 msgid "Data loaded"
 msgstr "Daten geladen"
 
-#: templates/index.html:711
+#: templates/index.html:715
 msgid "Matching"
 msgstr "Zuordnung"
 
-#: templates/index.html:712
+#: templates/index.html:716
 msgid "Matching..."
 msgstr "Abgleich läuft..."
 
-#: templates/index.html:713
+#: templates/index.html:717
 msgid "Matching in progress"
 msgstr "Zuordnung läuft"
 
-#: templates/index.html:715
+#: templates/index.html:719
 #, python-format
 msgid "Receiving %(label)s data..."
 msgstr "Empfange %(label)s-Daten..."
 
-#: templates/index.html:717
+#: templates/index.html:721
 #, , python-format
 msgid "Matched (%(age)s ago)"
 msgstr "Zugeordnet (vor %(age)s)"
 
-#: templates/index.html:720
+#: templates/index.html:724
 msgid "Hover to expand status."
 msgstr "Zum Erweitern des Status darüberfahren."
 
-#: templates/index.html:721
+#: templates/index.html:725
 msgid "Data loaded. Hover to expand status."
 msgstr "Daten geladen. Zum Erweitern des Status darüberfahren."
 
-#: templates/index.html:723
+#: templates/index.html:727
 #, , python-format
 msgid "Receiving %(label)s data. Hover to expand status."
 msgstr "Empfange %(label)s-Daten. Zum Erweitern des Status darüberfahren."
 
-#: templates/index.html:724
+#: templates/index.html:728
 #, , python-format
 msgid ""
 "%(label)s matching in progress (%(processed)s/%(total)s processed). Hover"
@@ -1021,54 +1031,54 @@ msgstr ""
 "%(label)s-Abgleich läuft (%(processed)s/%(total)s verarbeitet). Zum "
 "Erweitern des Status darüberfahren."
 
-#: templates/index.html:726
+#: templates/index.html:730
 #, , python-format
 msgid "%(label)s: Awaiting data"
 msgstr "%(label)s: Warte auf Daten"
 
-#: templates/index.html:727
+#: templates/index.html:731
 #, , python-format
 msgid "%(label)s: %(age)s ago"
 msgstr "%(label)s: vor %(age)s"
 
-#: templates/index.html:729
+#: templates/index.html:733
 #, , python-format
 msgid "%(matched)s/%(total)s %(label)s"
 msgstr "%(matched)s/%(total)s %(label)s"
 
-#: templates/index.html:730
+#: templates/index.html:734
 msgid "--"
 msgstr "--"
 
-#: templates/index.html:731
+#: templates/index.html:735
 #, , python-format
 msgid "%(age)s ago"
 msgstr "vor %(age)s"
 
-#: templates/index.html:732
+#: templates/index.html:736
 #, , python-format
 msgid " | updated %(ageLabel)s"
 msgstr " | aktualisiert vor %(ageLabel)s"
 
-#: templates/index.html:733
+#: templates/index.html:737
 #, , python-format
 msgid " - %(pending)s pending"
 msgstr " - %(pending)s ausstehend"
 
-#: templates/index.html:734
+#: templates/index.html:738
 #, , python-format
 msgid " - %(notMatched)s not matched"
 msgstr " - %(notMatched)s nicht zugeordnet"
 
-#: templates/index.html:736
+#: templates/index.html:740
 msgid "processed"
 msgstr "verarbeitet"
 
-#: templates/index.html:737
+#: templates/index.html:741
 msgid "matched"
 msgstr "zugeordnet"
 
-#: templates/index.html:738
+#: templates/index.html:742
 msgid ""
 "First load can take a while for large libraries; later loads are cached "
 "and faster."
@@ -1076,200 +1086,200 @@ msgstr ""
 "Der erste Ladevorgang kann bei großen Mediatheken länger dauern; spätere "
 "Ladevorgänge sind zwischengespeichert und schneller."
 
-#: templates/index.html:739
+#: templates/index.html:743
 msgid "Playback matching in progress."
 msgstr "Wiedergabe-Zuordnung läuft."
 
-#: templates/index.html:740
+#: templates/index.html:744
 #, python-format
 msgid "%(label)s matching in progress."
 msgstr "%(label)s-Zuordnung läuft."
 
-#: templates/index.html:750
+#: templates/index.html:754
 msgid "Continuing"
 msgstr "Laufend"
 
-#: templates/index.html:751
+#: templates/index.html:755
 msgid "Ended"
 msgstr "Beendet"
 
-#: templates/index.html:752
+#: templates/index.html:756
 msgid "Announced"
 msgstr "Angekündigt"
 
-#: templates/index.html:754
+#: templates/index.html:758
 msgid "Released"
 msgstr "Veröffentlicht"
 
-#: templates/index.html:755
+#: templates/index.html:759
 msgid "Deleted"
 msgstr "Gelöscht"
 
-#: templates/index.html:757
+#: templates/index.html:761
 msgid "Availability"
 msgstr "Verfügbarkeit"
 
-#: templates/index.html:759
+#: templates/index.html:763
 msgid "Unmonitored"
 msgstr "Nicht überwacht"
 
-#: templates/index.html:762
+#: templates/index.html:766
 msgid "Standard"
 msgstr "Standard"
 
-#: templates/index.html:763
+#: templates/index.html:767
 msgid "Anime"
 msgstr "Anime"
 
-#: templates/index.html:765
+#: templates/index.html:769
 msgid "True"
 msgstr "Ja"
 
-#: templates/index.html:766
+#: templates/index.html:770
 msgid "False"
 msgstr "Nein"
 
-#: templates/index.html:768
+#: templates/index.html:772
 msgid "Match Status"
 msgstr "Zuordnungsstatus"
 
-#: templates/index.html:770
+#: templates/index.html:774
 msgid "Unmatched"
 msgstr "Nicht zugeordnet"
 
-#: templates/index.html:771
+#: templates/index.html:775
 msgid "Skipped"
 msgstr "Übersprungen"
 
-#: templates/index.html:773
+#: templates/index.html:777
 msgid "Future"
 msgstr "Zukünftig"
 
-#: templates/index.html:774
+#: templates/index.html:778
 msgid "Not On Disk"
 msgstr "Nicht auf Datenträger"
 
-#: templates/index.html:775
+#: templates/index.html:779
 msgid "Not Checked"
 msgstr "Nicht geprüft"
 
-#: templates/index.html:776
+#: templates/index.html:780
 msgid "Potential Mismatch"
 msgstr "Mögliche Fehlzuordnung"
 
-#: templates/index.html:779
+#: templates/index.html:783
 msgid "Is Available"
 msgstr "Verfügbar"
 
-#: templates/index.html:782
+#: templates/index.html:786
 msgid "Cutoff Unmet Count"
 msgstr "Anzahl Cutoff nicht erreicht"
 
-#: templates/index.html:784
+#: templates/index.html:788
 msgid "Airing/Available"
 msgstr "Ausgestrahlt / Verfügbar"
 
-#: templates/index.html:786
+#: templates/index.html:790
 msgid "Quality Cutoff Not Met"
 msgstr "Qualitäts-Cutoff nicht erreicht"
 
-#: templates/index.html:788
+#: templates/index.html:792
 msgid "Never Watched"
 msgstr "Nie angesehen"
 
-#: templates/index.html:800
+#: templates/index.html:804
 msgid "Size (GB)"
 msgstr "Größe (GB)"
 
-#: templates/index.html:801
+#: templates/index.html:805
 msgid "Avg Episode Size (GB)"
 msgstr "Durchschnittliche Episodengröße (GB)"
 
-#: templates/index.html:802
+#: templates/index.html:806
 msgid "Runtime (mins)"
 msgstr "Laufzeit (Min.)"
 
-#: templates/index.html:803
+#: templates/index.html:807
 msgid "File Size (GB)"
 msgstr "Dateigröße (GB)"
 
-#: templates/index.html:804
+#: templates/index.html:808
 msgid "GB per Hour"
 msgstr "GB pro Stunde"
 
-#: templates/index.html:807
+#: templates/index.html:811
 msgid "Mismatch"
 msgstr "Fehlzuordnung"
 
-#: templates/index.html:808
+#: templates/index.html:812
 msgid "Play Count"
 msgstr "Anzahl Wiedergaben"
 
-#: templates/index.html:811
+#: templates/index.html:815
 msgid "Watch Time (hours)"
 msgstr "Wiedergabezeit (Stunden)"
 
-#: templates/index.html:812
+#: templates/index.html:816
 msgid "Content Hours"
 msgstr "Inhaltsstunden"
 
-#: templates/index.html:813
+#: templates/index.html:817
 msgid "Watch / Runtime Ratio"
 msgstr "Wiedergabe-/Laufzeit-Verhältnis"
 
-#: templates/index.html:831
+#: templates/index.html:835
 msgid "Subtitle Languages Mixed"
 msgstr "Gemischte Untertitelsprachen"
 
-#: templates/index.html:833
+#: templates/index.html:837
 msgid "is"
 msgstr "ist"
 
-#: templates/index.html:834
+#: templates/index.html:838
 msgid "is not"
 msgstr "ist nicht"
 
-#: templates/index.html:835
+#: templates/index.html:839
 msgid "contains"
 msgstr "enthält"
 
-#: templates/index.html:836
+#: templates/index.html:840
 msgid "does not contain"
 msgstr "enthält nicht"
 
-#: templates/index.html:837
+#: templates/index.html:841
 msgid "greater than"
 msgstr "größer als"
 
-#: templates/index.html:838
+#: templates/index.html:842
 msgid "at least"
 msgstr "mindestens"
 
-#: templates/index.html:839
+#: templates/index.html:843
 msgid "less than"
 msgstr "kleiner als"
 
-#: templates/index.html:840
+#: templates/index.html:844
 msgid "at most"
 msgstr "höchstens"
 
-#: templates/index.html:847
+#: templates/index.html:851
 msgid "Fetching new Sonarr data..."
 msgstr "Neue Sonarr-Daten werden abgerufen..."
 
-#: templates/index.html:848
+#: templates/index.html:852
 msgid "Fetching new Radarr data..."
 msgstr "Neue Radarr-Daten werden abgerufen..."
 
-#: templates/index.html:849
+#: templates/index.html:853
 msgid "Loading Sonarr data..."
 msgstr "Sonarr-Daten werden geladen..."
 
-#: templates/index.html:850
+#: templates/index.html:854
 msgid "Loading Radarr data..."
 msgstr "Radarr-Daten werden geladen..."
 
-#: templates/index.html:852
+#: templates/index.html:856
 msgid ""
 "Advanced filtering examples: path:C:\\ | rootfolder:/data | "
 "dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-"
@@ -1287,7 +1297,7 @@ msgstr ""
 "totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | "
 "instance:sonarr-2"
 
-#: templates/index.html:853
+#: templates/index.html:857
 msgid ""
 "Advanced filtering examples: path:C:\\ | rootfolder:/data | "
 "dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-"
@@ -1307,7 +1317,7 @@ msgstr ""
 "| gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | "
 "resolution:2160p | instance:sonarr-2"
 
-#: templates/index.html:855
+#: templates/index.html:859
 msgid ""
 "Use field:value for wildcards and comparisons. Numeric fields treat "
 "field:value as >= (use = for exact). gbperhour/totalsize with integer "
@@ -1326,9 +1336,9 @@ msgid ""
 "episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, "
 "contenthours"
 msgstr ""
-"Verwende feld:wert für Platzhalter und Vergleiche. Numerische Felder "
-"behandeln feld:wert als >= (verwende = für exakt). gbperhour/totalsize "
-"mit Ganzzahlen nutzen einen Ganzzahl-Bucket (z.B. gbperhour:1 = "
+"Nutze feld:wert für Filter und Vergleiche. Numerische Felder werten "
+"feld:wert als >= aus (nutze = für exakte Treffer). gbperhour/totalsize "
+"nutzen bei Ganzzahlen ein Intervall (z.B. gbperhour:1 entspricht "
 "1.0-1.99). Beispiele: dateadded:2024 status:continuing monitored:true "
 "qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar "
 "seriestype:anime originallanguage:eng genres:drama missing:true "
@@ -1343,7 +1353,7 @@ msgstr ""
 "recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode,"
 " runtime, filesize, gbperhour, contenthours"
 
-#: templates/index.html:856
+#: templates/index.html:860
 msgid ""
 "Use field:value for wildcards and comparisons. Numeric fields treat "
 "field:value as >= (use = for exact). gbperhour/totalsize with integer "
@@ -1365,9 +1375,9 @@ msgid ""
 "users, episodes, seasons, totalsize, avgepisode, runtime, filesize, "
 "gbperhour"
 msgstr ""
-"Verwende feld:wert für Platzhalter und Vergleiche. Numerische Felder "
-"behandeln feld:wert als >= (verwende = für exakt). gbperhour/totalsize "
-"mit Ganzzahlen nutzen einen Ganzzahl-Bucket (z.B. gbperhour:1 = "
+"Nutze feld:wert für Filter und Vergleiche. Numerische Felder werten "
+"feld:wert als >= aus (nutze = für exakte Treffer). gbperhour/totalsize "
+"nutzen bei Ganzzahlen ein Intervall (z.B. gbperhour:1 entspricht "
 "1.0-1.99). Beispiele: dateadded:2024 status:continuing monitored:true "
 "qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar "
 "seriestype:anime originallanguage:eng genres:drama missing:true "
@@ -1385,118 +1395,118 @@ msgstr ""
 "watchtime, contenthours, watchratio, users, episodes, seasons, totalsize,"
 " avgepisode, runtime, filesize, gbperhour"
 
-#: templates/index.html:858
+#: templates/index.html:862
 msgid "Close"
 msgstr "Schließen"
 
-#: templates/index.html:859
+#: templates/index.html:863
 msgid "Copy match diagnostics"
 msgstr "Abgleich-Diagnose kopieren"
 
-#: templates/index.html:860
+#: templates/index.html:864
 msgid "Custom..."
 msgstr "Benutzerdefiniert..."
 
-#: templates/index.html:862
+#: templates/index.html:866
 msgid "Estimated from file size and runtime"
 msgstr "Aus Dateigröße und Laufzeit geschätzt"
 
-#: templates/index.html:863
+#: templates/index.html:867
 msgid "Expand seasons"
 msgstr "Staffeln erweitern"
 
-#: templates/index.html:864
+#: templates/index.html:868
 msgid "Failed to load history."
 msgstr "Verlauf konnte nicht geladen werden."
 
-#: templates/index.html:865
+#: templates/index.html:869
 msgid "Fetching history..."
 msgstr "Verlauf wird abgerufen..."
 
-#: templates/index.html:867
+#: templates/index.html:871
 msgid "Hide quick chips"
-msgstr "Schnelle Chips ausblenden"
+msgstr "Schnellfilter ausblenden"
 
-#: templates/index.html:868
+#: templates/index.html:872
 msgid "History"
 msgstr "History"
 
-#: templates/index.html:869
+#: templates/index.html:873
 msgid "n/a"
 msgstr "k. A."
 
-#: templates/index.html:870
+#: templates/index.html:874
 msgid "No events available."
 msgstr "Keine Ereignisse verfügbar."
 
-#: templates/index.html:871
+#: templates/index.html:875
 msgid "No file history yet—will populate on next grab/import."
 msgstr "Noch keine Dateihistorie – wird beim nächsten Grab/Import gefüllt."
 
-#: templates/index.html:872
+#: templates/index.html:876
 msgid "No health issues reported."
 msgstr "Keine Gesundheitsprobleme gemeldet."
 
-#: templates/index.html:873
+#: templates/index.html:877
 msgid "No history yet—will populate on next grab/import."
 msgstr "Noch keine Historie – wird beim nächsten Grab/Import gefüllt."
 
-#: templates/index.html:874
+#: templates/index.html:878
 msgid "No runtime"
 msgstr "Keine Laufzeit"
 
-#: templates/index.html:875
+#: templates/index.html:879
 msgid "No watch data"
 msgstr "Keine Wiedergabedaten"
 
-#: templates/index.html:876
+#: templates/index.html:880
 msgid "Not Reported"
 msgstr "Nicht gemeldet"
 
-#: templates/index.html:877
+#: templates/index.html:881
 msgid "Not reported"
 msgstr "Nicht gemeldet"
 
-#: templates/index.html:878
+#: templates/index.html:882
 msgid "Not reported by Arr"
 msgstr "Von Arr nicht gemeldet"
 
-#: templates/index.html:880
+#: templates/index.html:884
 msgid "Refresh in Arr (and playback if supported)"
 msgstr "In Arr aktualisieren (und Wiedergabe, falls unterstützt)"
 
-#: templates/index.html:881
+#: templates/index.html:885
 msgid "Refresh item"
 msgstr "Element aktualisieren"
 
-#: templates/index.html:882
+#: templates/index.html:886
 #, python-format
 msgid "Remove filter %(label)s"
 msgstr "Filter %(label)s entfernen"
 
-#: templates/index.html:883
+#: templates/index.html:887
 msgid "Select"
 msgstr "Auswählen"
 
-#: templates/index.html:885
+#: templates/index.html:889
 msgid "Show all events"
 msgstr "Alle Ereignisse anzeigen"
 
-#: templates/index.html:886
+#: templates/index.html:890
 msgid "Show filters and chips"
-msgstr "Filter und Chips anzeigen"
+msgstr "Filter und Schnellfilter anzeigen"
 
-#: templates/index.html:887
+#: templates/index.html:891
 msgid "Show latest vs previous"
 msgstr "Neueste vs. vorherige anzeigen"
 
-#: templates/index.html:888
+#: templates/index.html:892
 msgid "Show less"
 msgstr "Weniger anzeigen"
 
-#: templates/index.html:889
+#: templates/index.html:893
 msgid "Show quick chips"
-msgstr "Schnellfilter anzeigen"
+msgstr "Schnellfilter zeigen"
 
 #: templates/setup.html:8 templates/setup.html:42
 msgid "Setup"
@@ -1514,12 +1524,12 @@ msgstr ""
 msgid "Sonarr Instance 1"
 msgstr "Sonarr Instanz 1"
 
-#: templates/setup.html:57 templates/setup.html:106 templates/setup.html:153
-#: templates/setup.html:206 templates/setup.html:255 templates/setup.html:302
+#: templates/setup.html:57 templates/setup.html:111 templates/setup.html:163
+#: templates/setup.html:221 templates/setup.html:275 templates/setup.html:327
 msgid "Instance name"
-msgstr "Instanzname"
+msgstr "Anzeigename"
 
-#: templates/setup.html:59 templates/setup.html:208
+#: templates/setup.html:59 templates/setup.html:223
 msgid ""
 "Regular / Standard / Live Action (example names only; optional unless "
 "instance 2 or 3 is configured)"
@@ -1527,68 +1537,82 @@ msgstr ""
 "Standard / Normal (Beispielnamen; optional, außer Instanz 2 oder 3 wird "
 "genutzt)"
 
-#: templates/setup.html:63 templates/setup.html:111 templates/setup.html:158
+#: templates/setup.html:63 templates/setup.html:116 templates/setup.html:168
 msgid "Sonarr URL"
 msgstr "Sonarr-URL"
 
+#: templates/setup.html:64 templates/setup.html:117 templates/setup.html:169
+msgid "http://192.168.1.120:8989"
+msgstr ""
 
-#: templates/setup.html:67 templates/setup.html:116 templates/setup.html:163
+#: templates/setup.html:67 templates/setup.html:121 templates/setup.html:173
+msgid "Sonarr API URL (optional)"
+msgstr "Sonarr-API-URL (optional)"
+
+#: templates/setup.html:68 templates/setup.html:122 templates/setup.html:174
+msgid "http://sonarr.sonarr.svc.cluster.local:8989"
+msgstr ""
+
+#: templates/setup.html:72 templates/setup.html:126 templates/setup.html:178
 msgid "Sonarr External URL (optional)"
 msgstr "Sonarr Externe URL (optional)"
 
+#: templates/setup.html:73 templates/setup.html:127 templates/setup.html:179
+msgid "https://sonarr.domain.tld"
+msgstr ""
 
-#: templates/setup.html:72 templates/setup.html:121 templates/setup.html:168
+#: templates/setup.html:77 templates/setup.html:131 templates/setup.html:183
 msgid "Sonarr API key"
 msgstr "Sonarr API-Key"
 
-#: templates/setup.html:74 templates/setup.html:123 templates/setup.html:170
-#: templates/setup.html:223 templates/setup.html:272 templates/setup.html:319
+#: templates/setup.html:79 templates/setup.html:133 templates/setup.html:185
+#: templates/setup.html:243 templates/setup.html:297 templates/setup.html:349
 msgid "your-api-key"
 msgstr "ihr-api-key"
 
-#: templates/setup.html:77 templates/setup.html:83 templates/setup.html:126
-#: templates/setup.html:132 templates/setup.html:173 templates/setup.html:179
-#: templates/setup.html:226 templates/setup.html:232 templates/setup.html:275
-#: templates/setup.html:281 templates/setup.html:322 templates/setup.html:328
+#: templates/setup.html:82 templates/setup.html:88 templates/setup.html:136
+#: templates/setup.html:142 templates/setup.html:188 templates/setup.html:194
+#: templates/setup.html:246 templates/setup.html:252 templates/setup.html:300
+#: templates/setup.html:306 templates/setup.html:352 templates/setup.html:358
 msgid "Path map"
 msgstr "Pfadzuordnung"
 
-#: templates/setup.html:79 templates/setup.html:82 templates/setup.html:128
-#: templates/setup.html:131 templates/setup.html:175 templates/setup.html:178
-#: templates/setup.html:228 templates/setup.html:231 templates/setup.html:277
-#: templates/setup.html:280 templates/setup.html:324 templates/setup.html:327
+#: templates/setup.html:84 templates/setup.html:87 templates/setup.html:138
+#: templates/setup.html:141 templates/setup.html:190 templates/setup.html:193
+#: templates/setup.html:248 templates/setup.html:251 templates/setup.html:302
+#: templates/setup.html:305 templates/setup.html:354 templates/setup.html:357
 msgid "/container/path:/host/path"
 msgstr "/container/pfad:/host/pfad"
 
-#: templates/setup.html:88 templates/setup.html:137 templates/setup.html:184
-#: templates/setup.html:237 templates/setup.html:286 templates/setup.html:333
+#: templates/setup.html:93 templates/setup.html:147 templates/setup.html:199
+#: templates/setup.html:257 templates/setup.html:311 templates/setup.html:363
 msgid "Add mapping"
 msgstr "Zuordnung hinzufügen"
 
-#: templates/setup.html:95 templates/setup.html:144 templates/setup.html:191
-#: templates/setup.html:244 templates/setup.html:293 templates/setup.html:340
-#: templates/setup.html:377 templates/setup.html:403
+#: templates/setup.html:100 templates/setup.html:154 templates/setup.html:206
+#: templates/setup.html:264 templates/setup.html:318 templates/setup.html:370
+#: templates/setup.html:407 templates/setup.html:433
 msgid "Test connection"
 msgstr "Verbindung testen"
 
-#: templates/setup.html:102
+#: templates/setup.html:107
 msgid "Advanced Sonarr instances"
-msgstr "Erweiterte Sonarr-Instanzen"
+msgstr "Zusätzliche Sonarr-Instanzen"
 
-#: templates/setup.html:104
+#: templates/setup.html:109
 msgid "Sonarr Instance 2 (optional)"
 msgstr "Sonarr Instanz 2 (optional)"
 
-#: templates/setup.html:107 templates/setup.html:154 templates/setup.html:256
-#: templates/setup.html:303
+#: templates/setup.html:112 templates/setup.html:164 templates/setup.html:276
+#: templates/setup.html:328
 msgid "4k / Anime / Cartoons"
 msgstr "4K / Anime / Zeichentrick"
 
-#: templates/setup.html:151
+#: templates/setup.html:161
 msgid "Sonarr Instance 3 (optional)"
 msgstr "Sonarr Instanz 3 (optional)"
 
-#: templates/setup.html:198
+#: templates/setup.html:213
 msgid ""
 "If you add another Sonarr instance, name all configured Sonarr instances "
 "so chips and columns stay clear."
@@ -1596,36 +1620,51 @@ msgstr ""
 "Wenn Sie eine weitere Instanz hinzufügen, benennen Sie alle Instanzen für"
 " mehr Übersicht."
 
-#: templates/setup.html:204
+#: templates/setup.html:219
 msgid "Radarr Instance 1"
 msgstr "Radarr Instanz 1"
 
-#: templates/setup.html:212 templates/setup.html:260 templates/setup.html:307
+#: templates/setup.html:227 templates/setup.html:280 templates/setup.html:332
 msgid "Radarr URL"
 msgstr "Radarr-URL"
 
-#: templates/setup.html:216 templates/setup.html:265 templates/setup.html:312
+#: templates/setup.html:228 templates/setup.html:281 templates/setup.html:333
+msgid "http://192.168.1.120:7878"
+msgstr ""
+
+#: templates/setup.html:231 templates/setup.html:285 templates/setup.html:337
+msgid "Radarr API URL (optional)"
+msgstr "Radarr-API-URL (optional)"
+
+#: templates/setup.html:232 templates/setup.html:286 templates/setup.html:338
+msgid "http://radarr.radarr.svc.cluster.local:7878"
+msgstr ""
+
+#: templates/setup.html:236 templates/setup.html:290 templates/setup.html:342
 msgid "Radarr External URL (optional)"
 msgstr "Radarr Externe URL (optional)"
 
+#: templates/setup.html:237 templates/setup.html:291 templates/setup.html:343
+msgid "https://radarr.domain.tld"
+msgstr ""
 
-#: templates/setup.html:221 templates/setup.html:270 templates/setup.html:317
+#: templates/setup.html:241 templates/setup.html:295 templates/setup.html:347
 msgid "Radarr API key"
 msgstr "Radarr API-Key"
 
-#: templates/setup.html:251
+#: templates/setup.html:271
 msgid "Advanced Radarr instances"
 msgstr "Erweiterte Radarr-Instanzen"
 
-#: templates/setup.html:253
+#: templates/setup.html:273
 msgid "Radarr Instance 2 (optional)"
 msgstr "Radarr Instanz 2 (optional)"
 
-#: templates/setup.html:300
+#: templates/setup.html:325
 msgid "Radarr Instance 3 (optional)"
 msgstr "Radarr Instanz 3 (optional)"
 
-#: templates/setup.html:347
+#: templates/setup.html:377
 msgid ""
 "If you add another Radarr instance, name all configured Radarr instances "
 "so chips and columns stay clear."
@@ -1633,41 +1672,44 @@ msgstr ""
 "Wenn Sie eine weitere Instanz hinzufügen, benennen Sie alle Instanzen für"
 " mehr Übersicht."
 
-#: templates/setup.html:353
+#: templates/setup.html:383
 msgid "Jellystat (optional)"
 msgstr "Jellystat (optional)"
 
-#: templates/setup.html:355
+#: templates/setup.html:385
 msgid "Jellystat URL"
 msgstr "Jellystat-URL"
 
+#: templates/setup.html:386
+msgid "http://192.168.1.120:3000"
+msgstr ""
 
-#: templates/setup.html:360
+#: templates/setup.html:390
 msgid "Jellystat API key"
 msgstr "Jellystat API-Key"
 
-#: templates/setup.html:362 templates/setup.html:398 templates/setup.html:412
-#: templates/setup.html:416
+#: templates/setup.html:392 templates/setup.html:428 templates/setup.html:442
+#: templates/setup.html:446
 msgid "optional"
 msgstr "optional"
 
-#: templates/setup.html:365
+#: templates/setup.html:395
 msgid "Jellystat library IDs (Sonarr)"
-msgstr "Jellystat Bibliothek-IDs (Sonarr)"
+msgstr "Jellystat Mediathek-IDs (Sonarr)"
 
-#: templates/setup.html:366 templates/setup.html:371
+#: templates/setup.html:396 templates/setup.html:401
 msgid "optional, comma-separated"
 msgstr "optional, durch Komma getrennt"
 
-#: templates/setup.html:370
+#: templates/setup.html:400
 msgid "Jellystat library IDs (Radarr)"
-msgstr "Jellystat Bibliothek-IDs (Radarr)"
+msgstr "Jellystat Mediathek-IDs (Radarr)"
 
-#: templates/setup.html:382
+#: templates/setup.html:412
 msgid "Leave library IDs blank to auto-detect by library type."
 msgstr "IDs leer lassen für automatische Erkennung nach Typ."
 
-#: templates/setup.html:384
+#: templates/setup.html:414
 msgid ""
 "Configure either Jellystat or Tautulli for playback stats. If both are "
 "set, Jellystat is used."
@@ -1675,71 +1717,75 @@ msgstr ""
 "Nutzen Sie Jellystat oder Tautulli für Statistiken. Falls beide aktiv, "
 "wird Jellystat genutzt."
 
-#: templates/setup.html:389
+#: templates/setup.html:419
 msgid "Tautulli (optional)"
 msgstr "Tautulli (optional)"
 
-#: templates/setup.html:391
+#: templates/setup.html:421
 msgid "Tautulli URL"
 msgstr "Tautulli-URL"
 
-#: templates/setup.html:396
+#: templates/setup.html:422
+msgid "http://192.168.1.120:8181"
+msgstr ""
+
+#: templates/setup.html:426
 msgid "Tautulli API key"
 msgstr "Tautulli API-Key"
 
-#: templates/setup.html:409
+#: templates/setup.html:439
 msgid "Security"
 msgstr "Sicherheit"
 
-#: templates/setup.html:411
+#: templates/setup.html:441
 msgid "Basic auth username"
-msgstr "Benutzername (Basic Auth)"
+msgstr "Benutzername (Basis-Authentifizierung)"
 
-#: templates/setup.html:415
+#: templates/setup.html:445
 msgid "Basic auth password"
-msgstr "Passwort (Basic Auth)"
+msgstr "Passwort (Basis-Authentifizierung)"
 
-#: templates/setup.html:421
+#: templates/setup.html:451
 msgid "Clear existing password"
 msgstr "Bestehendes Passwort löschen"
 
-#: templates/setup.html:423
+#: templates/setup.html:453
 msgid "Leave blank to keep current password."
 msgstr "Leer lassen, um das aktuelle Passwort zu behalten."
 
-#: templates/setup.html:424
+#: templates/setup.html:454
 msgid "Credentials are stored in the env file; keep it private."
 msgstr "Zugangsdaten werden in der .env gespeichert; bitte geheim halten."
 
-#: templates/setup.html:427
+#: templates/setup.html:457
 msgid "Advanced settings"
 msgstr "Erweiterte Einstellungen"
 
-#: templates/setup.html:429
+#: templates/setup.html:459
 msgid "Arr performance"
 msgstr "Arr-Leistung"
 
-#: templates/setup.html:431
+#: templates/setup.html:461
 msgid "Sonarr timeout seconds"
 msgstr "Sonarr-Timeout (Sekunden)"
 
-#: templates/setup.html:436
+#: templates/setup.html:466
 msgid "Sonarr episode file workers"
 msgstr "Sonarr-Episoden-Datei-Worker"
 
-#: templates/setup.html:441
+#: templates/setup.html:471
 msgid "Radarr timeout seconds"
 msgstr "Radarr-Timeout (Sekunden)"
 
-#: templates/setup.html:446
+#: templates/setup.html:476
 msgid "Radarr wanted workers"
 msgstr "Radarr-Wanted-Worker"
 
-#: templates/setup.html:451
+#: templates/setup.html:481
 msgid "Radarr instance workers"
 msgstr "Radarr-Instanz-Worker"
 
-#: templates/setup.html:456
+#: templates/setup.html:486
 msgid ""
 "Leave fields blank for defaults. Timeout seconds accept 0 to disable. "
 "Radarr wanted workers are capped at 4."
@@ -1747,23 +1793,23 @@ msgstr ""
 "Felder leer lassen für Standardwerte. 0 deaktiviert den Timeout. Radarr "
 "Wanted-Worker sind auf 4 begrenzt."
 
-#: templates/setup.html:460
+#: templates/setup.html:490
 msgid "Tautulli performance"
 msgstr "Tautulli-Leistung"
 
-#: templates/setup.html:462
+#: templates/setup.html:492
 msgid "Tautulli timeout seconds"
 msgstr "Tautulli-Timeout (Sekunden)"
 
-#: templates/setup.html:467
+#: templates/setup.html:497
 msgid "Tautulli fetch seconds"
 msgstr "Tautulli Abruf-Intervall (Sekunden)"
 
-#: templates/setup.html:472
+#: templates/setup.html:502
 msgid "Tautulli metadata workers"
 msgstr "Tautulli Metadaten-Worker"
 
-#: templates/setup.html:477
+#: templates/setup.html:507
 msgid ""
 "Metadata lookups are enforced as unlimited for accuracy. Leave fields "
 "blank for defaults; seconds fields accept 0 for no time limit."
@@ -1771,29 +1817,34 @@ msgstr ""
 "Metadaten-Abfragen sind für die Genauigkeit unbegrenzt. Leer lassen für "
 "Standardwerte; 0 deaktiviert das Zeitlimit."
 
-#: templates/setup.html:485
+#: templates/setup.html:515
 msgid "Connection OK."
 msgstr "Verbindung erfolgreich."
 
-#: templates/setup.html:486
+#: templates/setup.html:516
 msgid "Connection failed."
 msgstr "Verbindung fehlgeschlagen."
 
-#: templates/setup.html:488
+#: templates/setup.html:518
 msgid "Testing connection..."
 msgstr "Verbindung wird getestet..."
 
-#: templates/setup.html:489
+#: templates/setup.html:519
 msgid "Connection failed. Check URL and API key."
 msgstr "Verbindung fehlgeschlagen. URL und API-Key überprüfen."
 
-#: templates/setup.html:493
+#: templates/setup.html:523
 msgid "Env file path:"
 msgstr "Pfad zur .env-Datei:"
 
-#: templates/setup.html:494
+#: templates/setup.html:524
 msgid "Save and continue"
 msgstr "Speichern und Fortfahren"
+
+#~ msgid "Refresh the active app metadata, reload its data, and update the cache"
+#~ msgstr ""
+#~ "Metadaten der aktiven App aktualisieren, "
+#~ "Daten neu laden und Cache aktualisieren"
 
 #~ msgid "Receiving Tautulli data"
 #~ msgstr "Empfange Tautulli-Daten"
@@ -1811,8 +1862,7 @@ msgstr "Speichern und Fortfahren"
 #~ msgstr "Wiedergabe"
 
 #~ msgid "Media library insights"
-#~ msgstr "Einblicke in die Medienbibliothek"
-
+#~ msgstr "Bibliothek-Statistiken"
 
 #~ msgid "Reset UI"
 #~ msgstr "UI zurücksetzen"
@@ -2098,7 +2148,7 @@ msgstr "Speichern und Fortfahren"
 #~ "resolution:2160p | instance:sonarr-2"
 
 #~ msgid "Chips"
-#~ msgstr "Chips"
+#~ msgstr "Schnellfilter"
 
 #~ msgid "Category"
 #~ msgstr "Kategorie"
@@ -2214,7 +2264,7 @@ msgstr "Speichern und Fortfahren"
 #~ msgstr "Radarr"
 
 #~ msgid "Hide filters and chips"
-#~ msgstr "Filter und Chips ausblenden"
+#~ msgstr "Filter und Schnellfilter ausblenden"
 
 #~ msgid "Export CSV"
 #~ msgstr "CSV exportieren"
@@ -2254,8 +2304,6 @@ msgstr "Speichern und Fortfahren"
 
 #~ msgid "All data is up to date. Hiding in 5s…"
 #~ msgstr "Alle Daten sind aktuell. Wird in 5 Sekunden ausgeblendet…"
-
-
 
 #~ msgid "Sonarr fast mode enabled. Codec and language details may be missing."
 #~ msgstr "Sonarr-Schnellmodus aktiviert. Codec- und Sprachdetails können fehlen."
@@ -2628,26 +2676,26 @@ msgstr "Speichern und Fortfahren"
 #~ "avgepisode, runtime, filesize, gbperhour, "
 #~ "contenthours"
 #~ msgstr ""
-#~ "Verwende feld:wert für Platzhalter und "
-#~ "Vergleiche. Numerische Felder behandeln "
-#~ "feld:wert als >= (verwende = für "
-#~ "exakt). gbperhour/totalsize mit Ganzzahlen "
-#~ "nutzen einen Ganzzahl-Bucket (z.B. "
-#~ "gbperhour:1 = 1.0-1.99). Beispiele: "
-#~ "dateadded:2024 status:continuing monitored:true "
-#~ "qualityprofile:HD-1080p tags:kids releasegroup:ntb"
-#~ " studio:pixar seriestype:anime originallanguage:eng "
-#~ "genres:drama missing:true cutoff:true airing:true"
-#~ " Felder: title, titleslug, tmdbid, "
-#~ "dateadded, path, rootfolder, instance, status,"
-#~ " monitored, qualityprofile, tags, releasegroup,"
-#~ " studio, seriestype, originallanguage, genres,"
-#~ " lastaired, hasfile, isavailable, incinemas, "
-#~ "lastsearchtime, edition, customformats, "
-#~ "customformatscore, qualitycutoffnotmet, languages, "
-#~ "videoquality, videocodec, videohdr, resolution, "
-#~ "audio, audiocodec, audiocodecmixed, audiolanguages,"
-#~ " audiolang, audiolanguagesmixed, sublang, "
+#~ "Nutze feld:wert für Filter und "
+#~ "Vergleiche. Numerische Felder werten feld:wert"
+#~ " als >= aus (nutze = für exakte"
+#~ " Treffer). gbperhour/totalsize nutzen bei "
+#~ "Ganzzahlen ein Intervall (z.B. gbperhour:1 "
+#~ "entspricht 1.0-1.99). Beispiele: dateadded:2024 "
+#~ "status:continuing monitored:true qualityprofile:HD-"
+#~ "1080p tags:kids releasegroup:ntb studio:pixar "
+#~ "seriestype:anime originallanguage:eng genres:drama "
+#~ "missing:true cutoff:true airing:true Felder: "
+#~ "title, titleslug, tmdbid, dateadded, path, "
+#~ "rootfolder, instance, status, monitored, "
+#~ "qualityprofile, tags, releasegroup, studio, "
+#~ "seriestype, originallanguage, genres, lastaired, "
+#~ "hasfile, isavailable, incinemas, lastsearchtime, "
+#~ "edition, customformats, customformatscore, "
+#~ "qualitycutoffnotmet, languages, videoquality, "
+#~ "videocodec, videohdr, resolution, audio, "
+#~ "audiocodec, audiocodecmixed, audiolanguages, "
+#~ "audiolang, audiolanguagesmixed, sublang, "
 #~ "subtitlelanguagesmixed, audiochannels, nosubs, "
 #~ "missing, cutoff, recentlygrabbed, scene, "
 #~ "airing, episodes, seasons, totalsize, "
@@ -2685,28 +2733,28 @@ msgstr "Speichern und Fortfahren"
 #~ "seasons, totalsize, avgepisode, runtime, "
 #~ "filesize, gbperhour"
 #~ msgstr ""
-#~ "Verwende feld:wert für Platzhalter und "
-#~ "Vergleiche. Numerische Felder behandeln "
-#~ "feld:wert als >= (verwende = für "
-#~ "exakt). gbperhour/totalsize mit Ganzzahlen "
-#~ "nutzen einen Ganzzahl-Bucket (z.B. "
-#~ "gbperhour:1 = 1.0-1.99). Beispiele: "
-#~ "dateadded:2024 status:continuing monitored:true "
-#~ "qualityprofile:HD-1080p tags:kids releasegroup:ntb"
-#~ " studio:pixar seriestype:anime originallanguage:eng "
-#~ "genres:drama missing:true cutoff:true airing:true"
-#~ " playcount>=5 neverwatched:true mismatch:true "
-#~ "dayssincewatched>=365 watchtime>=10 contenthours>=10 "
-#~ "Felder: title, titleslug, tmdbid, dateadded,"
-#~ " path, rootfolder, instance, status, "
-#~ "monitored, qualityprofile, tags, releasegroup, "
-#~ "studio, seriestype, originallanguage, genres, "
-#~ "lastaired, hasfile, isavailable, incinemas, "
-#~ "lastsearchtime, edition, customformats, "
-#~ "customformatscore, qualitycutoffnotmet, languages, "
-#~ "videoquality, videocodec, videohdr, resolution, "
-#~ "audio, audiocodec, audiocodecmixed, audiolanguages,"
-#~ " audiolang, audiolanguagesmixed, sublang, "
+#~ "Nutze feld:wert für Filter und "
+#~ "Vergleiche. Numerische Felder werten feld:wert"
+#~ " als >= aus (nutze = für exakte"
+#~ " Treffer). gbperhour/totalsize nutzen bei "
+#~ "Ganzzahlen ein Intervall (z.B. gbperhour:1 "
+#~ "entspricht 1.0-1.99). Beispiele: dateadded:2024 "
+#~ "status:continuing monitored:true qualityprofile:HD-"
+#~ "1080p tags:kids releasegroup:ntb studio:pixar "
+#~ "seriestype:anime originallanguage:eng genres:drama "
+#~ "missing:true cutoff:true airing:true playcount>=5"
+#~ " neverwatched:true mismatch:true dayssincewatched>=365"
+#~ " watchtime>=10 contenthours>=10 Felder: title,"
+#~ " titleslug, tmdbid, dateadded, path, "
+#~ "rootfolder, instance, status, monitored, "
+#~ "qualityprofile, tags, releasegroup, studio, "
+#~ "seriestype, originallanguage, genres, lastaired, "
+#~ "hasfile, isavailable, incinemas, lastsearchtime, "
+#~ "edition, customformats, customformatscore, "
+#~ "qualitycutoffnotmet, languages, videoquality, "
+#~ "videocodec, videohdr, resolution, audio, "
+#~ "audiocodec, audiocodecmixed, audiolanguages, "
+#~ "audiolang, audiolanguagesmixed, sublang, "
 #~ "subtitlelanguagesmixed, audiochannels, nosubs, "
 #~ "missing, cutoff, recentlygrabbed, scene, "
 #~ "airing, matchstatus, mismatch, playcount, "

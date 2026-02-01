@@ -204,6 +204,8 @@
         </div>
       </div>
       <button id="themeBtn" title="{{ _('Toggle theme') }}">☀️</button>
+      <button id="tableFullscreenBtn" type="button" title="{{ _('Fullscreen Data Table') }}"
+        aria-label="{{ _('Fullscreen Data Table') }}">⛶</button>
       <span class="status" id="status" role="status" aria-live="polite"></span>
       <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
       <span class="version-badge">{{ app_name }} v{{ app_version }} - {{ _('Sonarr & Radarr efficiency view') }}</span>
@@ -226,7 +228,6 @@
           <div class="filter-controls">
             <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
               }}</button>
-            <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
             <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">{{ _('?') }}</button>
           </div>
         </div>
@@ -405,6 +406,7 @@
           </div>
           <div class="health-badges-slot" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
         </div>
+        <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
       </div>
     </div>
 
@@ -627,6 +629,8 @@
             <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
               decoding="async" />
           </div>
+          <button class="series-expansion-toggle hidden" type="button" data-role="series-expand-all-seasons"
+            aria-pressed="false">{{ _("Expand all seasons") }}</button>
           <div class="series-expansion-title">{{ _("Seasons") }}</div>
           <div class="series-expansion-actions">
             <div class="series-expansion-status muted" data-role="series-expansion-status"></div>

@@ -63,9 +63,8 @@ if [ -n "$PUID" ] && [ -n "$PGID" ]; then
         if command -v su-exec >/dev/null 2>&1; then
             exec su-exec "$user_name" "$@"
         fi
-        if command -v su >/dev/null 2>&1; then
-            exec su -s /bin/sh "$user_name" -c "$*"
-        fi
+        echo "gosu/su-exec not available; running as root." >&2
+        exec "$@"
     fi
 fi
 
