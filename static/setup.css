@@ -87,6 +87,14 @@ body {
   font-weight: 600;
 }
 
+.setup-category-title {
+  margin-top: 18px;
+  font-weight: 700;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .setup-advanced {
   border: 1px dashed var(--border);
   border-radius: 10px;
@@ -126,6 +134,15 @@ label {
   display: grid;
   gap: 6px;
   font-size: 0.9rem;
+}
+
+label.is-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+label.is-disabled input {
+  cursor: not-allowed;
 }
 
 .setup-path-map-group {
@@ -200,6 +217,14 @@ html[data-theme="dark"] .setup-error {
   color: var(--muted);
   font-size: 0.85rem;
   margin-top: 6px;
+}
+
+.setup-hint--warn {
+  color: #8a1f1f;
+}
+
+html[data-theme="dark"] .setup-hint--warn {
+  color: #ffb4b4;
 }
 
 .setup-submit {

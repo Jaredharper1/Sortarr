@@ -34,6 +34,9 @@ efficiency metrics, caches results for performance, and serves a small read-only
 -   Sonarr series metadata and wanted columns (series type, original language, genres, last aired, missing/cutoff counts)
 -   Sonarr chips for missing, cutoff unmet, recently grabbed, scene numbering, and airing
 -   Fixed-width Title column with CSS ellipsis to keep large tables stable
+-   Reset UI now clears in-memory and persisted filter/chip/view state in one action
+-   Header/layout and table-wrap sizing work is batched and memoized to reduce first-paint layout thrash
+-   Startup non-critical UI bindings and status polling are deferred/coalesced to reduce cold-load churn
 -   Fullscreen Data Table button to focus the table on small screens
 -   CSV export for Sonarr and Radarr (playback columns appear only when a playback provider is configured)
 -   Date added column for Sonarr and Radarr views
@@ -41,9 +44,58 @@ efficiency metrics, caches results for performance, and serves a small read-only
 -   Multiple Sonarr/Radarr instances with optional friendly names
 -   Path mapping support for Docker volume paths (map container paths to host paths)
 -   Optional basic auth and configurable cache
--   Optional Jellystat or Tautulli playback stats (play count, last watched, watch time, watch vs content hours, users)
--   Playback match status orbs beside titles to flag potential mismatches (only with Tautulli configured)
+-   Optional playback stats from Tautulli, Jellystat, and/or Plex with a selectable preferred history source
+-   Playback match status orbs beside titles to flag potential mismatches (only with a playback provider configured)
+-   Shows/Movies top-level tabs with optional per-tab Plex library scoping (multi-select)
+-   Plex Insights drawer with hubs (section filter), match health summary, activities, and butler tasks (when Plex is configured)
 -   Audio/subtitle language columns with filters and quick chips
+
+## Testing
+
+### Baseline (recommended on every change)
+
+Runs deterministic checks without requiring live Sonarr/Radarr/Tautulli services:
+
+```bash
+python -u run_baseline_tests.py
+```
+
+This runs:
+-   `tests.asset_proxy_test` (unit test)
+-   `tests/smoke_test.py` (API/config behavior checks)
+-   `tests/tautulli_id_match_test.py` (match/index diagnostics; skips when not configured)
+
+Artifacts are written to `tests/artifacts/runs/baseline-<timestamp>/`.
+
+### Full suite (integration + UI/perf)
+
+```bash
+python -u tests/run_sortarr_tests.py
+```
+
+For visible-browser runs:
+
+```bash
+python -u tests/run_sortarr_tests.py --headed
+```
+
+### MCP-assisted UI/perf pass (Playwright + Chrome DevTools + Lighthouse)
+
+For deterministic UI flow debugging and repeatable Lighthouse scoring across config modes (`arr-only`, `plex-only`, `mixed`), save MCP artifacts under:
+
+`tests/artifacts/runs/<run-id>/mcp`
+
+Then validate coverage and scores:
+
+```bash
+python -u tests/mcp_artifact_check.py --run-id <run-id> --require-complete
+```
+
+You can also fold this into the full harness:
+
+```bash
+python -u tests/run_sortarr_tests.py --mcp-check --mcp-require-complete
+```
 
 ## Screenshots
 
@@ -90,7 +142,7 @@ column/chips when configured.
 
 Ensure `./data` is mounted as a persistent volume; otherwise configuration and cache will be lost on container recreation.
 
-The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
+The first load after startup can take a while for large libraries (especially with a playback provider configured); later loads are cached and faster.
 
 
 ## Deployment (Unraid)
@@ -117,7 +169,7 @@ Support: until a forum thread exists, use GitHub Issues for Unraid support.
 
 4. Apply / Start the container, then open the WebUI from the Docker page.
 
-The first load after startup can take a while for large libraries (especially with Tautulli); later loads are cached and faster.
+The first load after startup can take a while for large libraries (especially with a playback provider configured); later loads are cached and faster.
 
 ## Deployment (Windows EXE)
 
@@ -218,6 +270,17 @@ Sortarr writes and reads:
 - `TAUTULLI_TIMEOUT_SECONDS`
 - `TAUTULLI_FETCH_SECONDS`
 
+### Plex (optional)
+
+- `PLEX_URL`
+- `PLEX_TOKEN`
+- `PLEX_CLIENT_ID` (auto-generated if empty)
+- `PLEX_SECTION_FILTERS` (optional; comma-separated section ids)
+- `PLEX_HISTORY_PAGE_SIZE` (default `200`)
+- `PLEX_HISTORY_LAST_VIEWED_AT` (optional; override incremental history cutoff)
+- `PLEX_REFRESH_STALE_SECONDS` (default `3600`)
+- `PLEX_CACHE_PATH` (default `./data/Sortarr.plex_cache.json`)
+
 ### Runtime overrides
 
 - `PUID`, `PGID`
@@ -310,14 +373,14 @@ RADARR_URL_API=http://radarr.radarr.svc.cluster.local:7878
 
 - Basic auth is optional but recommended if exposed beyond your LAN
 - Docker image runs a single Waitress process with multiple threads (default `--threads=4`) to keep cache/refresh state consistent
-- Designed for on-demand queries with persistent caching; the UI only polls while Tautulli matching finishes
+- Designed for on-demand queries with persistent caching; the UI only polls while playback matching finishes
 - No database or media filesystem access required
 
 
 ## Buttons and their actions:
 
 - Refresh Sonarr/Radarr data reloads only the active tab's data and updates the persistent cache.
-- Refresh playback data reloads both Sonarr and Radarr (and playback if configured) and updates the persistent cache, then rebuilds playback matching using cached provider data (Tautulli) or starts a playback refresh (Jellystat).
+- Refresh playback data reloads both Sonarr and Radarr (and playback if configured) and updates the persistent cache, then rebuilds playback matching using cached provider data or starts a playback refresh when needed.
 - Clear caches & rebuild clears all cache files and starts a full rebuild, similar to a cold start. Recommended when inaccurate data is spotted.
 - Reset UI clears local UI settings and reloads using the cached data.
 - Fullscreen Data Table (⛶) hides panels and expands the table to fill the screen (press Escape or ✕ to exit).
@@ -326,7 +389,15 @@ RADARR_URL_API=http://radarr.radarr.svc.cluster.local:7878
 ## Notes continued:
 
 - Sonarr/Radarr API keys are required for setup. Read-only keys are recommended.
-- Tautulli is optional and only used for playback stats (playback columns/filters/chips stay hidden until configured)
+- Playback stats are optional; you can configure multiple history sources (Tautulli/Jellystat/Plex) and choose a preferred history source in Setup
+- Sonarr/Radarr are optional when Plex is configured as the preferred media source
+- Plex can be configured alongside the history source for provider insights
+- Provider option set model:
+  - Media sources can be `arr`, `plex`, or both.
+  - History/playback sources can be any combination of `tautulli`, `jellystat`, and `plex`.
+  - Effective media source follows `MEDIA_SOURCE_PREFERENCE` (`arr`, `plex`, `auto`).
+  - Effective history source follows `HISTORY_SOURCE_PREFERENCE` (`tautulli`, `jellystat`, `plex`, `auto`).
+  - `auto` selects the first available configured source using Sortarr's deterministic order.
 - Tautulli metadata lookups are cached to disk for faster matching; adjust lookup limits/workers and save cadence as needed
 - Setting `TAUTULLI_METADATA_LOOKUP_LIMIT=0` disables metadata matching
 - Stale Tautulli refresh locks clear after `TAUTULLI_REFRESH_STALE_SECONDS` to avoid stuck matching
@@ -342,6 +413,8 @@ RADARR_URL_API=http://radarr.radarr.svc.cluster.local:7878
 ## Troubleshooting Tautulli matches
 
 If a title shows missing or incorrect Tautulli stats, the fastest fix is to refresh the item inside Tautulli after you confirm it is matched correctly in Arr and Plex.
+
+If you're using Plex as the playback provider (no Tautulli/Jellystat), confirm the Plex metadata IDs are correct and that Plex has recent playback history for the item.
 
 Steps:
 
@@ -397,11 +470,14 @@ Note: Language lists are shortened in the table; use "Show all" to expand them.
 - `/api/movies`
 - `/api/shows.csv`
 - `/api/movies.csv`
+- If Sonarr/Radarr are not configured and Plex is the effective media source, `/api/shows` and `/api/movies` are populated from Plex library rows.
+- `plex_library_ids=<id,id,...>` can scope Plex-backed `/api/shows`, `/api/movies`, and CSV exports to selected Plex section IDs.
 - `/api/sonarr/health`
 - `/api/radarr/health`
 - `POST /api/sonarr/refresh` (optional `seriesId`, `instance_id`)
 - `POST /api/radarr/refresh` (optional `movieId`, `instance_id`)
 - `POST /api/tautulli/refresh_item` (rating_key or section_id)
+- `POST /api/diagnostics/playback-match` (provider-agnostic playback match diagnostics with provider-specific details)
 - Error responses from Arr fetches may include a sanitized `X-Sortarr-Error` header.
 
 

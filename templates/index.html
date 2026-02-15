@@ -3,6 +3,10 @@
 
 <head>
   <meta charset="utf-8" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preload" as="style"
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
@@ -13,7 +17,7 @@
   <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
 </head>
 
-<body>
+<body class="sortarr-loading">
   <div class="app">
     <div class="toolbar">
       <div class="brand">
@@ -207,6 +211,7 @@
       <button id="tableFullscreenBtn" type="button" title="{{ _('Fullscreen Data Table') }}"
         aria-label="{{ _('Fullscreen Data Table') }}">⛶</button>
       <span class="status" id="status" role="status" aria-live="polite"></span>
+      <span class="status" id="effectiveSources" aria-live="polite"></span>
       <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
       <span class="version-badge">{{ app_name }} v{{ app_version }} - {{ _('Sonarr & Radarr efficiency view') }}</span>
     </div>
@@ -394,9 +399,15 @@
       <div class="filters-footer">
         <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide filters and chips') }}"
           aria-expanded="true" aria-controls="filtersPanel">▴</button>
+        <div class="plex-library-scope hidden" id="plexLibraryScope" data-app="sonarr">
+          <label for="plexLibrarySelect">{{ _('Plex Libraries') }}</label>
+          <select id="plexLibrarySelect" class="plex-library-select" multiple size="4"
+            aria-label="{{ _('Plex Libraries') }}"></select>
+          <button id="plexLibraryAllBtn" type="button" class="plex-library-all">{{ _('All') }}</button>
+        </div>
         <div class="tabs">
-          <button class="tab active" id="tabSonarr">{{ _('Sonarr') }}</button>
-          <button class="tab" id="tabRadarr">{{ _('Radarr') }}</button>
+          <button class="tab active" id="tabSonarr">{{ _('Shows') }}</button>
+          <button class="tab" id="tabRadarr">{{ _('Movies') }}</button>
           <span class="spacer"></span>
           <button id="exportCsvBtn">{{ _('Export CSV') }}</button>
         </div>
@@ -404,33 +415,35 @@
           <div class="status-pill status-pill--hidden" id="statusPill" title="{{ _('Hover to expand data status') }}">
             {{ _('Data status') }}
           </div>
-          <div class="health-badges-slot" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
+          <div class="health-badges-slot health-badges-slot--loading" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
         </div>
         <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
       </div>
     </div>
 
-    <div class="status-row" id="statusRow">
+    <div class="status-row status-row--hidden" id="statusRow">
       <div class="status-block">
         <div class="status-label">{{ _('Progress') }}</div>
-        <div class="status-value" id="progressStatus">--</div>
+        <div class="status-value status-value--skeleton" id="progressStatus">--</div>
       </div>
       <div class="status-block">
         <div class="status-label" data-playback-label>{{ _('Playback') }}</div>
-        <div class="status-value" id="tautulliStatus">--</div>
+        <div class="status-value status-value--skeleton" id="tautulliStatus">--</div>
       </div>
       <div class="status-block">
         <div class="status-label">{{ _('Cache') }}</div>
-        <div class="status-value" id="cacheStatus">--</div>
+        <div class="status-value status-value--skeleton" id="cacheStatus">--</div>
       </div>
       <div class="status-actions">
         <div class="status-actions-group">
           <button id="refreshTabBtn"
             title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
-            Sonarr data') }}</button>
+            Shows data') }}</button>
           <button id="deepRefreshTautulliBtn" title="{{ _('Refresh playback library data and rebuild matches') }}">{{
             _('Refresh playback
             data') }}</button>
+          <button id="plexInsightsBtn" class="hidden" title="{{ _('Open Plex insights') }}">{{ _('Plex Insights') }}</button>
+          <button id="mismatchCenterBtn" class="hidden" title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center') }}</button>
           <button id="clearCachesBtn"
             title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
             caches & rebuild') }}</button>
@@ -694,6 +707,10 @@
     "sonarrRefreshQueued": _("Sonarr refresh queued."),
     "refreshingRadarr": _("Refreshing Radarr..."),
     "radarrRefreshQueued": _("Radarr refresh queued."),
+    "refreshingShows": _("Refreshing Shows..."),
+    "showsRefreshQueued": _("Shows refresh queued."),
+    "refreshingMovies": _("Refreshing Movies..."),
+    "moviesRefreshQueued": _("Movies refresh queued."),
 
     "Runtime": _("Runtime"),
     "Size": _("Size"),
@@ -742,6 +759,20 @@
     "coldCacheNotice": _("First load can take a while for large libraries; later loads are cached and faster."),
     "playbackMatchingNotice": _("Playback matching in progress."),
     "matchingInProgressLabel": _("%(label)s matching in progress.", label="%(label)s"),
+    "noArrMediaSourcePlexAvailable": _("No Sonarr/Radarr media source configured. Plex features are available."),
+    "noMediaSourceConfigured": _("No media source configured. Open Setup to configure Sonarr, Radarr, or Plex."),
+    "effectiveSourcesLabel": _("Effective sources"),
+    "effectiveSourcesValue": _("Media: %(media)s | History: %(history)s", media="%(media)s", history="%(history)s"),
+    "sourceAuto": _("Auto"),
+    "sourceNone": _("None"),
+    "sourceArr": _("Sonarr/Radarr"),
+    "sourcePlex": _("Plex"),
+    "sourceJellystat": _("Jellystat"),
+    "sourceTautulli": _("Tautulli"),
+    "plexLibrariesLabel": _("Libraries"),
+    "plexLibrariesAll": _("Libraries: All"),
+    "plexLibrariesScoped": _("Libraries: %(libraries)s", libraries="%(libraries)s"),
+    "plexLibrariesSelectAll": _("All"),
 
     "Title": _("Title"),
     "Title Slug": _("Title Slug"),
@@ -848,10 +879,12 @@
     "French": _("French"),
     "German": _("German"),
     "Japanese": _("Japanese"),
-    "fetchingNewSonarrData": _("Fetching new Sonarr data..."),
-    "fetchingNewRadarrData": _("Fetching new Radarr data..."),
-    "loadingSonarrData": _("Loading Sonarr data..."),
-    "loadingRadarrData": _("Loading Radarr data..."),
+    "fetchingNewShowsData": _("Fetching new Shows data..."),
+    "fetchingNewMoviesData": _("Fetching new Movies data..."),
+    "loadingShowsData": _("Loading Shows data..."),
+    "loadingMoviesData": _("Loading Movies data..."),
+    "tabShows": _("Shows"),
+    "tabMovies": _("Movies"),
 
     "advancedPlaceholderBase": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2"),
     "advancedPlaceholderTautulli": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2"),
@@ -870,7 +903,36 @@
     "Hide filters and chips": _("Hide filters and chips"),
     "Hide quick chips": _("Hide quick chips"),
     "History": _("History"),
+    "Plex Insights": _("Plex Insights"),
+    "Open Plex insights": _("Open Plex insights"),
+    "Plex insights unavailable.": _("Plex insights unavailable."),
+    "Fetching Plex insights...": _("Fetching Plex insights..."),
+    "Live": _("Live"),
+    "Live on": _("Live on"),
+    "Live unavailable": _("Live unavailable"),
+    "Live connection unstable": _("Live connection unstable"),
+    "Refresh": _("Refresh"),
+    "Updated": _("Updated"),
+    "Hubs": _("Hubs"),
+    "Library": _("Library"),
+    "All Libraries": _("All Libraries"),
+    "Match Health": _("Match Health"),
+    "Matched": _("Matched"),
+    "Unmatched": _("Unmatched"),
+    "Skipped": _("Skipped"),
+    "Unavailable": _("Unavailable"),
+    "Pending": _("Pending"),
+    "Matched by": _("Matched by"),
+    "Top reasons": _("Top reasons"),
+    "Activities": _("Activities"),
+    "Butler": _("Butler"),
     "n/a": _("n/a"),
+    "No hubs available": _("No hubs available"),
+    "No hub items": _("No hub items"),
+    "No active tasks": _("No active tasks"),
+    "No butler tasks": _("No butler tasks"),
+    "No match data": _("No match data"),
+    "Untitled": _("Untitled"),
     "No events available.": _("No events available."),
     "No file history yet—will populate on next grab/import.": _("No file history yet—will populate on next grab/import."),
     "No health issues reported.": _("No health issues reported."),
@@ -909,3 +971,5 @@
 </body>
 
 </html>
+
+

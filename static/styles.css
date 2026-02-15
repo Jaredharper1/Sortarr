@@ -1,5 +1,6 @@
 body {
   font-family: var(--font-sans);
+  font-size-adjust: 0.52;
 }
 
 td.right,
@@ -9,8 +10,10 @@ td.right,
 }
 
 :root {
-  --font-sans: Inter, system-ui, sans-serif;
-  --font-mono: Inter, system-ui, sans-serif;
+  --font-sans-fallback: "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --font-mono-fallback: "Cascadia Mono", Consolas, "Segoe UI Mono", Menlo, monospace;
+  --font-sans: Inter, var(--font-sans-fallback);
+  --font-mono: "JetBrains Mono", var(--font-mono-fallback);
 
 
   --bg: #f1f3f6;
@@ -487,6 +490,60 @@ body {
   box-sizing: border-box;
 }
 
+.plex-library-scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel-surface-soft);
+}
+
+.plex-library-scope label {
+  font-size: 0.74em;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.plex-library-select {
+  min-width: 220px;
+  max-width: 320px;
+  height: calc(var(--filters-footer-control-height) + 12px);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  padding: 4px 6px;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.plex-library-select::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.plex-library-all {
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .plex-library-scope {
+    width: 100%;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .plex-library-select {
+    min-width: 0;
+    flex: 1 1 220px;
+    max-width: none;
+  }
+}
+
 .filters-footer .filters-toggle-btn {
   display: inline-flex;
   align-items: center;
@@ -766,6 +823,10 @@ html.custom-selects .filter-builder select {
   display: none;
 }
 
+html.custom-selects .mismatch-controls select {
+  display: none;
+}
+
 .custom-select {
   position: relative;
   width: 100%;
@@ -840,7 +901,7 @@ html.custom-selects .filter-builder select {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 6px;
-  z-index: 2000;
+  z-index: 20020;
   box-shadow: var(--panel-shadow);
   max-height: 240px;
   overflow: auto;
@@ -1027,7 +1088,7 @@ html.custom-selects .filter-builder select {
     flex-wrap: wrap;
   }
 
-  .status-row {
+.status-row {
     max-height: none;
     overflow: visible;
   }
@@ -1245,7 +1306,7 @@ html[data-theme="dark"] .advanced-warnings {
   justify-content: center;
 
   position: relative;
-  z-index: 5;
+  z-index: 1400;
 
 }
 
@@ -1532,7 +1593,7 @@ html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
 
   scrollbar-width: none;
 
-  z-index: 5;
+  z-index: 1400;
 
   box-shadow: var(--panel-shadow);
 
@@ -2009,6 +2070,22 @@ html[data-theme="dark"] .column-panel {
   white-space: nowrap;
 }
 
+.health-badge.is-expanded {
+  width: min(70vw, 820px);
+  border-radius: 12px;
+  align-items: flex-start;
+}
+
+.health-badge.is-expanded .health-badge__text {
+  white-space: normal;
+  text-overflow: initial;
+  overflow: visible;
+  text-align: left;
+  line-height: 1.35;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
 /* state colors */
 .health-badge--ok {
   --badge-glow: 22, 163, 74;
@@ -2113,6 +2190,26 @@ html[data-theme="dark"] .column-panel {
   cursor: pointer;
   opacity: 0.85;
   z-index: 2;
+}
+
+.health-badge__details {
+  position: absolute;
+  top: 50%;
+  right: 26px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: 12px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0.8;
+  z-index: 2;
+}
+
+.health-badge__details:hover {
+  opacity: 1;
 }
 
 .health-badge__close:hover {
@@ -2963,6 +3060,8 @@ button:disabled {
   padding-top: 0;
 
   padding-bottom: 0;
+  pointer-events: none;
+  overflow: hidden;
 
 
 }
@@ -3466,6 +3565,7 @@ table {
   --cap-SeasonCount: auto;
   --cap-MissingCount: auto;
   --cap-CutoffUnmetCount: auto;
+  --cap-QualityCutoffNotMet: auto;
   --cap-AvgEpisodeSizeGB: auto;
   --cap-TotalSizeGB: auto;
   --cap-FileSizeGB: auto;
@@ -3512,6 +3612,7 @@ table[data-app="radarr"] {
   --cap-FileSizeGB: auto;
   --cap-GBPerHour: auto;
   --cap-BitrateMbps: auto;
+  --cap-QualityCutoffNotMet: auto;
 
   --cap-Status: auto;
   --cap-Instance: auto;
@@ -3736,6 +3837,12 @@ td[data-col="Title"] {
 .num-cell.no-frac .num-dot,
 .num-cell.no-frac .num-frac {
   opacity: 0;
+}
+
+.num-cell-flat {
+  display: inline-block;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
 }
 
 
@@ -4125,6 +4232,10 @@ th[data-sort]:hover {
   display: inline-block;
 
   width: 12px;
+
+  min-width: 12px;
+
+  flex: 0 0 12px;
 
   text-align: center;
 
@@ -4783,14 +4894,12 @@ td[data-col="LastWatched"]>* {
 }
 
 
-td[data-col="TitleSlug"],
-th[data-col="TitleSlug"] {
+td[data-col="TitleSlug"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 260px;
   position: relative;
-  /* tweak this */
   width: 260px;
 }
 
@@ -4814,6 +4923,7 @@ table[data-app] {
   --w-SeasonCount: var(--cap-SeasonCount, auto);
   --w-MissingCount: var(--cap-MissingCount, auto);
   --w-CutoffUnmetCount: var(--cap-CutoffUnmetCount, auto);
+  --w-QualityCutoffNotMet: var(--cap-QualityCutoffNotMet, auto);
   --w-AvgEpisodeSizeGB: var(--cap-AvgEpisodeSizeGB, auto);
   --w-TotalSizeGB: var(--cap-TotalSizeGB, auto);
   --w-FileSizeGB: var(--cap-FileSizeGB, auto);
@@ -4961,52 +5071,52 @@ td[data-col="TotalSizeGB"] {
 
 th[data-col="FileSizeGB"],
 td[data-col="FileSizeGB"] {
-  min-width: 110px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-FileSizeGB);
+  min-width: var(--w-FileSizeGB);
+  max-width: var(--w-FileSizeGB);
 }
 
 th[data-col="GBPerHour"],
 td[data-col="GBPerHour"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-GBPerHour);
+  min-width: var(--w-GBPerHour);
+  max-width: var(--w-GBPerHour);
 }
 
 th[data-col="BitrateMbps"],
 td[data-col="BitrateMbps"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-BitrateMbps);
+  min-width: var(--w-BitrateMbps);
+  max-width: var(--w-BitrateMbps);
 }
 
 th[data-col="VideoQuality"],
 td[data-col="VideoQuality"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-VideoQuality);
+  min-width: var(--w-VideoQuality);
+  max-width: var(--w-VideoQuality);
 }
 
 th[data-col="Resolution"],
 td[data-col="Resolution"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-Resolution);
+  min-width: var(--w-Resolution);
+  max-width: var(--w-Resolution);
 }
 
 th[data-col="VideoCodec"],
 td[data-col="VideoCodec"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  width: var(--w-VideoCodec);
+  min-width: var(--w-VideoCodec);
+  max-width: var(--w-VideoCodec);
 
 }
 
 th[data-col="AudioCodec"],
 td[data-col="AudioCodec"] {
-  min-width: 100px;
+  min-width: 112px;
   width: max-content;
-  max-width: none;
+  max-width: 160px;
 }
 
 th[data-col="AudioChannels"],
@@ -5095,6 +5205,13 @@ td[data-col="Edition"] {
   max-width: var(--w-Edition);
 }
 
+th[data-col="QualityCutoffNotMet"],
+td[data-col="QualityCutoffNotMet"] {
+  width: var(--w-QualityCutoffNotMet);
+  min-width: var(--w-QualityCutoffNotMet);
+  max-width: var(--w-QualityCutoffNotMet);
+}
+
 th[data-col="CustomFormats"],
 td[data-col="CustomFormats"] {
   width: var(--w-CustomFormats);
@@ -5134,11 +5251,17 @@ table[data-app="radarr"] {
 
 th[data-col="UsersWatched"],
 td[data-col="UsersWatched"] {
-  min-width: 120px;
+  min-width: 96px;
   width: auto;
-  max-width: none;
+  max-width: 120px;
 }
 
+th[data-col="Diagnostics"],
+td[data-col="Diagnostics"] {
+  min-width: 72px;
+  width: 72px;
+  max-width: 72px;
+}
 
 th[data-col="watchtimehours"],
 td[data-col="watchtimehours"] {
@@ -5210,6 +5333,279 @@ table[data-app="radarr"] td[data-col="LastWatched"] {
   width: auto;
   min-width: auto;
   max-width: max-content;
+}
+
+/* Radarr-only width and truncation tuning */
+table[data-app="radarr"] th[data-col="Monitored"],
+table[data-app="radarr"] td[data-col="Monitored"] {
+  min-width: 96px;
+  width: 96px;
+  max-width: 96px;
+}
+
+table[data-app="radarr"] th[data-col="Tags"],
+table[data-app="radarr"] td[data-col="Tags"],
+table[data-app="radarr"] th[data-col="Studio"],
+table[data-app="radarr"] td[data-col="Studio"],
+table[data-app="radarr"] th[data-col="LastSearchTime"],
+table[data-app="radarr"] td[data-col="LastSearchTime"],
+table[data-app="radarr"] th[data-col="LastWatched"],
+table[data-app="radarr"] td[data-col="LastWatched"] {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Keep row height stable even when content is long. */
+table[data-app="radarr"] td[data-col="Tags"],
+table[data-app="radarr"] td[data-col="Studio"],
+table[data-app="radarr"] td[data-col="Genres"],
+table[data-app="radarr"] td[data-col="LastSearchTime"],
+table[data-app="radarr"] td[data-col="AudioLanguages"],
+table[data-app="radarr"] td[data-col="SubtitleLanguages"],
+table[data-app="radarr"] td[data-col="LastWatched"] {
+  white-space: nowrap;
+}
+
+/* Explicit Radarr widths for columns that should not truncate in normal usage. */
+table[data-app="radarr"] th[data-col="Tags"],
+table[data-app="radarr"] td[data-col="Tags"] {
+  min-width: 190px;
+  width: 190px;
+  max-width: 190px;
+}
+
+table[data-app="radarr"] th[data-col="Studio"],
+table[data-app="radarr"] td[data-col="Studio"] {
+  min-width: 260px;
+  width: 260px;
+  max-width: 260px;
+}
+
+table[data-app="radarr"] th[data-col="Genres"],
+table[data-app="radarr"] td[data-col="Genres"] {
+  min-width: 280px;
+  width: 280px;
+  max-width: 280px;
+}
+
+table[data-app="radarr"] th[data-col="LastSearchTime"],
+table[data-app="radarr"] td[data-col="LastSearchTime"],
+table[data-app="radarr"] th[data-col="LastWatched"],
+table[data-app="radarr"] td[data-col="LastWatched"] {
+  min-width: 190px;
+  width: 190px;
+  max-width: 190px;
+}
+
+table[data-app="radarr"] th[data-col="Languages"],
+table[data-app="radarr"] td[data-col="Languages"],
+table[data-app="radarr"] th[data-col="AudioLanguages"],
+table[data-app="radarr"] td[data-col="AudioLanguages"],
+table[data-app="radarr"] th[data-col="SubtitleLanguages"],
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
+  min-width: 280px;
+  width: 280px;
+  max-width: 280px;
+}
+
+/* Shows-only width and truncation tuning (do not affect Movies). */
+table[data-app="sonarr"] tbody tr:not(.series-child-row) > td {
+  white-space: nowrap;
+}
+
+table[data-app="sonarr"] th[data-col="AudioCodec"],
+table[data-app="sonarr"] td[data-col="AudioCodec"] {
+  min-width: 190px;
+  width: 190px;
+  max-width: 190px;
+}
+
+table[data-app="sonarr"] th[data-col="VideoQuality"],
+table[data-app="sonarr"] td[data-col="VideoQuality"] {
+  min-width: 184px;
+  width: 184px;
+  max-width: 184px;
+}
+
+table[data-app="sonarr"] th[data-col="Resolution"],
+table[data-app="sonarr"] td[data-col="Resolution"] {
+  min-width: 170px;
+  width: 170px;
+  max-width: 170px;
+}
+
+table[data-app="sonarr"] th[data-col="AudioLanguages"],
+table[data-app="sonarr"] td[data-col="AudioLanguages"],
+table[data-app="sonarr"] th[data-col="SubtitleLanguages"],
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] {
+  min-width: 300px;
+  width: 300px;
+  max-width: 300px;
+}
+
+table[data-app="sonarr"] th[data-col="CustomFormats"],
+table[data-app="sonarr"] td[data-col="CustomFormats"] {
+  min-width: 280px;
+  width: 280px;
+  max-width: 280px;
+}
+
+table[data-app="sonarr"] th[data-col="Genres"],
+table[data-app="sonarr"] td[data-col="Genres"] {
+  min-width: 300px;
+  width: 300px;
+  max-width: 300px;
+}
+
+table[data-app="sonarr"] th[data-col="Tags"],
+table[data-app="sonarr"] td[data-col="Tags"] {
+  min-width: 240px;
+  width: 240px;
+  max-width: 240px;
+}
+
+table[data-app="sonarr"] th[data-col="LastWatched"],
+table[data-app="sonarr"] td[data-col="LastWatched"],
+table[data-app="sonarr"] th[data-col="LastSearchTime"],
+table[data-app="sonarr"] td[data-col="LastSearchTime"] {
+  min-width: 190px;
+  width: 190px;
+  max-width: 190px;
+}
+
+table[data-app="sonarr"] th[data-col="CutoffUnmetCount"],
+table[data-app="sonarr"] td[data-col="CutoffUnmetCount"],
+table[data-app="sonarr"] th[data-col="QualityCutoffNotMet"],
+table[data-app="sonarr"] td[data-col="QualityCutoffNotMet"] {
+  min-width: 110px;
+  width: 110px;
+  max-width: 110px;
+}
+
+table[data-app="sonarr"] td[data-col="Tags"],
+table[data-app="sonarr"] td[data-col="LastWatched"],
+table[data-app="sonarr"] td[data-col="LastSearchTime"] {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Keep Show all / Mixed badges contained for Shows language-like cells. */
+table[data-app="sonarr"] td[data-col="AudioCodec"],
+table[data-app="sonarr"] td[data-col="Genres"],
+table[data-app="sonarr"] td[data-col="CustomFormats"],
+table[data-app="sonarr"] td[data-col="AudioLanguages"],
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table[data-app="sonarr"] td[data-col="AudioCodec"] .lang-cell,
+table[data-app="sonarr"] td[data-col="AudioCodec"] .lang-cell-truncated,
+table[data-app="sonarr"] td[data-col="Genres"] .lang-cell,
+table[data-app="sonarr"] td[data-col="Genres"] .lang-cell-truncated,
+table[data-app="sonarr"] td[data-col="CustomFormats"] .lang-cell,
+table[data-app="sonarr"] td[data-col="CustomFormats"] .lang-cell-truncated,
+table[data-app="sonarr"] td[data-col="AudioLanguages"] .lang-cell,
+table[data-app="sonarr"] td[data-col="AudioLanguages"] .lang-cell-truncated,
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] .lang-cell,
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] .lang-cell-truncated {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  gap: 4px;
+}
+
+table[data-app="sonarr"] td[data-col="AudioCodec"] .lang-list,
+table[data-app="sonarr"] td[data-col="Genres"] .lang-list,
+table[data-app="sonarr"] td[data-col="CustomFormats"] .lang-list,
+table[data-app="sonarr"] td[data-col="AudioLanguages"] .lang-list,
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] .lang-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+table[data-app="sonarr"] td[data-col="AudioCodec"] .lang-toggle,
+table[data-app="sonarr"] td[data-col="AudioCodec"] .mixed-badge-inline,
+table[data-app="sonarr"] td[data-col="Genres"] .lang-toggle,
+table[data-app="sonarr"] td[data-col="Genres"] .mixed-badge-inline,
+table[data-app="sonarr"] td[data-col="CustomFormats"] .lang-toggle,
+table[data-app="sonarr"] td[data-col="CustomFormats"] .mixed-badge-inline,
+table[data-app="sonarr"] td[data-col="AudioLanguages"] .lang-toggle,
+table[data-app="sonarr"] td[data-col="AudioLanguages"] .mixed-badge-inline,
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] .lang-toggle,
+table[data-app="sonarr"] td[data-col="SubtitleLanguages"] .mixed-badge-inline {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* Shows: keep Audio Channels text left-aligned in the rendered span. */
+table[data-app="sonarr"] td[data-col="AudioChannels"] .audio-channels-cell {
+  text-align: left;
+  display: inline-block;
+  width: 100%;
+}
+
+/* Shows: Status should not be ellipsized/truncated. */
+table[data-app="sonarr"] td[data-col="Status"] {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* Movies: Custom Format Score is intentionally compact. */
+table[data-app="radarr"] th[data-col="CustomFormatScore"],
+table[data-app="radarr"] td[data-col="CustomFormatScore"] {
+  min-width: 136px;
+  width: max-content;
+  max-width: none;
+}
+
+/* Keep Show all / Mixed badges contained within their own Radarr language-like cells. */
+table[data-app="radarr"] td[data-col="Genres"],
+table[data-app="radarr"] td[data-col="Languages"],
+table[data-app="radarr"] td[data-col="AudioLanguages"],
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table[data-app="radarr"] td[data-col="Genres"] .lang-cell,
+table[data-app="radarr"] td[data-col="Genres"] .lang-cell-truncated,
+table[data-app="radarr"] td[data-col="Languages"] .lang-cell,
+table[data-app="radarr"] td[data-col="Languages"] .lang-cell-truncated,
+table[data-app="radarr"] td[data-col="AudioLanguages"] .lang-cell,
+table[data-app="radarr"] td[data-col="AudioLanguages"] .lang-cell-truncated,
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] .lang-cell,
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] .lang-cell-truncated {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  gap: 4px;
+}
+
+table[data-app="radarr"] td[data-col="Genres"] .lang-list,
+table[data-app="radarr"] td[data-col="Languages"] .lang-list,
+table[data-app="radarr"] td[data-col="AudioLanguages"] .lang-list,
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] .lang-list {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+table[data-app="radarr"] td[data-col="Genres"] .lang-toggle,
+table[data-app="radarr"] td[data-col="Genres"] .mixed-badge-inline,
+table[data-app="radarr"] td[data-col="Languages"] .lang-toggle,
+table[data-app="radarr"] td[data-col="Languages"] .mixed-badge-inline,
+table[data-app="radarr"] td[data-col="AudioLanguages"] .lang-toggle,
+table[data-app="radarr"] td[data-col="AudioLanguages"] .mixed-badge-inline,
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] .lang-toggle,
+table[data-app="radarr"] td[data-col="SubtitleLanguages"] .mixed-badge-inline {
+  margin-left: auto;
+  flex: 0 0 auto;
 }
 
 .radarr-poster-tooltip {
@@ -5366,6 +5762,29 @@ html.is-ios body {
   -webkit-overflow-scrolling: touch;
 }
 
+html.is-android,
+html.is-android body {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+html.is-android body {
+  -webkit-overflow-scrolling: touch;
+}
+
+html.is-android .table-wrap,
+html.is-android .history-body {
+  overscroll-behavior: auto;
+}
+
+html.is-android body.history-open {
+  overflow: auto;
+}
+
+html.is-android body.history-open #tableWrap {
+  overflow: auto !important;
+}
+
 html.is-ios .series-expansion-poster {
   width: 140px;
 }
@@ -5441,6 +5860,246 @@ html.is-ios .perf-overlay {
   backdrop-filter: blur(12px);
   z-index: 20000;
   border-left: 1px solid var(--border-color, #444);
+}
+
+.plex-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20000;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  overflow: hidden;
+}
+
+.plex-overlay.hidden {
+  display: none;
+}
+
+.plex-scrim {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.45);
+  touch-action: auto;
+}
+
+.plex-drawer {
+  width: min(520px, 92vw);
+  max-width: 620px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  overflow: hidden;
+  border-left: 1px solid var(--border-color, #444);
+  background: var(--panel-surface-strong);
+}
+
+.plex-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.plex-title {
+  font-weight: 600;
+  font-size: 16px;
+}
+
+.plex-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.plex-btn,
+.plex-close {
+  border: 1px solid var(--border-color, #444);
+  background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.plex-close {
+  line-height: 1;
+  font-size: 16px;
+}
+
+.plex-live-toggle.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.plex-meta {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-meta.plex-meta--warn {
+  color: var(--warn, #f59e0b);
+}
+
+.plex-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 16px;
+  padding-right: 2px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.plex-section {
+  display: grid;
+  gap: 8px;
+}
+
+.plex-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-hub-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.plex-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-section-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plex-hub-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.plex-chip {
+  border: 1px solid var(--border-color, #444);
+  background: var(--panel-surface);
+  color: inherit;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plex-chip--active {
+  border-color: var(--accent);
+}
+
+.plex-hub-items {
+  display: grid;
+  gap: 6px;
+}
+
+.plex-hub-item {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.03));
+}
+
+.plex-hub-title {
+  font-weight: 600;
+}
+
+.plex-hub-meta {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
+  margin-top: 2px;
+}
+
+.plex-task {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.03));
+  display: grid;
+  gap: 4px;
+}
+
+.plex-task-row {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.plex-task-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plex-task-meta {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-match {
+  display: grid;
+  gap: 10px;
+}
+
+.plex-match-card {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.03));
+  display: grid;
+  gap: 6px;
+}
+
+.plex-match-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.plex-match-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 10px;
+  font-size: 12px;
+}
+
+.plex-match-line {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-match-label {
+  font-weight: 600;
+  margin-right: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.plex-sub {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
+}
+
+.plex-empty {
+  font-size: 12px;
+  color: var(--muted-color, #aaa);
 }
 
 
@@ -5687,3 +6346,287 @@ tr[data-app="radarr"] .title-orb-wrap .title-text {
 .progress-link:active {
   opacity: 0.7;
 }
+
+/* Sortarr plan fixes: layering + loading stability */
+.toolbar {
+  position: relative;
+  z-index: 120;
+  isolation: isolate;
+}
+
+.column-menu {
+  z-index: 20005;
+}
+
+.column-panel {
+  z-index: 20010;
+}
+
+body.sortarr-loading .filters-footer-chips {
+  min-height: 28px;
+}
+
+body.sortarr-loading .status-row {
+  min-height: 112px;
+}
+
+body.sortarr-loading .status-banner {
+  min-height: 22px;
+}
+
+.health-badges-slot {
+  min-height: 24px;
+}
+
+.health-badges-slot--loading::before {
+  content: "";
+  display: inline-block;
+  width: clamp(170px, 30vw, 280px);
+  height: 22px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--row-hover), var(--panel-surface-soft), var(--row-hover));
+  background-size: 220% 100%;
+  animation: status-pill-sheen 2.2s var(--motion-ease) infinite;
+}
+
+.status-value--skeleton {
+  color: transparent;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--row-hover), var(--panel-surface-soft), var(--row-hover));
+  background-size: 220% 100%;
+  animation: status-pill-sheen 2.2s var(--motion-ease) infinite;
+}
+
+.match-orb--placeholder {
+  --match-orb-fill: rgba(var(--muted-rgb), 0.38);
+  --match-orb-ring: rgba(var(--muted-rgb), 0.16);
+}
+
+
+
+
+
+
+
+/* Mismatch Center */
+.mismatch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20010;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.mismatch-overlay.hidden {
+  display: none;
+}
+
+.mismatch-drawer {
+  width: min(1100px, 96vw);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  overflow: hidden;
+  border-left: 1px solid var(--border-color, #444);
+  background: var(--panel-surface-strong);
+}
+
+.mismatch-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mismatch-title {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.mismatch-meta {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.mismatch-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mismatch-actions button {
+  border: 1px solid var(--border-color, #444);
+  background: var(--bg-surface, rgba(255, 255, 255, 0.06));
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.mismatch-controls {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(140px, 1fr));
+  gap: 8px;
+}
+
+.mismatch-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.mismatch-controls select,
+.mismatch-controls input {
+  width: 100%;
+  border: 1px solid var(--border, rgba(255, 255, 255, 0.14));
+  background: var(--column-panel-surface);
+  color: inherit;
+  border-radius: 10px;
+  padding: 6px 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .mismatch-controls select,
+  .mismatch-controls input {
+    backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+  }
+}
+
+.mismatch-search-wrap {
+  grid-column: span 1;
+}
+
+.mismatch-summary {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.mismatch-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mismatch-empty {
+  padding: 14px;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.04));
+}
+
+.mismatch-group-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-weight: 600;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.mismatch-table-wrap {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.mismatch-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.mismatch-table th,
+.mismatch-table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--border-color, #444);
+  vertical-align: top;
+  font-size: 12px;
+}
+
+.mismatch-table th:nth-child(1) { width: 24%; }
+.mismatch-table th:nth-child(2) { width: 14%; }
+.mismatch-table th:nth-child(3) { width: 14%; }
+.mismatch-table th:nth-child(4) { width: 22%; }
+.mismatch-table th:nth-child(5) { width: 26%; }
+
+.mismatch-title-cell {
+  font-weight: 600;
+}
+
+.mismatch-sub {
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.mismatch-category-pill {
+  display: inline-block;
+  border: 1px solid var(--border-color, #444);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.mismatch-provider-row {
+  border: 1px solid var(--border-color, #444);
+  border-radius: 6px;
+  padding: 4px 6px;
+  margin-bottom: 5px;
+  background: var(--bg-surface, rgba(255, 255, 255, 0.03));
+}
+
+.mismatch-provider-name {
+  font-weight: 600;
+  margin-right: 8px;
+}
+
+.mismatch-provider-status {
+  text-transform: uppercase;
+  font-size: 10px;
+  margin-right: 8px;
+}
+
+.mismatch-provider-reason {
+  opacity: 0.85;
+  font-size: 11px;
+}
+
+.mismatch-provider-row.is-matched {
+  border-color: rgba(60, 180, 90, 0.7);
+}
+
+.mismatch-provider-row.is-unmatched {
+  border-color: rgba(214, 88, 88, 0.85);
+}
+
+.mismatch-provider-row.is-skipped {
+  border-color: rgba(205, 164, 65, 0.8);
+}
+
+.mismatch-provider-row.is-unavailable {
+  border-color: rgba(132, 132, 132, 0.8);
+}
+
+@media (max-width: 980px) {
+  .mismatch-controls {
+    grid-template-columns: repeat(2, minmax(140px, 1fr));
+  }
+
+  .mismatch-drawer {
+    width: 100vw;
+  }
+
+  .mismatch-table {
+    table-layout: auto;
+  }
+}
+

@@ -92,13 +92,16 @@
 
   async function runTest(button) {
     if (button.dataset.testing === "1") return;
+    if (button.disabled) return;
     const kind = button.dataset.kind || "";
     const urlField = button.dataset.urlId || "";
     const keyField = button.dataset.keyId || "";
+    const clientIdField = button.dataset.clientId || "";
     const inlineKey = button.dataset.inlineKey || "";
 
     const url = getFieldValue(urlField);
     const apiKey = getFieldValue(keyField);
+    const clientId = clientIdField ? getFieldValue(clientIdField) : "";
     if (!url || !apiKey) {
       updateInlineMessage(
         inlineKey,
@@ -129,7 +132,12 @@
         method: "POST",
         headers: withCsrfHeaders({ "Content-Type": "application/json" }),
         credentials: "same-origin",
-        body: JSON.stringify({ kind, url, api_key: apiKey }),
+        body: JSON.stringify({
+          kind,
+          url,
+          api_key: apiKey,
+          ...(clientId ? { client_id: clientId } : {}),
+        }),
       });
 
       let payload = {};
@@ -213,5 +221,266 @@
     });
   }
 
+  function toggleFieldDisabled(field, disabled) {
+    if (!field) return;
+    field.disabled = disabled;
+    const label = field.closest("label");
+    if (label) {
+      label.classList.toggle("is-disabled", disabled);
+    }
+  }
+
+  function toggleButtonDisabled(button, disabled) {
+    if (!button) return;
+    button.disabled = disabled;
+    if (disabled) {
+      button.setAttribute("aria-disabled", "true");
+    } else {
+      button.removeAttribute("aria-disabled");
+    }
+  }
+
+  function updateHistorySourceLock() {
+    const jellyFields = [
+      document.querySelector('[name="jellystat_url"]'),
+      document.querySelector('[name="jellystat_api_key"]'),
+      document.querySelector('[name="jellystat_library_ids_sonarr"]'),
+      document.querySelector('[name="jellystat_library_ids_radarr"]'),
+    ];
+    const tautulliFields = [
+      document.querySelector('[name="tautulli_url"]'),
+      document.querySelector('[name="tautulli_api_key"]'),
+    ];
+    const jellyTest = document.querySelector('.setup-test[data-kind="jellystat"]');
+    const tautulliTest = document.querySelector('.setup-test[data-kind="tautulli"]');
+    jellyFields.forEach((field) => toggleFieldDisabled(field, false));
+    tautulliFields.forEach((field) => toggleFieldDisabled(field, false));
+    toggleButtonDisabled(jellyTest, false);
+    toggleButtonDisabled(tautulliTest, false);
+  }
+
+  function initHistorySourceLock() {
+    const fields = [
+      document.querySelector('[name="tautulli_url"]'),
+      document.querySelector('[name="tautulli_api_key"]'),
+      document.querySelector('[name="jellystat_url"]'),
+      document.querySelector('[name="jellystat_api_key"]'),
+    ];
+    fields.forEach((field) => {
+      if (!field) return;
+      field.addEventListener("input", updateHistorySourceLock);
+      field.addEventListener("change", updateHistorySourceLock);
+    });
+    updateHistorySourceLock();
+  }
+
+
+  const setupCustomSelectState = new Map();
+  let setupCustomSelectListenersBound = false;
+  let setupCustomSelectPositionPending = false;
+
+  function closeSetupCustomSelects(exceptSelect) {
+    setupCustomSelectState.forEach((state, selectEl) => {
+      if (exceptSelect && selectEl === exceptSelect) return;
+      state.wrapper.classList.remove("custom-select--open");
+      state.trigger.setAttribute("aria-expanded", "false");
+      state.menu.classList.add("hidden");
+    });
+  }
+
+  function positionSetupCustomSelectMenu(state) {
+    const triggerRect = state.trigger.getBoundingClientRect();
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    const maxWidth = Math.min(360, viewportWidth - 16);
+    const width = Math.max(triggerRect.width, 180);
+    state.menu.style.width = `${Math.min(width, maxWidth)}px`;
+    state.menu.style.left = `${Math.max(8, Math.min(triggerRect.left, viewportWidth - Math.min(width, maxWidth) - 8))}px`;
+    state.menu.style.top = `${Math.round(triggerRect.bottom + 6)}px`;
+  }
+
+  function scheduleSetupCustomSelectReposition() {
+    if (setupCustomSelectPositionPending) return;
+    setupCustomSelectPositionPending = true;
+    window.requestAnimationFrame(() => {
+      setupCustomSelectPositionPending = false;
+      setupCustomSelectState.forEach((state) => {
+        if (state.wrapper.classList.contains("custom-select--open")) {
+          positionSetupCustomSelectMenu(state);
+        }
+      });
+    });
+  }
+
+  function updateSetupCustomSelect(selectEl) {
+    const state = setupCustomSelectState.get(selectEl);
+    if (!state) return;
+    const options = Array.from(selectEl.options || []);
+    const selected = options.find((opt) => opt.value === selectEl.value) || options[0] || null;
+    state.label.textContent = selected ? selected.textContent : "";
+    state.trigger.disabled = Boolean(selectEl.disabled);
+    state.menu.innerHTML = "";
+
+    options.forEach((option) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "custom-select-option";
+      button.textContent = option.textContent || "";
+      button.dataset.value = option.value || "";
+      button.setAttribute("role", "option");
+      if (option.value === selectEl.value) {
+        button.classList.add("is-selected");
+        button.setAttribute("aria-selected", "true");
+      } else {
+        button.setAttribute("aria-selected", "false");
+      }
+      button.addEventListener("click", () => {
+        if (selectEl.value !== option.value) {
+          selectEl.value = option.value;
+          selectEl.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        closeSetupCustomSelects();
+        state.trigger.focus();
+      });
+      state.menu.appendChild(button);
+    });
+
+    if (state.wrapper.classList.contains("custom-select--open")) {
+      positionSetupCustomSelectMenu(state);
+    }
+  }
+
+  function initSetupCustomSelect(selectEl) {
+    if (!selectEl || setupCustomSelectState.has(selectEl)) return;
+
+    const wrapper = document.createElement("div");
+    wrapper.className = "custom-select";
+    selectEl.parentNode.insertBefore(wrapper, selectEl);
+    wrapper.appendChild(selectEl);
+    selectEl.classList.add("custom-select-native");
+
+    const trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "custom-select-trigger";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+
+    const label = document.createElement("span");
+    label.className = "custom-select-label";
+
+    const caret = document.createElement("span");
+    caret.className = "custom-select-caret";
+    caret.setAttribute("aria-hidden", "true");
+
+    trigger.appendChild(label);
+    trigger.appendChild(caret);
+
+    const menu = document.createElement("div");
+    menu.className = "custom-select-menu hidden";
+    menu.setAttribute("role", "listbox");
+
+    wrapper.appendChild(trigger);
+    document.body.appendChild(menu);
+
+    const state = { select: selectEl, wrapper, trigger, label, menu };
+    setupCustomSelectState.set(selectEl, state);
+
+    trigger.addEventListener("click", () => {
+      if (trigger.disabled) return;
+      const isOpen = wrapper.classList.contains("custom-select--open");
+      if (isOpen) {
+        closeSetupCustomSelects();
+        return;
+      }
+      closeSetupCustomSelects(selectEl);
+      wrapper.classList.add("custom-select--open");
+      trigger.setAttribute("aria-expanded", "true");
+      menu.classList.remove("hidden");
+      positionSetupCustomSelectMenu(state);
+    });
+
+    selectEl.addEventListener("change", () => updateSetupCustomSelect(selectEl));
+
+    bindSetupCustomSelectListeners();
+    updateSetupCustomSelect(selectEl);
+  }
+
+  function bindSetupCustomSelectListeners() {
+    if (setupCustomSelectListenersBound) return;
+    setupCustomSelectListenersBound = true;
+
+    document.addEventListener("click", (event) => {
+      const insideAny = Array.from(setupCustomSelectState.values()).some((state) => {
+        return state.wrapper.contains(event.target) || state.menu.contains(event.target);
+      });
+      if (!insideAny) {
+        closeSetupCustomSelects();
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        closeSetupCustomSelects();
+      }
+    });
+
+    window.addEventListener("resize", scheduleSetupCustomSelectReposition);
+    window.addEventListener("scroll", scheduleSetupCustomSelectReposition, true);
+  }
+
+  function initSourcePreferenceSelects() {
+    initSetupCustomSelect(document.querySelector('[name="media_source_preference"]'));
+    initSetupCustomSelect(document.querySelector('[name="history_source_preference"]'));
+  }
+
   initPathMapGroups();
+  initHistorySourceLock();
+  initSourcePreferenceSelects();
+
+  function applyCategoryTranslations() {
+    const i18n = window.SORTARR_I18N || {};
+    const nodes = document.querySelectorAll(".setup-category-title");
+    nodes.forEach((node) => {
+      const raw = node.textContent || "";
+      const text = raw.trim();
+      if (text === "Media Sources" && i18n.media_sources) {
+        node.textContent = i18n.media_sources;
+      } else if (text === "Playback History Sources" && i18n.playback_history_sources) {
+        node.textContent = i18n.playback_history_sources;
+      } else if (text === "Playback Providers" && i18n.playback_providers) {
+        node.textContent = i18n.playback_providers;
+      }
+    });
+  }
+
+  function sourceLabel(value) {
+    const key = String(value || "").trim().toLowerCase();
+    if (key === "arr") return "Sonarr/Radarr";
+    if (key === "plex") return "Plex";
+    if (key === "tautulli") return "Tautulli";
+    if (key === "jellystat") return "Jellystat";
+    if (key) return key;
+    return "Auto";
+  }
+
+  async function updateEffectiveSourcesHint() {
+    const el = document.getElementById("setupEffectiveSources");
+    if (!el) return;
+    try {
+      const res = await fetch(apiUrl("/api/config"), {
+        method: "GET",
+        credentials: "same-origin",
+      });
+      if (!res.ok) return;
+      const payload = await res.json();
+      const selected = (payload && payload.option_set && payload.option_set.selected) || {};
+      const media = sourceLabel(selected.media_source);
+      const history = sourceLabel(selected.history_source);
+      el.textContent = `Effective sources: Media ${media}, History ${history}`;
+    } catch {
+      // Keep server-rendered fallback when API is unavailable.
+    }
+  }
+
+  applyCategoryTranslations();
+  updateEffectiveSourcesHint();
 })();

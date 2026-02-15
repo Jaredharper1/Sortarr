@@ -13,11 +13,13 @@
     !ua.includes("opr") &&
     !ua.includes("android");
 
+  const isAndroid = ua.includes("android");
   const isFirefox = ua.includes("firefox");
   const isCoarse = window.matchMedia("(pointer: coarse)").matches;
 
   const root = document.documentElement;
   if (isIOS) root.classList.add("is-ios");
+  if (isAndroid) root.classList.add("is-android");
   if (isSafari) root.classList.add("is-safari");
   if (isFirefox) root.classList.add("is-firefox");
   if (isCoarse) root.classList.add("is-coarse");
@@ -26,6 +28,7 @@
 
 const tbody = document.getElementById("tbody");
 const statusEl = document.getElementById("status");
+const effectiveSourcesEl = document.getElementById("effectiveSources");
 const loadingIndicator = document.getElementById("loadingIndicator");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const loadBtn = document.getElementById("loadBtn");
@@ -34,6 +37,7 @@ const progressStatusEl = document.getElementById("progressStatus");
 const tautulliStatusEl = document.getElementById("tautulliStatus");
 const cacheStatusEl = document.getElementById("cacheStatus");
 const healthBadgesEl = document.getElementById("healthBadges");
+const STATUS_VALUE_ELS = [progressStatusEl, tautulliStatusEl, cacheStatusEl].filter(Boolean);
 const healthStatusRowEl = document.getElementById("healthStatusRow");
 const statusRowEl = document.getElementById("statusRow");
 const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
@@ -48,6 +52,8 @@ const deepRefreshTautulliBtn = document.getElementById("deepRefreshTautulliBtn")
 const refreshSonarrBtn = document.getElementById("refreshSonarrBtn");
 const refreshRadarrBtn = document.getElementById("refreshRadarrBtn");
 const arrRefreshButtonsEl = document.getElementById("arrRefreshButtons");
+const plexInsightsBtn = document.getElementById("plexInsightsBtn");
+const mismatchCenterBtn = document.getElementById("mismatchCenterBtn");
 const clearCachesBtn = document.getElementById("clearCachesBtn");
 const resetUiBtn = document.getElementById("resetUiBtn");
 const settingsBtn = document.getElementById("settingsBtn");
@@ -71,12 +77,27 @@ const filterValueInput = document.getElementById("filterValueInput");
 const filterValueSelect = document.getElementById("filterValueSelect");
 const filterAddBtn = document.getElementById("filterAddBtn");
 const activeFiltersEl = document.getElementById("activeFilters");
+const plexLibraryScopeEl = document.getElementById("plexLibraryScope");
+const plexLibrarySelect = document.getElementById("plexLibrarySelect");
+const plexLibraryAllBtn = document.getElementById("plexLibraryAllBtn");
 
 const tabSonarr = document.getElementById("tabSonarr");
 const tabRadarr = document.getElementById("tabRadarr");
 const exportCsvBtn = document.getElementById("exportCsvBtn");
 const columnsBtn = document.getElementById("columnsBtn");
 const columnsPanel = document.getElementById("columnsPanel");
+
+function setColumnsPanelHiddenState(hidden) {
+  if (!columnsBtn || !columnsPanel) return;
+  columnsPanel.classList.toggle("hidden", hidden);
+  columnsPanel.setAttribute("aria-hidden", hidden ? "true" : "false");
+  columnsBtn.setAttribute("aria-expanded", hidden ? "false" : "true");
+}
+
+function closeColumnsPanelIfOpen() {
+  if (!columnsPanel || columnsPanel.classList.contains("hidden")) return;
+  setColumnsPanelHiddenState(true);
+}
 const columnSearch = document.getElementById("columnSearch");
 const columnsShowAll = document.getElementById("columnsShowAll");
 const columnsHideAll = document.getElementById("columnsHideAll");
@@ -90,6 +111,7 @@ const themeBtn = document.getElementById("themeBtn");
 const tableFullscreenBtn = document.getElementById("tableFullscreenBtn");
 const root = document.documentElement; // <html>
 const IS_IOS = root.classList.contains("is-ios");
+const IS_ANDROID = root.classList.contains("is-android");
 const tableEl = document.querySelector("table");
 const tableWrapEl = document.getElementById("tableWrap");
 const TABLE_SCROLL_SNAP_IDLE_MS = 140;
@@ -100,6 +122,228 @@ const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
 const I18N = window.I18N || {};
 window.I18N = I18N;
+
+function sourceLabelFromKey(value) {
+  const key = String(value || "").trim().toLowerCase();
+  if (key === "arr") return t("sourceArr", "Sonarr/Radarr");
+  if (key === "plex") return t("sourcePlex", "Plex");
+  if (key === "tautulli") return t("sourceTautulli", "Tautulli");
+  if (key === "jellystat") return t("sourceJellystat", "Jellystat");
+  if (key === "auto") return t("sourceAuto", "Auto");
+  return key || t("sourceNone", "None");
+}
+
+function normalizeIdList(values) {
+  const out = [];
+  const seen = new Set();
+  const list = Array.isArray(values) ? values : [];
+  for (const value of list) {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
+}
+
+function parseIdList(raw) {
+  if (Array.isArray(raw)) return normalizeIdList(raw);
+  const text = String(raw || "").trim();
+  if (!text) return [];
+  return normalizeIdList(text.split(/[,\s;]+/g));
+}
+
+function getPlexAvailableForApp(app) {
+  return Array.isArray(plexLibraryState.available[app]) ? plexLibraryState.available[app] : [];
+}
+
+function getPlexSelectedForApp(app) {
+  return Array.isArray(plexLibraryState.selected[app]) ? plexLibraryState.selected[app] : [];
+}
+
+function savePlexLibrarySelection() {
+  try {
+    localStorage.setItem(
+      PLEX_LIBRARY_SELECTION_KEY,
+      JSON.stringify({
+        sonarr: getPlexSelectedForApp("sonarr"),
+        radarr: getPlexSelectedForApp("radarr"),
+      }),
+    );
+  } catch {
+  }
+}
+
+function loadPlexLibrarySelection() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PLEX_LIBRARY_SELECTION_KEY) || "{}");
+    plexLibraryState.selected.sonarr = normalizeIdList(raw?.sonarr || []);
+    plexLibraryState.selected.radarr = normalizeIdList(raw?.radarr || []);
+  } catch {
+    plexLibraryState.selected.sonarr = [];
+    plexLibraryState.selected.radarr = [];
+  }
+}
+
+function setPlexAvailableForApp(app, libraries) {
+  const list = Array.isArray(libraries) ? libraries : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const id = String(item.id || "").trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    normalized.push({
+      id,
+      title: String(item.title || id),
+      type: String(item.type || "").trim().toLowerCase(),
+    });
+  }
+  plexLibraryState.available[app] = normalized;
+  configState.plexLibraries[app] = normalized;
+  const allowed = new Set(normalized.map(item => item.id));
+  if (allowed.size) {
+    plexLibraryState.selected[app] = getPlexSelectedForApp(app).filter(id => allowed.has(id));
+  }
+}
+
+function setPlexSelectedForApp(app, ids, { persist = true } = {}) {
+  const selected = normalizeIdList(ids);
+  const available = getPlexAvailableForApp(app);
+  if (available.length) {
+    const allowed = new Set(available.map(item => item.id));
+    plexLibraryState.selected[app] = selected.filter(id => allowed.has(id));
+  } else {
+    plexLibraryState.selected[app] = selected;
+  }
+  if (persist) savePlexLibrarySelection();
+}
+
+function getPlexScopeParams(app, key = "plex_library_ids") {
+  const selected = getPlexSelectedForApp(app);
+  if (!selected.length) return [];
+  return [`${key}=${encodeURIComponent(selected.join(","))}`];
+}
+
+function plexScopeEnabledForApp(app) {
+  if (!configState.plexConfigured) return false;
+  const selected = (configState.optionSelected || {}).media_source;
+  if (String(selected || "").toLowerCase() !== "plex") return false;
+  return app === "sonarr" ? configState.sonarrConfigured : configState.radarrConfigured;
+}
+
+function formatPlexScopeLabel(app) {
+  if (!plexScopeEnabledForApp(app)) return "";
+  const selected = getPlexSelectedForApp(app);
+  if (!selected.length) return t("plexLibrariesAll", "Libraries: All");
+  const available = getPlexAvailableForApp(app);
+  const byId = new Map(available.map(item => [item.id, item.title || item.id]));
+  const labels = selected.map(id => byId.get(id) || id);
+  return tp("plexLibrariesScoped", { libraries: labels.join(", ") }, "Libraries: %(libraries)s");
+}
+
+function updatePlexLibraryScopeControl() {
+  if (!plexLibraryScopeEl || !plexLibrarySelect) return;
+  const enabled = plexScopeEnabledForApp(activeApp);
+  setElementVisible(plexLibraryScopeEl, enabled);
+  if (!enabled) return;
+  plexLibraryScopeEl.setAttribute("data-app", activeApp);
+  const available = getPlexAvailableForApp(activeApp);
+  const selected = new Set(getPlexSelectedForApp(activeApp));
+  plexLibrarySelect.innerHTML = "";
+  for (const item of available) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.title || item.id;
+    option.selected = selected.has(item.id);
+    plexLibrarySelect.appendChild(option);
+  }
+  if (plexLibraryAllBtn) {
+    plexLibraryAllBtn.textContent = t("plexLibrariesSelectAll", "All");
+  }
+}
+
+function applyPlexScopeFromHeaders(app, headers) {
+  if (!headers) return;
+  const rawLibraries = headers.get("X-Sortarr-Plex-Libraries") || "";
+  if (rawLibraries) {
+    try {
+      const parsed = JSON.parse(rawLibraries);
+      setPlexAvailableForApp(app, parsed);
+    } catch {
+    }
+  }
+  const selected = parseIdList(headers.get("X-Sortarr-Plex-Library-Ids-Selected") || "");
+  if (selected.length || rawLibraries) {
+    setPlexSelectedForApp(app, selected, { persist: false });
+  }
+}
+
+function applyPlexScopeFromStatus(scopePayload) {
+  const plex = scopePayload?.plex;
+  if (!plex || typeof plex !== "object") return;
+  const available = plex.available || {};
+  setPlexAvailableForApp("sonarr", available.sonarr || []);
+  setPlexAvailableForApp("radarr", available.radarr || []);
+  const selected = plex.selected || {};
+  setPlexSelectedForApp("sonarr", selected.sonarr || getPlexSelectedForApp("sonarr"), { persist: false });
+  setPlexSelectedForApp("radarr", selected.radarr || getPlexSelectedForApp("radarr"), { persist: false });
+}
+
+function capabilityEnabled(name, fallback = true) {
+  const caps = (configState && configState.optionCapabilities) || {};
+  const value = caps[name];
+  if (value === undefined || value === null) return !!fallback;
+  return !!value;
+}
+
+function setElementVisible(el, visible) {
+  if (!el) return;
+  el.classList.toggle("hidden", !visible);
+  el.style.display = visible ? "" : "none";
+}
+
+function updateEffectiveSourcesLine() {
+  if (!effectiveSourcesEl) return;
+  const selected = (configState && configState.optionSelected) || {};
+  const media = sourceLabelFromKey(selected.media_source);
+  const history = sourceLabelFromKey(selected.history_source);
+  let text = `${t("effectiveSourcesLabel", "Effective sources")}: ${tp("effectiveSourcesValue", { media, history }, "Media: %(media)s | History: %(history)s")}`;
+  const scope = formatPlexScopeLabel(activeApp);
+  if (scope) {
+    text += ` | ${scope}`;
+  }
+  effectiveSourcesEl.textContent = text;
+}
+
+function updateMismatchCenterButtonVisibility() {
+  if (!mismatchCenterBtn) return;
+  const available = Array.isArray(configState.historySourcesAvailable)
+    ? configState.historySourcesAvailable
+    : [];
+  const supported = available.filter(provider => provider === "tautulli" || provider === "plex" || provider === "jellystat");
+  mismatchCenterBtn.classList.toggle("hidden", supported.length < 2);
+}
+function applyOptionSetCapabilities() {
+  const arrTables = capabilityEnabled("arr_tables", configState.sonarrConfigured || configState.radarrConfigured);
+  const cacheActions = capabilityEnabled("cache_actions", arrTables);
+  const refreshActions = capabilityEnabled("arr_refresh", arrTables);
+  setElementVisible(arrRefreshButtonsEl, arrTables && refreshActions);
+  setElementVisible(refreshTabBtn, arrTables && refreshActions);
+  setElementVisible(clearCachesBtn, cacheActions);
+  setElementVisible(tabSonarr, arrTables && !!configState.sonarrConfigured);
+  setElementVisible(tabRadarr, arrTables && !!configState.radarrConfigured);
+
+  if (!arrTables && tbody) {
+    const message = configState.plexConfigured
+      ? t("noArrMediaSourcePlexAvailable", "No Sonarr/Radarr media source configured. Plex features are available.")
+      : t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, or Plex.");
+    tbody.innerHTML = `<tr><td colspan="99">${escapeHtml(message)}</td></tr>`;
+  }
+  updatePlexLibraryScopeControl();
+  updateEffectiveSourcesLine();
+}
 
 
 let tableUnfullscreenBtn = null;
@@ -165,6 +409,9 @@ function applyTableFullscreen(enabled) {
   ensureTableUnfullscreenBtn();
   syncTableUnfullscreenBtnHost();
 
+  if (enabled) {
+    closeColumnsPanelIfOpen();
+  }
   root.classList.toggle("table-fullscreen", enabled);
 
   // Toolbar is hidden in fullscreen, so table should start at top of viewport.
@@ -496,6 +743,11 @@ const API_ORIGIN = window.location && window.location.host
   : "";
 
 let tableWrapLayoutPending = false;
+let lastTableWrapLayoutSignature = "";
+let lastAppliedTableWrapMaxHeight = "";
+let firstPaintSettled = false;
+let deferredUiBindingsReady = false;
+let deferredUiBindingsScheduled = false;
 const FILTER_RENDER_DEBOUNCE_MS = 140;
 const FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
 let filterRenderTimer = null;
@@ -1138,6 +1390,7 @@ function buildDefaultViewState(app) {
     chipQuery: "",
     sortKey: getDefaultSortKey(app),
     sortDir: "desc",
+    columnPrefs: null,
   };
 }
 
@@ -1174,6 +1427,7 @@ function syncViewStateFromUi(app = activeApp) {
   state.chipQuery = String(chipQuery ?? "").trim();
   state.sortKey = normalizeSortKey(app, sortKey || getDefaultSortKey(app));
   state.sortDir = sortDir === "asc" ? "asc" : "desc";
+  state.columnPrefs = { ...getColumnPrefs(app) };
   viewStateByApp[app] = state;
 }
 
@@ -1197,6 +1451,10 @@ function flushViewStateSave(app = activeApp) {
 
 function applyViewState(app) {
   const state = viewStateByApp[app] || buildDefaultViewState(app);
+  if (state && state.columnPrefs && typeof state.columnPrefs === "object") {
+    columnPrefsByApp[app] = { ...state.columnPrefs };
+    loadColumnPrefs(app);
+  }
   sortKey = normalizeSortKey(app, state.sortKey);
   sortDir = state.sortDir === "asc" ? "asc" : "desc";
   chipQuery = String(state.chipQuery || "").trim();
@@ -1209,36 +1467,54 @@ function applyViewState(app) {
   syncChipButtonsToQuery();
 }
 
-function updateTableWrapMaxHeight() {
-  if (!tableWrapEl) return;
-
-  // Fullscreen mode: CSS owns sizing; don't apply maxHeight clamps.
-  if (root.classList.contains("table-fullscreen")) {
-    tableWrapEl.style.maxHeight = "";
-    scheduleTableLayoutSync({ force: false, skipIfUnchanged: true });
-    return;
-  }
-
-  const rect = tableWrapEl.getBoundingClientRect();
-  const bottomPadding = 12;
+function measureTableWrapLayout() {
+  if (!tableWrapEl) return null;
+  const fullscreen = root.classList.contains("table-fullscreen");
   const viewportHeight = window.visualViewport?.height || window.innerHeight;
   const viewportOffset = window.visualViewport?.offsetTop || 0;
+  if (fullscreen) {
+    return {
+      signature: `1|${Math.round(viewportHeight)}|${Math.round(viewportOffset)}`,
+      maxHeight: "",
+    };
+  }
+  const rect = tableWrapEl.getBoundingClientRect();
+  const bottomPadding = 12;
   const anchorTop = Math.max(rect.top, viewportOffset);
   const available = viewportHeight - (anchorTop - viewportOffset) - bottomPadding;
-  if (available > 200) {
-    tableWrapEl.style.maxHeight = `${available}px`;
-  } else {
-    tableWrapEl.style.maxHeight = "";
+  return {
+    signature: `0|${Math.round(anchorTop)}|${Math.round(viewportHeight)}|${Math.round(viewportOffset)}`,
+    maxHeight: available > 200 ? `${Math.round(available)}px` : "",
+  };
+}
+
+function applyTableWrapLayoutMeasure(measure) {
+  if (!tableWrapEl || !measure) return;
+  if (measure.signature === lastTableWrapLayoutSignature &&
+    measure.maxHeight === lastAppliedTableWrapMaxHeight) {
+    return;
+  }
+  lastTableWrapLayoutSignature = measure.signature;
+  if (measure.maxHeight !== lastAppliedTableWrapMaxHeight) {
+    tableWrapEl.style.maxHeight = measure.maxHeight;
+    lastAppliedTableWrapMaxHeight = measure.maxHeight;
   }
   scheduleTableLayoutSync({ force: false, skipIfUnchanged: true });
+}
+
+function updateTableWrapMaxHeight() {
+  applyTableWrapLayoutMeasure(measureTableWrapLayout());
 }
 
 function scheduleTableWrapLayout() {
   if (tableWrapLayoutPending) return;
   tableWrapLayoutPending = true;
   window.requestAnimationFrame(() => {
-    tableWrapLayoutPending = false;
-    updateTableWrapMaxHeight();
+    const measure = measureTableWrapLayout();
+    window.requestAnimationFrame(() => {
+      tableWrapLayoutPending = false;
+      applyTableWrapLayoutMeasure(measure);
+    });
   });
 }
 
@@ -1327,7 +1603,7 @@ function tableCanSnapScroll() {
   if (pendingScrollAnchor) return false;
   if (tableEl.classList.contains("is-batching")) return false;
   if (isSeriesExpansionActive()) return false;
-  if (!tbody.rows.length) return false;
+  if (!getTableSnapRows().length) return false;
   if (tableWrapEl.scrollHeight - tableWrapEl.clientHeight < 2) return false;
   return true;
 }
@@ -1339,6 +1615,15 @@ function tableNearBottom() {
   return (maxScroll - tableWrapEl.scrollTop) <= TABLE_SCROLL_SNAP_BOTTOM_EPSILON;
 }
 
+function getTableSnapRows() {
+  if (!tbody) return [];
+  return Array.from(tbody.rows).filter(row => {
+    if (!row) return false;
+    if (row.classList.contains("virtual-spacer-row")) return false;
+    if (row.classList.contains("series-child-row")) return false;
+    return true;
+  });
+}
 function findTopVisibleRowIndex(rows, visibleTop) {
   let low = 0;
   let high = rows.length - 1;
@@ -1359,7 +1644,7 @@ function findTopVisibleRowIndex(rows, visibleTop) {
 
 function captureTableScrollAnchor() {
   if (!tableWrapEl || !tbody) return null;
-  const rows = tbody.rows;
+  const rows = getTableSnapRows();
   if (!rows || !rows.length) return null;
   const headerHeight = getTableHeaderHeight();
   const visibleTop = tableWrapEl.scrollTop + headerHeight;
@@ -1399,7 +1684,8 @@ function restoreTableScrollAnchor(anchor) {
     rowEl = findRowElement(activeApp, anchor.rowKey);
   }
   if (!rowEl && Number.isInteger(anchor.rowIndex)) {
-    rowEl = tbody.rows[anchor.rowIndex] || null;
+    const rows = getTableSnapRows();
+    rowEl = rows[anchor.rowIndex] || null;
   }
   if (!rowEl) {
     if (!tableReadyByApp[activeApp]) return false;
@@ -1446,7 +1732,7 @@ function snapTableScroll() {
   const headerHeight = getTableHeaderHeight();
   const currentTop = tableWrapEl.scrollTop;
   const visibleTop = currentTop + headerHeight;
-  const rows = tbody.rows;
+  const rows = getTableSnapRows();
   if (!rows.length) return;
   const currentIndex = findTopVisibleRowIndex(rows, visibleTop);
   const currentRow = rows[currentIndex];
@@ -1611,9 +1897,11 @@ function lockTitlePathWidths() {
   const filtersActive = hasActiveFilters();
   const hasTitleWidth = titleWidthByApp[app] > 0;
   const hasPathWidth = pathWidthByApp[app] > 0;
-  if (filtersActive && hasTitleWidth && hasPathWidth) {
-    root.style.setProperty("--title-col-width", `${titleWidthByApp[app]}px`);
+  const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  if (filtersActive && sharedTitleWidth > 0 && hasPathWidth) {
+    root.style.setProperty("--title-col-width", `${sharedTitleWidth}px`);
     root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
+    applyTitleWidth(app, null, { skipIfUnchanged: true });
     return;
   }
   const versionChanged = titlePathWidthVersionByApp[app] !== columnVisibilityVersion;
@@ -1622,26 +1910,50 @@ function lockTitlePathWidths() {
     versionChanged ||
     (!filtersActive && titlePathWidthFilterDirtyByApp[app]);
   if (shouldMeasure) {
-    root.style.removeProperty("--title-col-width");
-    root.style.removeProperty("--path-col-width");
-    const titleWidth = Math.round(titleTh.getBoundingClientRect().width);
-    const pathWidth = Math.round(pathTh.getBoundingClientRect().width);
-    if (titleWidth > 0) {
-      titleWidthByApp[app] = titleWidth;
-    }
-    if (pathWidth > 0) {
-      pathWidthByApp[app] = pathWidth;
+    const passCache = titlePathMeasurePassByApp[app];
+    const canUsePassCache = Boolean(passCache) &&
+      passCache.token === renderToken &&
+      passCache.columnVersion === columnVisibilityVersion &&
+      passCache.filtersActive === filtersActive &&
+      passCache.titleWidth > 0 &&
+      passCache.pathWidth > 0;
+    if (canUsePassCache) {
+      titleWidthByApp[app] = clampTitleWidth(passCache.titleWidth);
+      pathWidthByApp[app] = passCache.pathWidth;
+    } else {
+      root.style.removeProperty("--title-col-width");
+      root.style.removeProperty("--path-col-width");
+      const titleMin = parseFloat(window.getComputedStyle(titleTh).minWidth || "0");
+      const titleSignal = Number.isFinite(titleMin) && titleMin > 0
+        ? Math.round(titleMin)
+        : Math.round(titleTh.scrollWidth || 0);
+      const titleWidth = clampTitleWidth(titleSignal);
+      const pathWidth = Math.round(pathTh.getBoundingClientRect().width);
+      if (titleWidth > 0) {
+        titleWidthByApp[app] = titleWidth;
+      }
+      if (pathWidth > 0) {
+        pathWidthByApp[app] = pathWidth;
+      }
+      if (passCache) {
+        passCache.token = renderToken;
+        passCache.columnVersion = columnVisibilityVersion;
+        passCache.filtersActive = filtersActive;
+        passCache.titleWidth = clampTitleWidth(titleWidthByApp[app] || 0);
+        passCache.pathWidth = pathWidthByApp[app] || 0;
+      }
     }
     titlePathWidthVersionByApp[app] = columnVisibilityVersion;
     titlePathWidthFilterDirtyByApp[app] = filtersActive;
   }
-  const canonicalTitleWidth = titleWidthByApp[app] || 0;
+  const canonicalTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
   if (canonicalTitleWidth > 0) {
     root.style.setProperty("--title-col-width", `${canonicalTitleWidth}px`);
   }
   if (pathWidthByApp[app] > 0) {
     root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
   }
+  applyTitleWidth(app, null, { skipIfUnchanged: true });
 }
 
 function isTableWrapOffscreen(rect) {
@@ -1901,9 +2213,13 @@ let statusCompletionFlashed = false;
 let statusTickTimer = null;
 let statusFetchTimer = null;
 let lastStatusFetchAt = null;
+let statusFetchInFlight = false;
+let statusFetchQueuedOptions = null;
+let statusHoverBindingsReady = false;
 let statusCollapsed = false;
 let statusPillTimer = null;
 let statusPillLoadedTimer = null;
+let statusReadyAfterFirstData = false;
 let statusPillLoadedUntil = 0;
 const STATUS_PILL_LOADED_MS = 5000;
 let tautulliRefreshReloadTimer = null;
@@ -2147,6 +2463,7 @@ const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
 const FILTERS_COLLAPSED_KEY = "Sortarr-filters-collapsed";
 const CHIPS_ENABLED_KEY = "Sortarr-chips-enabled";
 const VIEW_STATE_KEY = "Sortarr-view-state";
+const PLEX_LIBRARY_SELECTION_KEY = "Sortarr-plex-library-selection";
 const csvColumnsState = { sonarr: false, radarr: false };
 const RESET_UI_PARAM = "reset_ui";
 const RENDER_PERF_PARAM = "render_perf";
@@ -2172,10 +2489,23 @@ const tautulliPollTimers = { sonarr: null, radarr: null };
 const followUpRefreshTimers = { sonarr: null, radarr: null };
 const arrRefreshBusy = { sonarr: new Set(), radarr: new Set() };
 let arrRefreshRenderKey = "";
+const TITLE_WIDTH_MIN = 420;
+const TITLE_WIDTH_MAX = 620;
+
+function clampTitleWidth(value) {
+  const width = Number(value);
+  if (!Number.isFinite(width) || width <= 0) return 0;
+  return Math.max(TITLE_WIDTH_MIN, Math.min(TITLE_WIDTH_MAX, Math.round(width)));
+}
+
 const titleWidthByApp = { sonarr: null, radarr: null };
 const pathWidthByApp = { sonarr: null, radarr: null };
 const titlePathWidthVersionByApp = { sonarr: -1, radarr: -1 };
 const titlePathWidthFilterDirtyByApp = { sonarr: false, radarr: false };
+const titlePathMeasurePassByApp = {
+  sonarr: { token: -1, columnVersion: -1, filtersActive: false, titleWidth: 0, pathWidth: 0 },
+  radarr: { token: -1, columnVersion: -1, filtersActive: false, titleWidth: 0, pathWidth: 0 },
+};
 
 const ADVANCED_PLACEHOLDER_BASE = I18N.advancedPlaceholderBase;
 const ADVANCED_PLACEHOLDER_TAUTULLI = I18N.advancedPlaceholderTautulli;
@@ -2707,6 +3037,13 @@ const configState = {
   radarrConfigured: false,
   playbackProvider: "",
   playbackConfigured: false,
+  plexConfigured: false,
+  historySourcesAvailable: [],
+  plexLibraries: { sonarr: [], radarr: [] },
+};
+const plexLibraryState = {
+  available: { sonarr: [], radarr: [] },
+  selected: { sonarr: [], radarr: [] },
 };
 const instanceConfig = { sonarr: [], radarr: [] };
 const instanceBaseById = { sonarr: {}, radarr: {} };
@@ -2720,8 +3057,8 @@ const DEFAULT_RENDER_FLAGS = {
   deferHeavy: { sonarr: true, radarr: true },
   widthLock: true,
   stabilize: true,
-  virtualize: { sonarr: false, radarr: true },
-  virtualRows: { sonarr: false, radarr: true },
+  virtualize: { sonarr: true, radarr: true },
+  virtualRows: { sonarr: true, radarr: true },
 };
 const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "ContentHours",
@@ -2730,6 +3067,7 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "SeasonCount",
   "MissingCount",
   "CutoffUnmetCount",
+  "QualityCutoffNotMet",
   "AvgEpisodeSizeGB",
   "TotalSizeGB",
   "FileSizeGB",
@@ -2740,6 +3078,7 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "VideoCodec",
   "AudioCodec",
   "AudioChannels",
+  "Monitored",
   "Status",
   "Instance",
   "QualityProfile",
@@ -2748,6 +3087,8 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "Studio",
   "OriginalLanguage",
   "Genres",
+  "LastSearchTime",
+  "LastWatched",
   "Edition",
   "CustomFormats",
   "Languages",
@@ -2761,11 +3102,13 @@ const HEADER_CAP_MIN_TEXT = {
   AvgEpisodeSizeGB: "Avg / Ep (GiB) v",
   TotalSizeGB: "Total (GiB) v",
   RuntimeMins: "Runtime (hh:mm) v",
+  QualityCutoffNotMet: "Cutoff Not Met v",
   VideoQuality: "WEBRip-2160p",
   Resolution: "3840x2160p",
   VideoCodec: "Video Codec v",
   AudioCodec: "EAC3 Atmos v",
   AudioChannels: "Audio Channels v",
+  Monitored: "Monitored v",
   Status: "Status v",
   Instance: "Instance Name v",
   QualityProfile: "Quality Profile v",
@@ -2774,12 +3117,51 @@ const HEADER_CAP_MIN_TEXT = {
   Studio: "Studio Name v",
   OriginalLanguage: "Original Language v",
   Genres: "Drama, Sci-Fi, Thriller",
+  LastSearchTime: "Last Search v",
+  LastWatched: "Last Watched v",
   Edition: "Director Cut v",
   CustomFormats: "Custom Formats v",
   Languages: "Audio Languages v",
   AudioLanguages: "Audio Languages v",
   SubtitleLanguages: "Subtitle Languages v",
   VideoHDR: "Dolby Vision v",
+};
+const HEADER_CAP_TARGET_WIDTH_BY_APP = {
+  sonarr: {
+    GBPerHour: 112,
+    BitrateMbps: 152,
+    VideoQuality: 184,
+    Resolution: 170,
+    VideoCodec: 168,
+    AudioCodec: 190,
+    AudioLanguages: 300,
+    SubtitleLanguages: 300,
+    CustomFormats: 280,
+    Genres: 300,
+    Tags: 240,
+    LastWatched: 190,
+    CutoffUnmetCount: 110,
+    QualityCutoffNotMet: 110,
+  },
+  radarr: {
+    FileSizeGB: 108,
+    GBPerHour: 120,
+    BitrateMbps: 154,
+    Monitored: 96,
+    Tags: 240,
+    Studio: 320,
+    OriginalLanguage: 188,
+    Genres: 280,
+    MissingCount: 104,
+    CutoffUnmetCount: 124,
+    LastSearchTime: 190,
+    Edition: 170,
+    QualityCutoffNotMet: 130,
+    Languages: 300,
+    AudioLanguages: 300,
+    SubtitleLanguages: 300,
+    LastWatched: 190,
+  },
 };
 const HEADER_CAP_EXTRA_PX = 4;
 const RENDER_BATCH_SIZE = 300;
@@ -2790,8 +3172,13 @@ const RADARR_RENDER_BATCH_MIN = 800;
 const RADARR_VIRTUAL_MIN_ROWS = 1000;
 const LAZY_CELL_BATCH_SIZE = 240;
 const RADARR_LAZY_CELL_BATCH_SIZE = 320;
+const STARTUP_LAZY_CELL_BATCH_SIZE = 120;
+const STARTUP_RADARR_LAZY_CELL_BATCH_SIZE = 160;
 const HYDRATE_FRAME_BUDGET_MS = 10;
 const RADARR_HYDRATE_FRAME_BUDGET_MS = 14;
+const STARTUP_HYDRATE_FRAME_BUDGET_MS = 6;
+const STARTUP_RADARR_HYDRATE_FRAME_BUDGET_MS = 8;
+const STARTUP_HYDRATE_DELAY_MS = 120;
 const RENDER_FRAME_BUDGET_MS = 10;
 const RADARR_RENDER_FRAME_BUDGET_MS = 12;
 const RENDER_FRAME_CHECK_EVERY = 25;
@@ -2923,6 +3310,8 @@ const sonarrExpansionState = {
   episodesBySeason: new Map(),
   inflight: new Map(),
   fastModeBySeries: new Map(),
+  childRowsBySeries: new Map(),
+  expansionHeightBySeries: new Map(),
 };
 const SERIES_EXPANSION_MAX_HEIGHT = 280;
 const SERIES_EXPANSION_ROW_HEIGHT = 32;
@@ -2935,6 +3324,7 @@ const hydrationState = {
   index: 0,
   scheduled: false,
   perf: null,
+  deferTimer: null,
 };
 const headerCapCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const headerCapKeyByApp = { sonarr: new Map(), radarr: new Map() };
@@ -3003,7 +3393,7 @@ function startRenderPerf(summary) {
 
 function buildRenderPerfScenario() {
   if (!configState.sonarrConfigured && !configState.radarrConfigured) {
-    return "unconfigured";
+    return configState.plexConfigured ? "plex-only" : "unconfigured";
   }
   const multi = getInstanceCount("sonarr") > 1 || getInstanceCount("radarr") > 1;
   const instanceLabel = multi ? "multi-instance" : "single-instance";
@@ -3274,12 +3664,25 @@ function updateLoadingIndicator() {
   loadingIndicator.classList.toggle("hidden", !(isLoading || backgroundLoading));
 }
 
+function clearLoadingUiPlaceholders() {
+  STATUS_VALUE_ELS.forEach(el => {
+    el.classList.remove("status-value--skeleton");
+  });
+  if (healthBadgesEl) {
+    healthBadgesEl.classList.remove("health-badges-slot--loading");
+  }
+  document.body.classList.remove("sortarr-loading");
+}
+
 function setLoading(loading, label) {
   isLoading = loading;
   updateLoadingIndicator();
   if (loadBtn) loadBtn.disabled = loading;
   updatePrimaryRefreshButton();
   if (label) setStatus(label);
+  if (!loading) {
+    clearLoadingUiPlaceholders();
+  }
 }
 
 function setBackgroundLoading(loading) {
@@ -3324,16 +3727,72 @@ function updateFastModeBanner() {
   fastModeBannerEl.classList.toggle("hidden", !show);
 }
 
+function getLoadedRowProgressCounts(app = activeApp) {
+  const rows = Array.isArray(dataByApp?.[app]) ? dataByApp[app] : [];
+  if (!rows.length) return null;
+  let matched = 0;
+  let unmatched = 0;
+  let skipped = 0;
+  let unavailable = 0;
+  for (const row of rows) {
+    const status = String(row?.TautulliMatchStatus || "").toLowerCase();
+    if (status === "matched") matched += 1;
+    else if (status === "unmatched") unmatched += 1;
+    else if (status === "skipped") skipped += 1;
+    else if (status === "unavailable") unavailable += 1;
+  }
+  const total = rows.length;
+  const pending = Math.max(total - (matched + unmatched + skipped + unavailable), 0);
+  return { total, matched, unmatched, skipped, unavailable, pending };
+}
+
+function resolveProgressCounts(counts, app = activeApp) {
+  const src = counts && typeof counts === "object" ? counts : {};
+  const loaded = getLoadedRowProgressCounts(app) || {};
+  const numOr = (value, fallback) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  const matched = Math.max(0, numOr(src.matched, numOr(loaded.matched, 0)));
+  const unmatched = Math.max(0, numOr(src.unmatched, numOr(loaded.unmatched, 0)));
+  const skipped = Math.max(0, numOr(src.skipped, numOr(loaded.skipped, 0)));
+  const unavailable = Math.max(0, numOr(src.unavailable, numOr(loaded.unavailable, 0)));
+
+  const directTotal = numOr(src.total, NaN);
+  const loadedTotal = numOr(loaded.total, NaN);
+  let total = Number.isFinite(directTotal) && directTotal > 0
+    ? directTotal
+    : (Number.isFinite(loadedTotal) && loadedTotal > 0 ? loadedTotal : 0);
+
+  const pendingSource = numOr(src.pending, NaN);
+  let pending;
+  if (Number.isFinite(pendingSource) && pendingSource >= 0) {
+    pending = pendingSource;
+  } else {
+    if (!total) {
+      total = matched + unmatched + skipped + unavailable;
+    }
+    pending = Math.max(total - (matched + unmatched + skipped + unavailable), 0);
+  }
+
+  if (!total) {
+    total = matched + unmatched + skipped + unavailable + pending;
+  }
+
+  return { total, matched, unmatched, skipped, unavailable, pending };
+}
 function formatProgress(counts, configured, progressMeta, tautulliState, displayProcessed = null) {
   if (!configured) return t("notConfigured", "Not configured");
 
   const progressActive = Boolean(tautulliState?.refresh_in_progress && progressMeta?.total);
-  const total = progressActive ? (progressMeta?.total || 0) : (counts?.total || 0);
+  const resolvedCounts = resolveProgressCounts(counts, activeApp);
+  const total = progressActive ? (progressMeta?.total || 0) : resolvedCounts.total;
   if (!total) return t("noCachedData", "No cached data");
 
   const matched = progressActive
     ? (Number.isFinite(displayProcessed) ? displayProcessed : (progressMeta?.processed || 0))
-    : (counts?.matched || 0);
+    : resolvedCounts.matched;
 
   const labelKey = progressActive ? "processedLower" : "matchedLower";
   const label = t(labelKey, progressActive ? "processed" : "matched");
@@ -3349,7 +3808,7 @@ function formatProgress(counts, configured, progressMeta, tautulliState, display
     ? tp("progressUpdatedSuffix", { ageLabel: progressAgeLabel }, " | updated %(ageLabel)s")
     : "";
 
-  const pending = progressActive ? Math.max(total - matched, 0) : (counts?.pending || 0);
+  const pending = progressActive ? Math.max(total - matched, 0) : resolvedCounts.pending;
   if (pending > 0) {
     return `${base}${tp("progressPendingSuffix", { pending }, " - %(pending)s pending")}${progressSuffix}`;
   }
@@ -3368,12 +3827,13 @@ function formatProgressHtml(counts, configured, progressMeta, tautulliState, dis
   if (!configured) return t("notConfigured", "Not configured");
 
   const progressActive = Boolean(tautulliState?.refresh_in_progress && progressMeta?.total);
-  const total = progressActive ? (progressMeta?.total || 0) : (counts?.total || 0);
+  const resolvedCounts = resolveProgressCounts(counts, activeApp);
+  const total = progressActive ? (progressMeta?.total || 0) : resolvedCounts.total;
   if (!total) return t("noCachedData", "No cached data");
 
   const matched = progressActive
     ? (Number.isFinite(displayProcessed) ? displayProcessed : (progressMeta?.processed || 0))
-    : (counts?.matched || 0);
+    : resolvedCounts.matched;
 
   const labelKey = progressActive ? "processedLower" : "matchedLower";
   const label = t(labelKey, progressActive ? "processed" : "matched");
@@ -3394,7 +3854,7 @@ function formatProgressHtml(counts, configured, progressMeta, tautulliState, dis
     ? baseText
     : `<a href="#" class="progress-link" data-progress-token="matchstatus:matched">${escapeHtml(baseText)}</a>`;
 
-  const pending = progressActive ? Math.max(total - matched, 0) : (counts?.pending || 0);
+  const pending = progressActive ? Math.max(total - matched, 0) : resolvedCounts.pending;
   if (pending > 0) {
     return `${base}${tp("progressPendingSuffix", { pending }, " - %(pending)s pending")}${progressSuffix}`;
   }
@@ -3539,26 +3999,14 @@ function pauseStatusCountdown() {
 function shouldAutoHideStatus(appState, tautulli) {
   if (!appState?.configured) return false;
   const counts = appState?.counts;
-  const counted = (counts?.matched || 0) +
-    (counts?.unmatched || 0) +
-    (counts?.skipped || 0) +
-    (counts?.unavailable || 0);
-  const pending = counts && typeof counts.pending === "number"
-    ? counts.pending
-    : Math.max((counts?.total || 0) - counted, 0);
-  const progressComplete = Boolean(
-    counts?.total > 0 &&
-    pending === 0
-  );
+  const hasCountTotal = Number.isFinite(counts?.total);
+  const tableReady = tableReadyByApp[activeApp] === true;
+  const playbackRefreshDone = !tautulli?.configured || !tautulli.refresh_in_progress;
+  const progressComplete = playbackRefreshDone && (hasCountTotal || tableReady);
   const cacheAge = appState?.cache?.memory_age_seconds ?? appState?.cache?.disk_age_seconds;
   const cacheReady = Boolean(appState?.configured && cacheAge != null);
-  const tautulliReady = !tautulli?.configured ||
-    (tautulli.index_age_seconds != null &&
-      tautulli.status !== "stale" &&
-      !tautulli.refresh_in_progress);
-  return progressComplete && cacheReady && tautulliReady;
+  return progressComplete && cacheReady;
 }
-
 function clearStatusCountdown() {
   if (statusCountdownTimer) {
     clearInterval(statusCountdownTimer);
@@ -3711,8 +4159,15 @@ function startProgressDisplayTimer(app) {
   }, PROGRESS_ANIMATION_INTERVAL_MS);
 }
 
+function markStatusReadyFromRows(rowCount) {
+  if (statusReadyAfterFirstData) return;
+  if (!Number.isFinite(rowCount) || rowCount <= 0) return;
+  statusReadyAfterFirstData = true;
+  updateStatusPanel();
+}
+
 function showStatusRow() {
-  if (!statusRowEl) return;
+  if (!statusRowEl || !statusReadyAfterFirstData) return;
   clearStatusPillTimer();
   statusRowEl.classList.remove("status-row--hidden");
   statusCollapsed = false;
@@ -3786,6 +4241,10 @@ function startStatusCountdown() {
 
 function updateStatusRowVisibility(appState, tautulli) {
   if (!statusRowEl) return;
+  if (!statusReadyAfterFirstData) {
+    hideStatusRow();
+    return;
+  }
   const shouldAutoHide = shouldAutoHideStatus(appState, tautulli);
   const hovering = isStatusHovering();
   if (shouldAutoHide) {
@@ -3849,7 +4308,7 @@ function getArrRefreshInstances(app) {
 }
 
 function getAppLabel(app) {
-  return app === "sonarr" ? "Sonarr" : "Radarr";
+  return app === "sonarr" ? t("tabShows", "Shows") : t("tabMovies", "Movies");
 }
 
 function getArrRefreshSuffix(app, instance, index, total) {
@@ -4092,7 +4551,13 @@ function scheduleStatusPoll() {
   const interval = hasProgress && progress.processed < progress.total
     ? TAUTULLI_STATUS_POLL_INTERVAL_MS
     : TAUTULLI_POLL_INTERVAL_MS;
-  statusPollTimer = setTimeout
+  statusPollTimer = window.setTimeout(() => {
+    statusPollTimer = null;
+    if (document.hidden) return;
+    fetchStatus({ silent: true, lite: true });
+  }, interval);
+}
+
 
   function enableTablePinchZoom() {
     const wrap = document.querySelector(".table-wrap");
@@ -4387,13 +4852,6 @@ function scheduleStatusPoll() {
       { passive: true }
     );
   }
-
-  (async () => {
-    statusPollTimer = null;
-    await fetchStatus({ silent: true, lite: true });
-  }, interval);
-}
-
 function mergeStatusApps(prevApps, nextApps) {
   if (!nextApps) return prevApps;
   const merged = { ...(prevApps || {}) };
@@ -4521,6 +4979,12 @@ function formatHealthBadgeText(instName, type, msg) {
   return `${icon} ${name}: ${message}`.trim();
 }
 
+function compactHealthBadgeText(text, maxLen = 96) {
+  const raw = String(text || "").replace(/\s+/g, " ").trim();
+  if (!raw || raw.length <= maxLen) return raw;
+  return `${raw.slice(0, Math.max(12, maxLen - 1)).trimEnd()}…`;
+}
+
 function formatHealthBadgeTitle(instName, type, msg, wikiUrl = "") {
   const name = String(instName || "").trim();
   const message = String(msg || "").trim();
@@ -4571,10 +5035,28 @@ function renderHealthStatus(app, data) {
     const b = document.createElement("span");
     b.className = `health-badge ${cls}`;
     b.setAttribute("data-key", key);
+    const fullText = String(text || "");
+    const compactText = compactHealthBadgeText(fullText);
 
     const label = document.createElement("span");
     label.className = "health-badge__text";
-    label.innerHTML = text;
+    label.innerHTML = escapeHtml(compactText);
+
+    const details = document.createElement("button");
+    details.type = "button";
+    details.className = "health-badge__details";
+    details.setAttribute("aria-label", `Details ${key}`);
+    details.textContent = "i";
+    details.title = t("details", "Details");
+    if (compactText === fullText) {
+      details.classList.add("hidden");
+    }
+    details.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const expanded = b.classList.toggle("is-expanded");
+      label.innerHTML = escapeHtml(expanded ? fullText : compactText);
+    });
 
 
     const close = document.createElement("button");
@@ -4601,6 +5083,7 @@ function renderHealthStatus(app, data) {
     });
 
     b.appendChild(label);
+    b.appendChild(details);
     b.appendChild(close);
 
     b.title = title || "";
@@ -4630,7 +5113,7 @@ function renderHealthStatus(app, data) {
         container.appendChild(
           buildBadge({
             key,
-            text: escapeHtml(formatHealthBadgeText(instName, "error", alert.message)),
+            text: formatHealthBadgeText(instName, "error", alert.message),
             cls: "health-badge--error",
             title: formatHealthBadgeTitle(instName, "error", alert.message),
             dismissSig: sig,
@@ -4654,7 +5137,7 @@ function renderHealthStatus(app, data) {
         container.appendChild(
           buildBadge({
             key,
-            text: escapeHtml(formatHealthBadgeText(instName, type, msg)),
+            text: formatHealthBadgeText(instName, type, msg),
             cls: getHealthBadgeClass(type),
             title: formatHealthBadgeTitle(instName, type, msg, a?.wikiUrl || ""),
             dismissSig: sig,
@@ -4694,9 +5177,22 @@ async function fetchHealth({ app = activeApp, silent = false, force = false } = 
   }
 }
 
-async function fetchStatus({ silent = false, lite = false } = {}) {
+function mergeStatusFetchOptions(base, extra) {
+  const first = base || { silent: true, lite: true };
+  const next = extra || {};
+  return {
+    silent: Boolean(first.silent) && Boolean(next.silent !== false),
+    lite: Boolean(first.lite) && Boolean(next.lite !== false),
+  };
+}
+
+async function fetchStatusNow({ silent = false, lite = false } = {}) {
   try {
-    const url = lite ? "/api/status?lite=1" : "/api/status";
+    const params = [];
+    if (lite) params.push("lite=1");
+    params.push(...getPlexScopeParams("sonarr", "plex_library_ids_sonarr"));
+    params.push(...getPlexScopeParams("radarr", "plex_library_ids_radarr"));
+    const url = params.length ? `/api/status?${params.join("&")}` : "/api/status";
     const res = await fetch(apiUrl(url));
     if (!res.ok) {
       if (!silent) console.warn("Status fetch failed", res.status);
@@ -4706,15 +5202,40 @@ async function fetchStatus({ silent = false, lite = false } = {}) {
     const prevTautulli = statusState.tautulli;
     statusState.apps = mergeStatusApps(statusState.apps, data.apps) || statusState.apps;
     statusState.tautulli = data.tautulli || statusState.tautulli;
+    applyPlexScopeFromStatus(data.scope || {});
     lastStatusFetchAt = Date.now();
     syncTautulliPendingFromStatus(prevTautulli, statusState.tautulli);
     handleTautulliRefreshState(prevTautulli, statusState.tautulli);
     updateStatusPanel();
+    updatePlexLibraryScopeControl();
+    updateEffectiveSourcesLine();
     updateLastUpdatedDisplay();
     fetchHealth({ app: activeApp, silent: true });
     scheduleStatusPoll();
   } catch (e) {
     if (!silent) console.warn("Status fetch failed", e);
+  }
+}
+
+async function fetchStatus(options = {}) {
+  const request = {
+    silent: options.silent !== false,
+    lite: options.lite !== false,
+  };
+  if (statusFetchInFlight) {
+    statusFetchQueuedOptions = mergeStatusFetchOptions(statusFetchQueuedOptions || request, request);
+    return;
+  }
+  statusFetchInFlight = true;
+  let current = request;
+  try {
+    while (current) {
+      await fetchStatusNow(current);
+      current = statusFetchQueuedOptions;
+      statusFetchQueuedOptions = null;
+    }
+  } finally {
+    statusFetchInFlight = false;
   }
 }
 
@@ -4724,7 +5245,7 @@ function startStatusTick() {
     if (document.hidden) return;
     updateStatusPanel();
     updateLastUpdatedDisplay();
-  }, 1000);
+  }, 3000);
 }
 
 function startStatusFetchPoll() {
@@ -4911,14 +5432,24 @@ function applyNoticeState(app, flags, warnText, fallbackNotice, options = {}) {
 }
 
 function resetUiState() {
+  if (viewStateSaveTimer) {
+    window.clearTimeout(viewStateSaveTimer);
+    viewStateSaveTimer = null;
+  }
   localStorage.removeItem(COLUMN_STORAGE_KEY);
   localStorage.removeItem(CSV_COLUMNS_KEY);
   localStorage.removeItem(FILTERS_COLLAPSED_KEY);
   localStorage.removeItem(CHIPS_ENABLED_KEY);
   localStorage.removeItem(VIEW_STATE_KEY);
+  localStorage.removeItem(PLEX_LIBRARY_SELECTION_KEY);
   localStorage.removeItem("Sortarr-theme");
+  viewStateByApp.sonarr = buildDefaultViewState("sonarr");
+  viewStateByApp.radarr = buildDefaultViewState("radarr");
+  clearActiveFilters({ persist: false, forceUi: true });
+  setAdvancedMode(false);
+  chipQuery = "";
+  syncChipButtonsToQuery();
 }
-
 function getSonarrSeriesKey(seriesId, instanceId) {
   if (!seriesId) return "";
   const cleanInstance = String(instanceId || "").trim();
@@ -4932,6 +5463,42 @@ function getSonarrSeriesKeyFromRow(row) {
   return getSonarrSeriesKey(seriesId, instanceId);
 }
 
+function getCachedSeriesExpansionHeight(seriesKey) {
+  if (!seriesKey) return 0;
+  const value = Number(sonarrExpansionState.expansionHeightBySeries.get(seriesKey));
+  if (Number.isFinite(value) && value > 0) return value;
+  return SERIES_EXPANSION_MAX_HEIGHT;
+}
+
+function cacheSeriesExpansionHeight(seriesKey, childRowEl) {
+  if (!seriesKey || !childRowEl || !childRowEl.isConnected) return;
+  try {
+    const h = childRowEl.getBoundingClientRect().height;
+    if (Number.isFinite(h) && h > 0) {
+      const rounded = Math.round(h * 100) / 100;
+      sonarrExpansionState.expansionHeightBySeries.set(seriesKey, rounded);
+    }
+  } catch { }
+}
+
+function getCachedSeriesChildRow(seriesKey, colCount = 1) {
+  if (!seriesKey) return null;
+  const row = sonarrExpansionState.childRowsBySeries.get(seriesKey) || null;
+  if (!row) return null;
+  if (row.__collapseTimer) {
+    clearTimeout(row.__collapseTimer);
+    row.__collapseTimer = null;
+  }
+  row.classList.add("series-child-row", "series-child-row--open");
+  row.dataset.seriesKey = seriesKey;
+  let td = row.firstElementChild;
+  if (!td) {
+    td = document.createElement("td");
+    row.appendChild(td);
+  }
+  td.colSpan = Math.max(1, Number(colCount) || 1);
+  return row;
+}
 function clearSonarrSeriesExpansion(seriesKey) {
   if (!seriesKey) return;
   sonarrExpansionState.seasonsBySeries.delete(seriesKey);
@@ -4947,6 +5514,8 @@ function clearSonarrSeriesExpansion(seriesKey) {
     }
   });
   sonarrExpansionState.expandedSeries.delete(seriesKey);
+  sonarrExpansionState.childRowsBySeries.delete(seriesKey);
+  sonarrExpansionState.expansionHeightBySeries.delete(seriesKey);
   if (tbody) {
     const safeKey = window.CSS && CSS.escape ? CSS.escape(seriesKey) : seriesKey.replace(/["\\]/g, "\\$&");
     tbody.querySelectorAll(`tr.series-child-row[data-series-key="${safeKey}"]`).forEach(row => row.remove());
@@ -4968,6 +5537,8 @@ function resetSonarrExpansionState(options = {}) {
   sonarrExpansionState.episodesBySeason.clear();
   sonarrExpansionState.inflight.clear();
   sonarrExpansionState.fastModeBySeries.clear();
+  sonarrExpansionState.childRowsBySeries.clear();
+  sonarrExpansionState.expansionHeightBySeries.clear();
   if (options.clearDom === false) return;
   if (!tbody) return;
   tbody.querySelectorAll("tr.series-child-row").forEach(row => row.remove());
@@ -4984,6 +5555,8 @@ function resetSonarrExpansionState(options = {}) {
 function resetSonarrExpansionDisplayState() {
   sonarrExpansionState.expandedSeries.clear();
   sonarrExpansionState.expandedSeasons.clear();
+  sonarrExpansionState.childRowsBySeries.clear();
+  sonarrExpansionState.expansionHeightBySeries.clear();
 }
 
 function getInstanceCount(app) {
@@ -5366,9 +5939,10 @@ async function requestMatchDiagnostics(row, app) {
     tvdb_id: row.TvdbId ?? row.tvdbId ?? "",
     tmdb_id: row.TmdbId ?? row.tmdbId ?? "",
     imdb_id: row.ImdbId ?? row.imdbId ?? "",
+    scope_library_ids: getPlexSelectedForApp(app),
   };
 
-  const res = await fetch(apiUrl("/api/diagnostics/tautulli-match"), {
+  const res = await fetch(apiUrl("/api/diagnostics/playback-match"), {
     method: "POST",
     headers: withCsrfHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(payload),
@@ -6668,17 +7242,33 @@ function updateSeriesExpansionStatus(statusEl, text, options = {}) {
 }
 
 function ensureSeriesChildRow(rowEl, seriesKey) {
-  const existing = rowEl?.nextElementSibling;
+  if (!rowEl || !seriesKey) return null;
+  const existing = rowEl.nextElementSibling;
   if (existing && existing.classList.contains("series-child-row")) {
     if (existing.__collapseTimer) {
       clearTimeout(existing.__collapseTimer);
       existing.__collapseTimer = null;
     }
+    sonarrExpansionState.childRowsBySeries.set(seriesKey, existing);
+    const td = existing.firstElementChild;
+    if (td) {
+      const colCount = tableEl ? tableEl.querySelectorAll("thead th").length : 1;
+      td.colSpan = colCount || 1;
+    }
     requestAnimationFrame(() => {
       existing.classList.add("series-child-row--open");
+      cacheSeriesExpansionHeight(seriesKey, existing);
     });
     return existing;
   }
+
+  const cached = getCachedSeriesChildRow(seriesKey, tableEl ? tableEl.querySelectorAll("thead th").length : 1);
+  if (cached) {
+    rowEl.insertAdjacentElement("afterend", cached);
+    requestAnimationFrame(() => cacheSeriesExpansionHeight(seriesKey, cached));
+    return cached;
+  }
+
   const tr = document.createElement("tr");
   tr.className = "series-child-row";
   tr.dataset.seriesKey = seriesKey;
@@ -6687,14 +7277,17 @@ function ensureSeriesChildRow(rowEl, seriesKey) {
   td.colSpan = colCount || 1;
   tr.appendChild(td);
   rowEl.insertAdjacentElement("afterend", tr);
+  sonarrExpansionState.childRowsBySeries.set(seriesKey, tr);
   requestAnimationFrame(() => {
     tr.classList.add("series-child-row--open");
+    cacheSeriesExpansionHeight(seriesKey, tr);
   });
   return tr;
 }
-
 function collapseSeriesExpansion(rowEl, btn, seriesKey) {
   sonarrExpansionState.expandedSeries.delete(seriesKey);
+  sonarrExpansionState.childRowsBySeries.delete(seriesKey);
+  sonarrExpansionState.expansionHeightBySeries.delete(seriesKey);
   Array.from(sonarrExpansionState.expandedSeasons).forEach(key => {
     if (key.startsWith(`${seriesKey}::`)) {
       sonarrExpansionState.expandedSeasons.delete(key);
@@ -6714,6 +7307,7 @@ function collapseSeriesExpansion(rowEl, btn, seriesKey) {
   if (tbody) {
     const safeKey = window.CSS && CSS.escape ? CSS.escape(seriesKey) : seriesKey.replace(/["\\]/g, "\\$&");
     tbody.querySelectorAll(`tr.series-child-row[data-series-key="${safeKey}"]`).forEach(row => {
+      cacheSeriesExpansionHeight(seriesKey, row);
       row.classList.remove("series-child-row--open");
       if (row.__collapseTimer) {
         clearTimeout(row.__collapseTimer);
@@ -6985,7 +7579,7 @@ function renderEpisodeList(container, episodes) {
 }
 
 async function handleSeriesExpanderClick(btn) {
-  const rowEl = btn.closest("tr");
+  let rowEl = btn.closest("tr");
   if (!rowEl) return;
   const app = rowEl.dataset.app || activeApp;
   if (app !== "sonarr") return;
@@ -7891,23 +8485,7 @@ function formatNumericCell(value, widths = null) {
   }
 
   const rawText = typeof value === "string" ? value.trim() : String(value);
-  let working = rawText;
-  let sign = "";
-  if (working.startsWith("-")) {
-    sign = "-";
-    working = working.slice(1);
-  }
-  const parts = working.split(".");
-  const intPart = parts[0] || "0";
-  const fracPart = parts[1] || "";
-  const noFrac = !fracPart;
-  const className = noFrac ? "num-cell no-frac" : "num-cell";
-  const style = widths
-    ? ` style="--num-int-width:${widths.int}ch; --num-frac-width:${widths.frac}ch; --num-dot-width:${widths.frac ? "0.4ch" : "0ch"};"`
-    : "";
-  return `<span class="${className}"${style}><span class="num-int">${escapeHtml(
-    `${sign}${intPart}`
-  )}</span><span class="num-dot">.</span><span class="num-frac">${escapeHtml(fracPart)}</span></span>`;
+  return `<span class="num-cell-flat">${escapeHtml(rawText)}</span>`;
 }
 
 const LANGUAGE_NAME_MAP = {
@@ -8233,21 +8811,47 @@ function buildMatchBadge(row) {
 }
 
 function buildMatchOrb(row) {
-  if (!tautulliEnabled) return "";
+  if (!tautulliEnabled) {
+    if (document.body.classList.contains("sortarr-loading")) {
+      return `<span class="match-orb match-orb--placeholder" aria-hidden="true"></span>`;
+    }
+    return "";
+  }
   const meta = getMatchStatusMeta(row);
   const titleText = meta.reason ? `${meta.label} - ${meta.reason}` : meta.label;
   const titleAttr = titleText ? ` title="${escapeHtml(titleText)}"` : "";
   return `<span class="match-orb match-orb--${meta.variant}"${titleAttr} role="img" aria-label="${escapeHtml(meta.label)}"></span>`;
 }
-
 function formatBitrateCell(row, app) {
   const raw = row?.BitrateMbps;
   if (raw === "" || raw === null || raw === undefined) return "";
+
   const value = formatNumericCell(raw, getNumericWidths(app, "BitrateMbps"));
-  if (row?.BitrateEstimated) {
-    return `${value} <span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span>`;
+  if (app !== "radarr") {
+    if (row?.BitrateEstimated) {
+      return `${value} <span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span>`;
+    }
+    return value;
   }
-  return value;
+
+  const hasValue = (v) => !(v === "" || v === null || v === undefined);
+  const formatPart = (partRaw) => {
+    if (!hasValue(partRaw)) return t("n/a");
+    const num = Number(partRaw);
+    if (!Number.isFinite(num)) return String(partRaw);
+    return num.toFixed(2);
+  };
+
+  const hasVideo = hasValue(row?.VideoBitrateMbps);
+  const hasAudio = hasValue(row?.AudioBitrateMbps);
+  const partsTitle = `${t("Video")}: ${formatPart(row?.VideoBitrateMbps)} | ${t("Audio")}: ${formatPart(row?.AudioBitrateMbps)}`;
+  const showEst = !(hasVideo && hasAudio);
+  const valueHtml = `<span title="${escapeHtml(partsTitle)}">${value}</span>`;
+
+  if (showEst) {
+    return `${valueHtml} <span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span>`;
+  }
+  return valueHtml;
 }
 
 const FIELD_MAP = {
@@ -8867,7 +9471,9 @@ function rowMatchesCurrentFilters(row) {
   return ok;
 }
 
-function clearActiveFilters() {
+function clearActiveFilters(options = {}) {
+  const persist = options.persist !== false;
+  const forceUi = options.forceUi === true;
   let changed = false;
   if (titleFilter && titleFilter.value) {
     titleFilter.value = "";
@@ -8885,7 +9491,7 @@ function clearActiveFilters() {
     chipQuery = "";
     changed = true;
   }
-  if (changed) {
+  if (changed || forceUi) {
     document.querySelectorAll(".chip.chip--pos, .chip.chip--neg").forEach(btn => {
       btn.classList.remove("chip--pos", "chip--neg");
       btn.setAttribute("aria-pressed", "false");
@@ -8893,7 +9499,9 @@ function clearActiveFilters() {
     });
     updateAdvancedWarnings([]);
     renderActiveFilterChips();
-    scheduleViewStateSave();
+    if (persist) {
+      scheduleViewStateSave();
+    }
   }
   return changed;
 }
@@ -9173,38 +9781,53 @@ function setCsvColumnsEnabled(enabled) {
   applyTitleWidth(activeApp);
 }
 
-function getColumnInputs(col) {
+function getColumnInputApp(input) {
+  if (!input) return "";
+  const row = input.closest(".column-row");
+  if (row) return row.getAttribute("data-app") || "";
+  const group = input.closest(".column-group");
+  return group ? (group.getAttribute("data-app") || "") : "";
+}
+
+function inputMatchesApp(input, app = activeApp) {
+  const inputApp = getColumnInputApp(input);
+  return !inputApp || inputApp === app;
+}
+
+function getColumnInputs(col, app = activeApp) {
   if (!columnsPanel || !col) return [];
-  return columnsPanel.querySelectorAll(`input[data-col="${CSS.escape(col)}"]`);
+  return Array.from(columnsPanel.querySelectorAll(`input[data-col="${CSS.escape(col)}"]`))
+    .filter(input => inputMatchesApp(input, app));
 }
 
-function getColumnCheckedState(col) {
-  const inputs = getColumnInputs(col);
+function getColumnCheckedState(col, app = activeApp) {
+  const inputs = getColumnInputs(col, app);
   if (!inputs.length) return false;
-  return Array.from(inputs).some(input => input.checked);
+  return inputs.some(input => input.checked);
 }
 
-function syncColumnInputs(col, checked) {
-  getColumnInputs(col).forEach(input => {
+function syncColumnInputs(col, checked, app = activeApp) {
+  getColumnInputs(col, app).forEach(input => {
     input.checked = checked;
   });
 }
 
-function setColumnGroup(group, checked) {
+function setColumnGroup(group, checked, app = activeApp) {
   if (!columnsPanel) return;
   const cols = COLUMN_GROUPS[group] || [];
   cols.forEach(col => {
-    syncColumnInputs(col, checked);
+    syncColumnInputs(col, checked, app);
   });
 }
 
-function updateColumnGroupToggles() {
+function updateColumnGroupToggles(app = activeApp) {
   if (!columnsPanel) return;
   columnsPanel.querySelectorAll("input[data-col-group]").forEach(input => {
+    if (!inputMatchesApp(input, app)) return;
     const group = input.getAttribute("data-col-group");
     const cols = COLUMN_GROUPS[group] || [];
     const inputs = cols
-      .map(col => columnsPanel.querySelector(`input[data-col="${col}"]`))
+      .map(col => getColumnInputs(col, app)[0])
       .filter(Boolean);
     if (!inputs.length) {
       input.checked = false;
@@ -9219,9 +9842,10 @@ function updateColumnGroupToggles() {
   });
 }
 
-function enforceRequiredColumns() {
+function enforceRequiredColumns(app = activeApp) {
   if (!columnsPanel) return;
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
+    if (!inputMatchesApp(input, app)) return;
     const col = input.getAttribute("data-col");
     if (REQUIRED_COLUMNS.has(col)) {
       input.checked = true;
@@ -9267,6 +9891,7 @@ function loadColumnPrefs(app = activeApp) {
   const prefs = getColumnPrefs(app);
 
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
+    if (!inputMatchesApp(input, app)) return;
     const col = input.getAttribute("data-col");
     if (Object.prototype.hasOwnProperty.call(prefs, col)) {
       input.checked = Boolean(prefs[col]);
@@ -9274,8 +9899,8 @@ function loadColumnPrefs(app = activeApp) {
       input.checked = !DEFAULT_HIDDEN_COLUMNS.has(col);
     }
   });
-  enforceRequiredColumns();
-  updateColumnGroupToggles();
+  enforceRequiredColumns(app);
+  updateColumnGroupToggles(app);
 }
 
 function saveColumnPrefs(app = activeApp) {
@@ -9283,25 +9908,27 @@ function saveColumnPrefs(app = activeApp) {
   const prefs = {};
   const seen = new Set();
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
+    if (!inputMatchesApp(input, app)) return;
     const col = input.getAttribute("data-col");
     if (seen.has(col)) return;
-    const checked = getColumnCheckedState(col);
+    const checked = getColumnCheckedState(col, app);
     prefs[col] = checked;
-    syncColumnInputs(col, checked);
+    syncColumnInputs(col, checked, app);
     seen.add(col);
   });
   columnPrefsByApp[app] = prefs;
   storeColumnPrefs();
 }
 
-function getHiddenColumns() {
+function getHiddenColumns(app = activeApp) {
   const hidden = new Set();
   if (!columnsPanel) return hidden;
   const seen = new Set();
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
+    if (!inputMatchesApp(input, app)) return;
     const col = input.getAttribute("data-col");
     if (seen.has(col)) return;
-    const checked = getColumnCheckedState(col);
+    const checked = getColumnCheckedState(col, app);
     if (!checked && !REQUIRED_COLUMNS.has(col)) {
       hidden.add(col);
     }
@@ -9496,11 +10123,12 @@ function updateColumnFilter() {
 function setAllColumns(checked) {
   if (!columnsPanel) return;
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
+    if (!inputMatchesApp(input, activeApp)) return;
     input.checked = checked;
   });
-  enforceRequiredColumns();
-  saveColumnPrefs();
-  updateColumnGroupToggles();
+  enforceRequiredColumns(activeApp);
+  saveColumnPrefs(activeApp);
+  updateColumnGroupToggles(activeApp);
   markColumnVisibilityDirty();
   updateColumnVisibility();
   applyTitleWidth(activeApp);
@@ -9524,7 +10152,13 @@ function updateSortIndicators() {
     if (i) i.textContent = "";
   });
 
-  const th = document.querySelector(`th[data-sort="${CSS.escape(sortKey)}"]`);
+  const escapedSortKey = CSS.escape(sortKey);
+  const candidates = Array.from(document.querySelectorAll(`th[data-sort="${escapedSortKey}"]`));
+  const th = candidates.find(header => {
+    if (header.classList.contains("col-hidden")) return false;
+    const app = header.getAttribute("data-app");
+    return !app || app === activeApp;
+  }) || candidates[0] || null;
   if (!th) return;
 
   th.classList.add("active-sort");
@@ -9533,7 +10167,7 @@ function updateSortIndicators() {
 }
 
 function updateColumnVisibility(rootEl = document) {
-  const hidden = getHiddenColumns();
+  const hidden = getHiddenColumns(activeApp);
   const scope = rootEl && rootEl.querySelectorAll ? rootEl : document;
   const isGlobal = scope === document;
   const isFragment = scope && scope.nodeType === 11;
@@ -9692,6 +10326,14 @@ function maybeStabilizeRender(app, options = {}) {
   });
 }
 
+
+function getAppliedColumnCapWidth(col) {
+  if (!tableEl || !col) return 0;
+  const raw = tableEl.style.getPropertyValue(`--cap-${col}`) || "";
+  const value = parseFloat(raw);
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+}
+
 function cacheColumnWidths(app, options = {}) {
   if (!tableEl) return;
   if (!options.force && hasActiveFilters()) return;
@@ -9704,8 +10346,10 @@ function cacheColumnWidths(app, options = {}) {
     const col = th.getAttribute("data-col");
     if (!col || col === "Title") return;
     const width = getCellContentWidth(th);
-    if (width > 0) {
-      cache.set(col, width);
+    const capWidth = getAppliedColumnCapWidth(col);
+    const cachedWidth = capWidth > 0 ? Math.min(width, capWidth) : width;
+    if (cachedWidth > 0) {
+      cache.set(col, cachedWidth);
     }
   });
   if (cache.size) {
@@ -9797,10 +10441,11 @@ function measureHeaderCapWidth(th) {
   const appKey = activeApp;
   const labelKey = (th.textContent || "").trim();
   const minText = HEADER_CAP_MIN_TEXT[col] || "";
-  if (!labelKey) return 0;
+  const targetWidth = HEADER_CAP_TARGET_WIDTH_BY_APP[appKey]?.[col] || 0;
+  if (!labelKey) return targetWidth;
   const style = window.getComputedStyle(th);
   const fontKey = style?.font || `${style?.fontWeight || ""} ${style?.fontSize || ""} ${style?.fontFamily || ""}`;
-  const cacheKey = `${labelKey}||${minText}||${fontKey}||${style?.letterSpacing || ""}||${style?.textTransform || ""}`;
+  const cacheKey = `${labelKey}||${minText}||${targetWidth}||${fontKey}||${style?.letterSpacing || ""}||${style?.textTransform || ""}`;
   const cachedKey = headerCapKeyByApp[appKey].get(col);
   if (cachedKey === cacheKey && headerCapCacheByApp[appKey].has(col)) {
     return headerCapCacheByApp[appKey].get(col);
@@ -9840,7 +10485,8 @@ function measureHeaderCapWidth(th) {
     minWidth = Math.ceil(headerCapMeasureEl.getBoundingClientRect().width);
   }
   const width = Math.max(labelWidth, minWidth);
-  const capped = width ? width + HEADER_CAP_EXTRA_PX : 0;
+  const measured = width ? width + HEADER_CAP_EXTRA_PX : 0;
+  const capped = Math.max(measured, targetWidth);
   headerCapCacheByApp[appKey].set(col, capped);
   headerCapKeyByApp[appKey].set(col, cacheKey);
   return capped;
@@ -9895,11 +10541,35 @@ function applyColumnHeaderCaps() {
 
 function applyTitleWidth(app, _rows = null, _options = {}) {
   if (!tableEl || app !== activeApp) return;
+  const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
   const header = tableEl.querySelector('th[data-col="Title"]');
   if (!header) return;
-  header.style.width = "";
-  header.style.minWidth = "";
-  header.style.maxWidth = "";
+
+  if (sharedTitleWidth <= 0) {
+    header.style.width = "";
+    header.style.minWidth = "";
+    header.style.maxWidth = "";
+    if (tbody) {
+      tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
+        td.style.width = "";
+        td.style.minWidth = "";
+        td.style.maxWidth = "";
+      });
+    }
+    return;
+  }
+
+  const widthPx = `${sharedTitleWidth}px`;
+  header.style.width = widthPx;
+  header.style.minWidth = widthPx;
+  header.style.maxWidth = widthPx;
+  if (tbody) {
+    tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
+      td.style.width = widthPx;
+      td.style.minWidth = widthPx;
+      td.style.maxWidth = widthPx;
+    });
+  }
 }
 
 
@@ -9908,6 +10578,7 @@ function setActiveTab(app) {
 
   flushViewStateSave(activeApp);
   activeApp = app;
+  unlockColumnWidths();
 
   // Clear stale badges immediately
   if (healthBadgesEl) {
@@ -9935,12 +10606,19 @@ function setActiveTab(app) {
 
   tabSonarr.classList.toggle("active", activeApp === "sonarr");
   tabRadarr.classList.toggle("active", activeApp === "radarr");
+  updatePlexLibraryScopeControl();
+  updateEffectiveSourcesLine();
   setLoading(false);
   setStatus("");
   setStatusNotice(noticeByApp[activeApp] || "");
   updateFastModeBanner();
   updateBackgroundLoading();
   updateStatusPanel();
+  if (mismatchCenterState.open) {
+    fetchMismatchCenterData(activeApp, { force: false, silent: true }).catch(() => {
+      renderMismatchCenter();
+    });
+  }
 
   loadColumnPrefs();
   applyViewState(activeApp);
@@ -10642,11 +11320,23 @@ function queueHydration(rows, token, perf = null) {
   }
   if (hydrationState.scheduled) return;
   hydrationState.scheduled = true;
+  if (!firstPaintSettled) {
+    if (hydrationState.deferTimer) return;
+    hydrationState.deferTimer = window.setTimeout(() => {
+      hydrationState.deferTimer = null;
+      requestAnimationFrame(runHydrationPass);
+    }, STARTUP_HYDRATE_DELAY_MS);
+    return;
+  }
   requestAnimationFrame(runHydrationPass);
 }
 
 function runHydrationPass() {
   hydrationState.scheduled = false;
+  if (hydrationState.deferTimer) {
+    window.clearTimeout(hydrationState.deferTimer);
+    hydrationState.deferTimer = null;
+  }
   if (hydrationState.token !== renderToken) {
     hydrationState.rows = [];
     hydrationState.app = "";
@@ -10659,12 +11349,13 @@ function runHydrationPass() {
     noteHydrateStart(hydrationState.perf);
   }
   const app = hydrationState.app || activeApp;
-  const batchSize = app === "radarr"
-    ? RADARR_LAZY_CELL_BATCH_SIZE
-    : LAZY_CELL_BATCH_SIZE;
-  const frameBudget = app === "radarr"
-    ? RADARR_HYDRATE_FRAME_BUDGET_MS
-    : HYDRATE_FRAME_BUDGET_MS;
+  const startupMode = !firstPaintSettled;
+  const batchSize = startupMode
+    ? (app === "radarr" ? STARTUP_RADARR_LAZY_CELL_BATCH_SIZE : STARTUP_LAZY_CELL_BATCH_SIZE)
+    : (app === "radarr" ? RADARR_LAZY_CELL_BATCH_SIZE : LAZY_CELL_BATCH_SIZE);
+  const frameBudget = startupMode
+    ? (app === "radarr" ? STARTUP_RADARR_HYDRATE_FRAME_BUDGET_MS : STARTUP_HYDRATE_FRAME_BUDGET_MS)
+    : (app === "radarr" ? RADARR_HYDRATE_FRAME_BUDGET_MS : HYDRATE_FRAME_BUDGET_MS);
   const start = perfNow();
   const total = hydrationState.rows.length;
   let processed = 0;
@@ -10756,9 +11447,10 @@ function syncRowWidthLock(tr) {
 // Virtualized main table body (Phase 1)
 // Note: Uses top/bottom spacer rows to preserve scroll height and keeps DOM bounded.
 const VIRTUAL_MIN_ROWS = 800;
+const SONARR_VIRTUAL_MIN_ROWS = 250;
 const VIRTUAL_OVERSCAN_ROWS = 8; // Render overscan rows above/below viewport (keeps scroll smooth)
 const VIRTUAL_OVERSCAN_ROWS_IOS = 4;
-const VIRTUAL_HYDRATION_OVERSCAN_ROWS = 24; // Extra rows to pre-hydrate offscreen (reduces visible "pop-in")
+const VIRTUAL_HYDRATION_OVERSCAN_ROWS = 12; // Extra rows to pre-hydrate offscreen (reduces visible "pop-in")
 const VIRTUAL_HYDRATION_OVERSCAN_ROWS_IOS = 4;
 const VIRTUAL_ROW_CACHE_MULTIPLIER = 5; // LRU cap = pool * multiplier
 const VIRTUAL_ROW_CACHE_MULTIPLIER_IOS = 3;
@@ -10786,7 +11478,7 @@ function makeSpacerRow(colCount, className) {
 function getRowHeightOnce() {
   // Measure once from an existing row, otherwise fallback.
   try {
-    const tr = tbody && tbody.querySelector("tr:not(.virtual-spacer-row):not(.series-child-row)");
+    const tr = tbody && tbody.querySelector("tr:not(.virtual-spacer-row):not(.series-child-row):not(.table-empty-row)");
     const h = tr ? tr.getBoundingClientRect().height : 0;
     if (h && Number.isFinite(h) && h > 10) return h;
   } catch { }
@@ -10829,12 +11521,7 @@ function renderVirtualWindow(state) {
   const wrap = tableWrapEl;
   if (!wrap || !tbody) return;
 
-  // If Sonarr series expansions exist, virtualizing would break flow rows.
-  // Keep virtual mode off when any child rows are present.
-  if (state.app === "sonarr") {
-    const hasChild = tbody.querySelector("tr.series-child-row");
-    if (hasChild) return;
-  }
+  const hasSonarrExpansions = state.app === "sonarr" && sonarrExpansionState.expandedSeries.size > 0;
 
   const scrollTop = wrap.scrollTop || 0;
   const height = wrap.clientHeight || 0;
@@ -10853,7 +11540,41 @@ function renderVirtualWindow(state) {
   const cacheMultiplier = IS_IOS ? VIRTUAL_ROW_CACHE_MULTIPLIER_IOS : VIRTUAL_ROW_CACHE_MULTIPLIER;
   const maxCache = Math.max(100, hydratePoolSize * cacheMultiplier);
 
+  const expandedEntries = [];
+  let totalExpandedHeight = 0;
+  if (hasSonarrExpansions) {
+    for (let i = 0; i < total; i += 1) {
+      const row = state.rows[i];
+      const seriesKey = row.__sortarrSeriesKey || (row.__sortarrSeriesKey = getSonarrSeriesKeyFromRow(row));
+      if (!seriesKey || !sonarrExpansionState.expandedSeries.has(seriesKey)) continue;
+      const h = getCachedSeriesExpansionHeight(seriesKey);
+      expandedEntries.push({ index: i, height: h, seriesKey });
+      totalExpandedHeight += h;
+    }
+  }
+
+  const extraBeforeIndex = (index) => {
+    if (!expandedEntries.length || index <= 0) return 0;
+    let sum = 0;
+    for (let i = 0; i < expandedEntries.length; i += 1) {
+      const entry = expandedEntries[i];
+      if (entry.index >= index) break;
+      sum += entry.height;
+    }
+    return sum;
+  };
+
   let start = Math.floor(scrollTop / rowHeight) - state.overscan;
+  if (hasSonarrExpansions && expandedEntries.length) {
+    let estimate = Math.max(0, start);
+    for (let iter = 0; iter < 3; iter += 1) {
+      const adjusted = Math.floor(Math.max(0, scrollTop - extraBeforeIndex(estimate)) / rowHeight) - state.overscan;
+      const next = Math.max(0, adjusted);
+      if (next === estimate) break;
+      estimate = next;
+    }
+    start = estimate;
+  }
   if (start < 0) start = 0;
   let end = start + poolSize;
   if (end > total) end = total;
@@ -10878,19 +11599,20 @@ function renderVirtualWindow(state) {
   state.lastEnd = end;
   state.lastColVisVer = columnVisibilityVersion;
 
-  const topPx = start * rowHeight;
-  const bottomPx = (total - end) * rowHeight;
+  const topPx = (start * rowHeight) + extraBeforeIndex(start);
+  const bottomPx = ((total - end) * rowHeight) + (totalExpandedHeight - extraBeforeIndex(end));
 
   const topTd = state.topSpacer.firstElementChild;
   const bottomTd = state.bottomSpacer.firstElementChild;
-  if (topTd) topTd.style.height = `${topPx}px`;
-  if (bottomTd) bottomTd.style.height = `${bottomPx}px`;
+  if (topTd) topTd.style.height = `${Math.max(0, topPx)}px`;
+  if (bottomTd) bottomTd.style.height = `${Math.max(0, bottomPx)}px`;
 
   const frag = document.createDocumentFragment();
   frag.appendChild(state.topSpacer);
 
   const lazyRows = [];
   const lazySet = new Set();
+  const colCount = getTableColumnCount();
 
   for (let i = start; i < end; i += 1) {
     const row = state.rows[i];
@@ -10903,9 +11625,31 @@ function renderVirtualWindow(state) {
       tr.__sortarrRow = row;
     }
     syncRowWidthLock(tr);
+    let rowSeriesKey = "";
+    if (state.app === "sonarr") {
+      rowSeriesKey = tr.dataset.seriesKey || row.__sortarrSeriesKey || (row.__sortarrSeriesKey = getSonarrSeriesKeyFromRow(row));
+      const expanded = Boolean(rowSeriesKey && sonarrExpansionState.expandedSeries.has(rowSeriesKey));
+      tr.classList.toggle("series-expanded", expanded);
+      if (rowSeriesKey) {
+        tr.dataset.seriesKey = rowSeriesKey;
+      }
+      const expander = tr.querySelector("button.series-expander");
+      if (expander) {
+        expander.setAttribute("aria-expanded", expanded ? "true" : "false");
+        const icon = expander.querySelector("span");
+        if (icon) icon.textContent = expanded ? "-" : "+";
+      }
+    }
     if (tr && tr.dataset && tr.dataset.lazy === "1" && !lazySet.has(tr)) { lazySet.add(tr); lazyRows.push(tr); }
     frag.appendChild(tr);
     lruSet(state.rowCache, key, tr, maxCache);
+    if (state.app === "sonarr" && rowSeriesKey && sonarrExpansionState.expandedSeries.has(rowSeriesKey)) {
+      const childRow = getCachedSeriesChildRow(rowSeriesKey, colCount);
+      if (childRow) {
+        frag.appendChild(childRow);
+        requestAnimationFrame(() => cacheSeriesExpansionHeight(rowSeriesKey, childRow));
+      }
+    }
   }
 
   // Pre-warm and hydrate rows just outside the rendered window so they are ready before they appear.
@@ -10962,12 +11706,6 @@ function renderVirtualWindow(state) {
 function enableVirtualRows(rows, app, rowOptions, token, perf) {
   teardownVirtual(app);
   if (!tbody || !tableWrapEl) return false;
-
-  // Disable virtual rows for Sonarr when expansions are enabled or likely to be used heavily.
-  // Radarr is the primary target for now.
-  if (app === "sonarr") {
-    return false;
-  }
 
   const colCount = getTableColumnCount();
   const topSpacer = makeSpacerRow(colCount, "virtual-spacer-row virtual-spacer-row--top");
@@ -11058,7 +11796,7 @@ function enableVirtualRows(rows, app, rowOptions, token, perf) {
     perfOverlayState.lastRenderMs = perf.renderEnd && perf.renderStart ? (perf.renderEnd - perf.renderStart) : null;
   }
   finalizeRenderPerf(perf);
-  cacheColumnWidths(app);
+  if (!(rowOptions && rowOptions.skipWidthCacheUpdate === true)) cacheColumnWidths(app);
   applyColumnHeaderCaps();
   scheduleTitlePathWidthLock();
   scheduleTruncationTooltipUpdate();
@@ -11076,6 +11814,7 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
   }
   const perf = options ? options.perf : null;
   const holdWidthLock = options && options.holdWidthLock === true;
+  const skipWidthCacheUpdate = options && options.skipWidthCacheUpdate === true;
   const frameCheckEvery = app === "radarr"
     ? RADARR_RENDER_FRAME_CHECK_EVERY
     : RENDER_FRAME_CHECK_EVERY;
@@ -11097,6 +11836,7 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
   }
   updateColumnVisibility(frag);
   tbody.appendChild(frag);
+  markStatusReadyFromRows(index);
 
   if (index < rows.length) {
     requestAnimationFrame(() => renderBatch(rows, token, index, totalRows, totalAll, app, batchSize, options));
@@ -11127,12 +11867,12 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     scheduleTruncationTooltipUpdate();
     queueHydration(options.lazyRows, token, perf);
     maybeStabilizeRender(app, options);
-    cacheColumnWidths(app);
+    if (!skipWidthCacheUpdate) cacheColumnWidths(app);
     finalizeTableInteractionState(app);
     return;
   }
   finalizeRenderPerf(perf);
-  cacheColumnWidths(app);
+  if (!skipWidthCacheUpdate) cacheColumnWidths(app);
   if (!holdWidthLock) {
     unlockColumnWidths(token);
   }
@@ -11143,6 +11883,40 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
   finalizeTableInteractionState(app);
 }
 
+
+function renderZeroResultsState(totalCount) {
+  if (!tbody || !hasActiveFilters()) {
+    clearTable();
+    return;
+  }
+  const summary = [];
+  const chipTokens = String(chipQuery || "").split(/\s+/).filter(Boolean).map(formatFilterTokenLabel);
+  if (chipTokens.length) {
+    summary.push(`${t("chips", "chips")}: ${chipTokens.join(", ")}`);
+  }
+  const titleValue = String(titleFilter?.value || "").trim();
+  if (titleValue) summary.push(`${t("Title", "Title")}: ${titleValue}`);
+  const pathValue = String(pathFilter?.value || "").trim();
+  if (pathValue) summary.push(`${t("Path", "Path")}: ${pathValue}`);
+  const advancedValue = String(advancedFilter?.value || "").trim();
+  if (advancedEnabled && advancedValue) summary.push(`${t("Advanced", "Advanced")}: ${advancedValue}`);
+
+  const summaryHtml = summary.length
+    ? summary.map(item => `<li>${escapeHtml(item)}</li>`).join("")
+    : `<li>${escapeHtml(t("activeFiltersApplied", "Active filters applied"))}</li>`;
+
+  tbody.innerHTML = `
+    <tr class="table-empty-row">
+      <td colspan="99">
+        <div class="table-empty-state" role="status" aria-live="polite">
+          <div class="table-empty-title">${escapeHtml(t("noResultsCurrentFilters", "No rows match the current filters"))}</div>
+          <div class="table-empty-meta">${escapeHtml(t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: 0, total: totalCount }))}</div>
+          <ul class="table-empty-summary">${summaryHtml}</ul>
+          <button type="button" class="table-empty-clear-btn" data-role="clear-active-filters">${escapeHtml(t("clearActiveFiltersAction", "Clear active filters"))}</button>
+        </div>
+      </td>
+    </tr>`;
+}
 function render(data, options = {}) {
   const app = activeApp;
   if (app === "sonarr") {
@@ -11154,6 +11928,7 @@ function render(data, options = {}) {
   const isPrimaryData = data === dataByApp[app];
   const dataVersion = isPrimaryData ? dataVersionByApp[app] : 0;
   ensureNumericColumnWidths(app, data, dataVersion, isPrimaryData);
+  const skipWidthCacheUpdate = options.skipWidthCacheUpdate === true;
   let sorted = null;
   const sortCache = isPrimaryData ? sortCacheByApp[app] : null;
   if (sortCache &&
@@ -11179,22 +11954,24 @@ function render(data, options = {}) {
   const shouldBatch = allowBatch &&
     resolveRenderFlag("batch", app) &&
     sorted.length > batchMin;
-  const widthLockAllowed = tbody &&
-    resolveRenderFlag("widthLock", app) &&
-    (tbody.children.length || app === "radarr");
-  const hasWidthCache = columnWidthCacheVersionByApp[app] === columnVisibilityVersion &&
-    columnWidthCacheByApp[app].size > 0;
-  const shouldLock = widthLockAllowed &&
-    (shouldBatch || (app === "radarr" && hasWidthCache));
-  const holdWidthLock = shouldLock && app === "radarr";
-  const batchSize = sorted.length >= RENDER_BATCH_LARGE_MIN
-    ? RENDER_BATCH_SIZE_LARGE
-    : RENDER_BATCH_SIZE;
   const existingRow = tbody ? tbody.querySelector("tr") : null;
   const existingApp = existingRow?.dataset?.app || "";
   if (existingRow && existingApp && existingApp !== app) {
     clearTable();
   }
+  const hasWidthCache = columnWidthCacheVersionByApp[app] === columnVisibilityVersion &&
+    columnWidthCacheByApp[app].size > 0;
+  const tableReady = tableReadyByApp[app] === true;
+  const widthLockAllowed = tbody &&
+    resolveRenderFlag("widthLock", app) &&
+    (hasWidthCache || (tableReady && tbody.children.length));
+  const forceWidthLock = options.forceWidthLock === true;
+  const shouldLock = widthLockAllowed &&
+    (shouldBatch || hasWidthCache || forceWidthLock);
+  const holdWidthLock = shouldLock && (app === "radarr" || app === "sonarr");
+  const batchSize = sorted.length >= RENDER_BATCH_LARGE_MIN
+    ? RENDER_BATCH_SIZE_LARGE
+    : RENDER_BATCH_SIZE;
   const token = ++renderToken;
   const scrollAnchor = options.scrollAnchor || null;
   if (scrollAnchor) {
@@ -11242,6 +12019,7 @@ function render(data, options = {}) {
       lazyRows: [],
       perf,
       holdWidthLock,
+      skipWidthCacheUpdate,
     }
     : {
       visibleHeavyColumns,
@@ -11250,15 +12028,23 @@ function render(data, options = {}) {
       lazyRows: [],
       perf,
       holdWidthLock,
+      skipWidthCacheUpdate,
     };
   setBatching(shouldBatch);
 
-  const virtualizeRows = app === "radarr" &&
+  const virtualizeRows = !options.disableVirtualRows &&
     resolveRenderFlag("virtualRows", app) &&
-    (forceMobileVirtual || sorted.length >= VIRTUAL_MIN_ROWS);
+    (
+      app === "radarr"
+        ? (forceMobileVirtual || sorted.length >= VIRTUAL_MIN_ROWS)
+        : app === "sonarr"
+          ? sorted.length >= SONARR_VIRTUAL_MIN_ROWS
+          : false
+    );
   if (virtualizeRows) {
     const ok = enableVirtualRows(sorted, app, rowOptions, token, perf);
     if (ok) {
+      markStatusReadyFromRows(sorted.length);
       setStatus(
         t(
           "statusLoadedCounts",
@@ -11275,7 +12061,7 @@ function render(data, options = {}) {
   }
 
   if (!sorted.length) {
-    clearTable();
+    renderZeroResultsState(data.length);
     setBatching(false);
     setStatus(
       t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: 0, total: data.length })
@@ -11292,7 +12078,7 @@ function render(data, options = {}) {
       perf.renderEnd = perfNow();
     }
     finalizeRenderPerf(perf);
-    cacheColumnWidths(app);
+    if (!(rowOptions && rowOptions.skipWidthCacheUpdate === true)) cacheColumnWidths(app);
     if (!holdWidthLock) {
       unlockColumnWidths(token);
     }
@@ -11305,6 +12091,7 @@ function render(data, options = {}) {
   }
 
   if (!shouldBatch) {
+    markStatusReadyFromRows(sorted.length);
     const frag = document.createDocumentFragment();
     for (const row of sorted) {
       frag.appendChild(getRowElement(row, app, rowOptions));
@@ -11331,12 +12118,12 @@ function render(data, options = {}) {
       scheduleTruncationTooltipUpdate();
       queueHydration(rowOptions.lazyRows, token, perf);
       maybeStabilizeRender(app, options);
-      cacheColumnWidths(app);
+      if (!(rowOptions && rowOptions.skipWidthCacheUpdate === true)) cacheColumnWidths(app);
       finalizeTableInteractionState(app);
       return;
     }
     finalizeRenderPerf(perf);
-    cacheColumnWidths(app);
+    if (!(rowOptions && rowOptions.skipWidthCacheUpdate === true)) cacheColumnWidths(app);
     if (!holdWidthLock) {
       unlockColumnWidths(token);
     }
@@ -11400,11 +12187,11 @@ async function load(refresh, options = {}) {
   try {
     const label = refresh
       ? app === "sonarr"
-        ? I18N.fetchingNewSonarrData
-        : I18N.fetchingNewRadarrData
+        ? I18N.fetchingNewShowsData
+        : I18N.fetchingNewMoviesData
       : app === "sonarr"
-        ? I18N.loadingSonarrData
-        : I18N.loadingRadarrData;
+        ? I18N.loadingShowsData
+        : I18N.loadingMoviesData;
     const hasData = (dataByApp[app] || []).length > 0;
     if (app === activeApp && !background) {
       setLoading(true, label);
@@ -11431,6 +12218,7 @@ async function load(refresh, options = {}) {
     } else if (options.lite === false) {
       params.push("lite=0");
     }
+    params.push(...getPlexScopeParams(app));
     const url = params.length ? `${base}?${params.join("&")}` : base;
 
     const res = await fetch(apiUrl(url));
@@ -11441,6 +12229,7 @@ async function load(refresh, options = {}) {
 
     const warn = res.headers.get("X-Sortarr-Warn") || "";
     const noticeState = parseNoticeState(res.headers);
+    applyPlexScopeFromHeaders(app, res.headers);
 
     // If a newer request for this app is in flight, ignore this response
     if (myToken !== loadTokens[app]) return;
@@ -11456,6 +12245,8 @@ async function load(refresh, options = {}) {
     }
 
     const json = await res.json();
+    updatePlexLibraryScopeControl();
+    updateEffectiveSourcesLine();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
     if (app === activeApp) {
       clearTableSelection();
@@ -11535,7 +12326,10 @@ document.querySelectorAll("th[data-sort]").forEach(th => {
     updateSortIndicators();
     scheduleViewStateSave();
     requestAnimationFrame(() => {
-      render(dataByApp[activeApp] || []);
+      render(dataByApp[activeApp] || [], {
+        skipWidthCacheUpdate: true,
+        forceWidthLock: true,
+      });
     });
   });
 });
@@ -11544,11 +12338,34 @@ document.addEventListener("DOMContentLoaded", () => {
   tabSonarr?.addEventListener("click", () => setActiveTab("sonarr"));
   tabRadarr?.addEventListener("click", () => setActiveTab("radarr"));
   exportCsvBtn?.addEventListener("click", () => {
-    const url = activeApp === "sonarr" ? "/api/shows.csv" : "/api/movies.csv";
+    const base = activeApp === "sonarr" ? "/api/shows.csv" : "/api/movies.csv";
+    const params = getPlexScopeParams(activeApp);
+    const url = params.length ? `${base}?${params.join("&")}` : base;
     window.location.href = url;
   });
   requestAnimationFrame(loadColumnPrefs);
 });
+
+if (plexLibrarySelect) {
+  plexLibrarySelect.addEventListener("change", () => {
+    const selected = Array.from(plexLibrarySelect.selectedOptions || []).map(opt => opt.value);
+    setPlexSelectedForApp(activeApp, selected);
+    updateEffectiveSourcesLine();
+    updatePlexLibraryScopeControl();
+    load(false);
+    fetchStatus({ silent: true, lite: true });
+  });
+}
+
+if (plexLibraryAllBtn) {
+  plexLibraryAllBtn.addEventListener("click", () => {
+    setPlexSelectedForApp(activeApp, []);
+    updatePlexLibraryScopeControl();
+    updateEffectiveSourcesLine();
+    load(false);
+    fetchStatus({ silent: true, lite: true });
+  });
+}
 
 /* buttons */
 if (loadBtn) {
@@ -11569,10 +12386,10 @@ if (refreshSonarrBtn) {
   refreshSonarrBtn.addEventListener("click", async () => {
     refreshSonarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshSonarrBtn, configState.sonarrConfigured);
-    setStatus(t("refreshingSonarr", "Refreshing Sonarr..."));
+    setStatus(t("refreshingShows", "Refreshing Shows..."));
     try {
       await requestArrRefresh("sonarr");
-      setStatus(t("sonarrRefreshQueued", "Sonarr refresh queued."));
+      setStatus(t("showsRefreshQueued", "Shows refresh queued."));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
@@ -11585,10 +12402,10 @@ if (refreshRadarrBtn) {
   refreshRadarrBtn.addEventListener("click", async () => {
     refreshRadarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshRadarrBtn, configState.radarrConfigured);
-    setStatus(t("refreshingRadarr"));
+    setStatus(t("refreshingMovies", "Refreshing Movies..."));
     try {
       await requestArrRefresh("radarr");
-      setStatus(t("radarrRefreshQueued"));
+      setStatus(t("moviesRefreshQueued", "Movies refresh queued."));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
@@ -11758,6 +12575,7 @@ async function prefetch(app, refresh, options = {}) {
     } else if (options.lite === false) {
       params.push("lite=0");
     }
+    params.push(...getPlexScopeParams(app));
     const url = params.length ? `${base}?${params.join("&")}` : base;
     const res = await fetch(apiUrl(url));
     if (!res.ok) {
@@ -11766,6 +12584,7 @@ async function prefetch(app, refresh, options = {}) {
     }
     const warn = res.headers.get("X-Sortarr-Warn") || "";
     const noticeState = parseNoticeState(res.headers);
+    applyPlexScopeFromHeaders(app, res.headers);
     if (token !== prefetchTokens[app]) return;
     const existing = dataByApp[app] || [];
     if (background && noticeState.flags.has("tautulli_refresh") && existing.length && !hydrate) {
@@ -11777,6 +12596,8 @@ async function prefetch(app, refresh, options = {}) {
       return;
     }
     const json = await res.json();
+    updatePlexLibraryScopeControl();
+    updateEffectiveSourcesLine();
     applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
     if (app === activeApp) {
       clearTableSelection();
@@ -11884,7 +12705,7 @@ function setPlaybackProvider(provider) {
     ? "Jellystat"
     : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
-  playbackSupportsDiagnostics = playbackProvider === "tautulli";
+  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
   updatePlaybackLabels();
 }
 
@@ -11984,8 +12805,6 @@ if (advancedHelpBtn) {
   });
 }
 
-bindChipButtons();
-
   if (tbody) {
     tbody.addEventListener("mouseover", e => {
       const updated = updateSelectionFromPointer(e.target);
@@ -12001,6 +12820,14 @@ bindChipButtons();
   tbody.addEventListener("click", e => {
     if (tableWrapEl && !e.target.closest("input, textarea, select, [contenteditable]")) {
       tableWrapEl.focus({ preventScroll: true });
+    }
+    const clearFiltersBtn = e.target.closest('[data-role="clear-active-filters"]');
+    if (clearFiltersBtn) {
+      if (clearActiveFilters()) {
+        const scrollAnchor = captureTableScrollAnchor();
+        render(dataByApp[activeApp] || [], { scrollAnchor });
+      }
+      return;
     }
     const expandAllBtn = e.target.closest('[data-role="series-expand-all-seasons"]');
     if (expandAllBtn) {
@@ -12080,18 +12907,12 @@ bindChipButtons();
 }
 
 if (columnsBtn && columnsPanel) {
-  const setColumnsPanelHidden = hidden => {
-    columnsPanel.classList.toggle("hidden", hidden);
-    columnsPanel.setAttribute("aria-hidden", hidden ? "true" : "false");
-    columnsBtn.setAttribute("aria-expanded", hidden ? "false" : "true");
-  };
-
-  setColumnsPanelHidden(columnsPanel.classList.contains("hidden"));
+  setColumnsPanelHiddenState(columnsPanel.classList.contains("hidden"));
 
   columnsBtn.addEventListener("click", e => {
     e.stopPropagation();
     const nowHidden = !columnsPanel.classList.contains("hidden");
-    setColumnsPanelHidden(nowHidden);
+    setColumnsPanelHiddenState(nowHidden);
     if (!nowHidden) {
       closeAllCustomSelects();
     }
@@ -12109,12 +12930,12 @@ if (columnsBtn && columnsPanel) {
   document.addEventListener("click", e => {
     if (columnsPanel.classList.contains("hidden")) return;
     if (columnsPanel.contains(e.target) || columnsBtn.contains(e.target)) return;
-    setColumnsPanelHidden(true);
+    setColumnsPanelHiddenState(true);
   });
 
   document.addEventListener("keydown", e => {
     if (e.key === "Escape") {
-      setColumnsPanelHidden(true);
+      setColumnsPanelHiddenState(true);
     }
   });
 
@@ -12126,9 +12947,10 @@ if (columnsBtn && columnsPanel) {
     input.addEventListener("change", () => {
       const col = input.getAttribute("data-col");
       if (col) {
-        syncColumnInputs(col, input.checked);
+        syncColumnInputs(col, input.checked, activeApp);
       }
-      saveColumnPrefs();
+      saveColumnPrefs(activeApp);
+      scheduleViewStateSave(activeApp);
       markColumnVisibilityDirty();
       updateColumnVisibility();
       applyTitleWidth(activeApp);
@@ -12138,8 +12960,9 @@ if (columnsBtn && columnsPanel) {
   columnsPanel.querySelectorAll("input[data-col-group]").forEach(input => {
     input.addEventListener("change", () => {
       const group = input.getAttribute("data-col-group");
-      setColumnGroup(group, input.checked);
-      saveColumnPrefs();
+      setColumnGroup(group, input.checked, activeApp);
+      saveColumnPrefs(activeApp);
+      scheduleViewStateSave(activeApp);
       markColumnVisibilityDirty();
       updateColumnVisibility();
       applyTitleWidth(activeApp);
@@ -12357,10 +13180,25 @@ async function loadConfig() {
     configState.playbackConfigured = Boolean(
       cfg.playback_configured ?? cfg.tautulli_configured
     );
+    configState.plexConfigured = Boolean(cfg.plex_configured);
+    configState.historySourcesAvailable = Array.isArray(cfg.history_sources_available)
+      ? cfg.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
+      : [];
+    const plexLibraries = (cfg.plex_libraries && typeof cfg.plex_libraries === "object")
+      ? cfg.plex_libraries
+      : {};
+    setPlexAvailableForApp("sonarr", plexLibraries.sonarr || []);
+    setPlexAvailableForApp("radarr", plexLibraries.radarr || []);
+    if (plexInsightsBtn) {
+      plexInsightsBtn.classList.toggle("hidden", !configState.plexConfigured);
+    }
+    updateMismatchCenterButtonVisibility();
 
     buildInstanceChips();
     updateFilterBuilderOptions();
     setTautulliEnabled(configState.playbackConfigured, configState.playbackProvider);
+    updatePlexLibraryScopeControl();
+    updateEffectiveSourcesLine();
     updatePrimaryRefreshButton();
   } catch (e) {
     console.warn("config load failed", e);
@@ -12389,6 +13227,7 @@ let historyLockedPaddingRight = "";
 let historyScrollLocked = false;
 
 function lockBackgroundScrollForHistory() {
+  if (IS_ANDROID) return;
   if (historyScrollLocked) return;
   historyScrollLocked = true;
 
@@ -12656,7 +13495,841 @@ function closeHistoryDrawer() {
   document.body.classList.remove("history-open");
 }
 
+// Plex insights drawer state and helpers
+const plexInsightsState = {
+  open: false,
+  loading: false,
+  data: null,
+  selectedHub: 0,
+  sectionId: "",
+  sections: [],
+  matchHealth: null,
+  live: false,
+  liveStatus: "",
+};
+let plexOverlayEl = null;
+let plexDrawerEl = null;
+let plexBodyEl = null;
+let plexMetaEl = null;
+let plexHubChipsEl = null;
+let plexHubItemsEl = null;
+let plexSectionChipsEl = null;
+let plexActivitiesEl = null;
+let plexButlerEl = null;
+let plexMatchEl = null;
+let plexRefreshBtn = null;
+let plexLiveBtn = null;
+let plexLiveSource = null;
+let plexLiveRefreshTimer = null;
 
+function ensurePlexOverlay() {
+  if (plexOverlayEl && plexDrawerEl) return;
+  plexOverlayEl = document.createElement("div");
+  plexOverlayEl.className = "plex-overlay hidden";
+  plexOverlayEl.innerHTML = `
+    <div class="plex-scrim" data-plex-close="1"></div>
+    <div class="plex-drawer glass-panel">
+      <div class="plex-header">
+        <div class="plex-title">${escapeHtml(t("Plex Insights"))}</div>
+        <div class="plex-actions">
+          <button class="plex-btn" type="button" data-role="plex-refresh">${escapeHtml(t("Refresh"))}</button>
+          <button class="plex-btn plex-live-toggle" type="button" data-role="plex-live">${escapeHtml(t("Live"))}</button>
+          <button class="plex-close" type="button" aria-label="${escapeHtml(t("Close"))}" data-plex-close="1">\u00d7</button>
+        </div>
+      </div>
+      <div class="plex-meta" data-role="plex-meta"></div>
+      <div class="plex-body" data-role="plex-body">
+        <div class="plex-section">
+          <div class="plex-section-title">${escapeHtml(t("Hubs"))}</div>
+          <div class="plex-hub-filters">
+            <span class="plex-label">${escapeHtml(t("Library"))}</span>
+            <div class="plex-section-chips" data-role="plex-section-chips"></div>
+          </div>
+          <div class="plex-hub-chips" data-role="plex-hub-chips"></div>
+          <div class="plex-hub-items" data-role="plex-hub-items"></div>
+        </div>
+        <div class="plex-section">
+          <div class="plex-section-title">${escapeHtml(t("Match Health"))}</div>
+          <div class="plex-match" data-role="plex-match"></div>
+        </div>
+        <div class="plex-section">
+          <div class="plex-section-title">${escapeHtml(t("Activities"))}</div>
+          <div class="plex-activities" data-role="plex-activities"></div>
+        </div>
+        <div class="plex-section">
+          <div class="plex-section-title">${escapeHtml(t("Butler"))}</div>
+          <div class="plex-butler" data-role="plex-butler"></div>
+        </div>
+      </div>
+    </div>
+    `;
+  document.body.appendChild(plexOverlayEl);
+  plexDrawerEl = plexOverlayEl.querySelector(".plex-drawer");
+  plexBodyEl = plexOverlayEl.querySelector('[data-role="plex-body"]');
+  plexMetaEl = plexOverlayEl.querySelector('[data-role="plex-meta"]');
+  plexHubChipsEl = plexOverlayEl.querySelector('[data-role="plex-hub-chips"]');
+  plexHubItemsEl = plexOverlayEl.querySelector('[data-role="plex-hub-items"]');
+  plexSectionChipsEl = plexOverlayEl.querySelector('[data-role="plex-section-chips"]');
+  plexActivitiesEl = plexOverlayEl.querySelector('[data-role="plex-activities"]');
+  plexButlerEl = plexOverlayEl.querySelector('[data-role="plex-butler"]');
+  plexMatchEl = plexOverlayEl.querySelector('[data-role="plex-match"]');
+  plexRefreshBtn = plexOverlayEl.querySelector('[data-role="plex-refresh"]');
+  plexLiveBtn = plexOverlayEl.querySelector('[data-role="plex-live"]');
+}
+
+function closePlexOverlay() {
+  plexInsightsState.open = false;
+  if (plexOverlayEl) plexOverlayEl.classList.add("hidden");
+  stopPlexLive();
+}
+
+function formatEpochAge(ts) {
+  if (!ts) return "";
+  const ageSeconds = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  return tp("progressAgeAgo", { age: formatAgeShort(ageSeconds) }, "%(age)s ago");
+}
+
+function updatePlexMeta(text, warn = false) {
+  if (!plexMetaEl) return;
+  plexMetaEl.textContent = text || "";
+  plexMetaEl.classList.toggle("plex-meta--warn", Boolean(warn));
+}
+
+function getPlexSectionLabel() {
+  const sectionId = plexInsightsState.sectionId;
+  if (!sectionId) return t("All Libraries");
+  const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
+  const match = sections.find(section => String(section.id) === String(sectionId));
+  if (match && match.title) return match.title;
+  return t("All Libraries");
+}
+
+function renderPlexSections(sections) {
+  if (!plexSectionChipsEl) return;
+  const list = Array.isArray(sections) ? sections : [];
+  plexInsightsState.sections = list;
+  const validIds = new Set(list.map(section => String(section.id || "")));
+  if (plexInsightsState.sectionId && !validIds.has(String(plexInsightsState.sectionId))) {
+    plexInsightsState.sectionId = "";
+  }
+  const chips = [];
+  const allActive = !plexInsightsState.sectionId;
+  chips.push(
+    `<button class="plex-chip${allActive ? " plex-chip--active" : ""}" type="button" data-plex-section="">${escapeHtml(t("All Libraries"))}</button>`
+  );
+  for (const section of list) {
+    const id = String(section.id || "");
+    if (!id) continue;
+    const title = escapeHtml(section.title || t("Untitled", "Untitled"));
+    const active = String(plexInsightsState.sectionId) === id ? " plex-chip--active" : "";
+    chips.push(
+      `<button class="plex-chip${active}" type="button" data-plex-section="${escapeHtml(id)}">${title}</button>`
+    );
+  }
+  plexSectionChipsEl.innerHTML = chips.join("");
+}
+
+function renderPlexHubChips(hubs) {
+  if (!plexHubChipsEl) return;
+  if (!Array.isArray(hubs) || !hubs.length) {
+    plexHubChipsEl.innerHTML = `<span class="plex-empty">${escapeHtml(t("No hubs available"))}</span>`;
+    return;
+  }
+  if (plexInsightsState.selectedHub >= hubs.length) {
+    plexInsightsState.selectedHub = 0;
+  }
+  const chips = hubs.map((hub, idx) => {
+    const title = escapeHtml(hub.title || t("Untitled", "Untitled"));
+    const active = idx === plexInsightsState.selectedHub ? " plex-chip--active" : "";
+    return `<button class="plex-chip${active}" type="button" data-plex-hub="${idx}">${title}</button>`;
+  });
+  plexHubChipsEl.innerHTML = chips.join("");
+}
+
+function renderPlexHubItems(hubs) {
+  if (!plexHubItemsEl) return;
+  if (!Array.isArray(hubs) || !hubs.length) {
+    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No hub items"))}</div>`;
+    return;
+  }
+  const hub = hubs[Math.max(0, Math.min(plexInsightsState.selectedHub, hubs.length - 1))];
+  const items = Array.isArray(hub?.items) ? hub.items : [];
+  if (!items.length) {
+    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No hub items"))}</div>`;
+    return;
+  }
+  const rows = items.map(item => {
+    const title = escapeHtml(item.title || "");
+    const year = item.year ? `· ${item.year}` : "";
+    const type = item.type ? `· ${escapeHtml(item.type)}` : "";
+    const viewed = item.last_viewed_at ? `· ${formatEpochAge(item.last_viewed_at)}` : "";
+    const watched = item.view_count ? `· ${item.view_count}x` : "";
+    return `
+      <div class="plex-hub-item">
+        <div class="plex-hub-title">${title}</div>
+        <div class="plex-hub-meta">${[year, type, watched, viewed].filter(Boolean).join(" ")}</div>
+      </div>
+    `;
+  });
+  plexHubItemsEl.innerHTML = rows.join("");
+}
+
+function renderPlexActivities(activities) {
+  if (!plexActivitiesEl) return;
+  if (!Array.isArray(activities) || !activities.length) {
+    plexActivitiesEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No active tasks"))}</div>`;
+    return;
+  }
+  plexActivitiesEl.innerHTML = activities.map(activity => {
+    const title = escapeHtml(activity.title || "");
+    const subtitle = activity.subtitle ? `<div class="plex-sub">${escapeHtml(activity.subtitle)}</div>` : "";
+    let progress = Number(activity.progress || 0);
+    if (progress > 0 && progress <= 1) progress = Math.round(progress * 100);
+    else progress = Math.round(progress);
+    const progressLabel = progress ? `${progress}%` : "";
+    const state = activity.state ? escapeHtml(activity.state) : "";
+    return `
+      <div class="plex-task">
+        <div class="plex-task-row">
+          <div class="plex-task-title">${title}</div>
+          <div class="plex-task-meta">${[progressLabel, state].filter(Boolean).join(" · ")}</div>
+        </div>
+        ${subtitle}
+      </div>
+    `;
+  }).join("");
+}
+
+function renderPlexButler(tasks) {
+  if (!plexButlerEl) return;
+  if (!Array.isArray(tasks) || !tasks.length) {
+    plexButlerEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No butler tasks"))}</div>`;
+    return;
+  }
+  plexButlerEl.innerHTML = tasks.map(task => {
+    const title = escapeHtml(task.title || "");
+    const schedule = task.schedule ? escapeHtml(task.schedule) : "";
+    const status = task.status ? escapeHtml(task.status) : "";
+    const desc = task.description ? `<div class="plex-sub">${escapeHtml(task.description)}</div>` : "";
+    const meta = [schedule, status].filter(Boolean).join(" · ");
+    return `
+      <div class="plex-task">
+        <div class="plex-task-row">
+          <div class="plex-task-title">${title}</div>
+          <div class="plex-task-meta">${meta}</div>
+        </div>
+        ${desc}
+      </div>
+    `;
+  }).join("");
+}
+
+function formatMatchValue(value, total, withPercent = false) {
+  const count = Number(value || 0);
+  if (!withPercent || !total) return `${count}`;
+  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+  return `${count} (${pct}%)`;
+}
+
+function renderPlexMatchHealth(matchHealth) {
+  if (!plexMatchEl) return;
+  if (!matchHealth || !matchHealth.apps) {
+    plexMatchEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No match data"))}</div>`;
+    return;
+  }
+  const apps = ["sonarr", "radarr"];
+  const cards = apps.map(app => {
+    const label = app === "sonarr" ? t("Sonarr") : t("Radarr");
+    const appHealth = matchHealth.apps?.[app] || {};
+    const counts = appHealth.counts || {};
+    const total = Number(counts.total || 0);
+    const buckets = Array.isArray(appHealth.buckets) ? appHealth.buckets : [];
+    const reasons = Array.isArray(appHealth.reasons) ? appHealth.reasons : [];
+    if (!total) {
+      return `
+        <div class="plex-match-card">
+          <div class="plex-match-title">${escapeHtml(label)}</div>
+          <div class="plex-empty">${escapeHtml(t("No match data"))}</div>
+        </div>
+      `;
+    }
+    const grid = [
+      [t("Matched"), formatMatchValue(counts.matched, total, true)],
+      [t("Unmatched"), formatMatchValue(counts.unmatched, total)],
+      [t("Skipped"), formatMatchValue(counts.skipped, total)],
+      [t("Unavailable"), formatMatchValue(counts.unavailable, total)],
+      [t("Pending"), formatMatchValue(counts.pending, total)],
+    ]
+      .map(row => `<div>${escapeHtml(row[0])}</div><div>${escapeHtml(row[1])}</div>`)
+      .join("");
+    const bucketText = buckets.map(item => `${item.label} (${item.count})`).join(", ");
+    const reasonText = reasons.map(item => `${item.label} (${item.count})`).join(", ");
+    const bucketLine = bucketText
+      ? `<div class="plex-match-line"><span class="plex-match-label">${escapeHtml(t("Matched by"))}</span>${escapeHtml(bucketText)}</div>`
+      : "";
+    const reasonLine = reasonText
+      ? `<div class="plex-match-line"><span class="plex-match-label">${escapeHtml(t("Top reasons"))}</span>${escapeHtml(reasonText)}</div>`
+      : "";
+    return `
+      <div class="plex-match-card">
+        <div class="plex-match-title">${escapeHtml(label)}</div>
+        <div class="plex-match-grid">${grid}</div>
+        ${bucketLine}
+        ${reasonLine}
+      </div>
+    `;
+  });
+  plexMatchEl.innerHTML = cards.join("") || `<div class="plex-empty">${escapeHtml(t("No match data"))}</div>`;
+}
+
+function renderPlexInsights() {
+  if (!plexOverlayEl) return;
+  const data = plexInsightsState.data || {};
+  renderPlexSections(data.sections || []);
+  renderPlexHubChips(data.hubs || []);
+  renderPlexHubItems(data.hubs || []);
+  renderPlexMatchHealth(data.match_health || {});
+  renderPlexActivities(data.activities || []);
+  renderPlexButler(data.butler || []);
+}
+
+function updatePlexLiveButton() {
+  if (!plexLiveBtn) return;
+  plexLiveBtn.classList.toggle("is-active", plexInsightsState.live);
+  plexLiveBtn.textContent = plexInsightsState.live ? t("Live on") : t("Live");
+  if (plexInsightsState.liveStatus) {
+    plexLiveBtn.title = plexInsightsState.liveStatus;
+  } else {
+    plexLiveBtn.removeAttribute("title");
+  }
+}
+
+function schedulePlexInsightsRefresh() {
+  if (!plexInsightsState.open) return;
+  if (plexLiveRefreshTimer) return;
+  plexLiveRefreshTimer = setTimeout(() => {
+    plexLiveRefreshTimer = null;
+    fetchPlexInsights({ refresh: true, silent: true });
+  }, 1500);
+}
+
+function startPlexLive() {
+  if (plexLiveSource) return;
+  if (!window.EventSource) {
+    plexInsightsState.liveStatus = t("Live unavailable");
+    updatePlexLiveButton();
+    return;
+  }
+  plexInsightsState.live = true;
+  plexInsightsState.liveStatus = "";
+  updatePlexLiveButton();
+  plexLiveSource = new EventSource(apiUrl("/api/plex/events"));
+  plexLiveSource.onmessage = () => {
+    schedulePlexInsightsRefresh();
+  };
+  plexLiveSource.onerror = () => {
+    plexInsightsState.liveStatus = t("Live connection unstable");
+    updatePlexLiveButton();
+  };
+}
+
+function stopPlexLive() {
+  plexInsightsState.live = false;
+  plexInsightsState.liveStatus = "";
+  if (plexLiveSource) {
+    plexLiveSource.close();
+    plexLiveSource = null;
+  }
+  if (plexLiveRefreshTimer) {
+    clearTimeout(plexLiveRefreshTimer);
+    plexLiveRefreshTimer = null;
+  }
+  updatePlexLiveButton();
+}
+
+async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
+  if (!configState.plexConfigured) return;
+  ensurePlexOverlay();
+  if (!silent) updatePlexMeta(t("Fetching Plex insights..."));
+  plexInsightsState.loading = true;
+  try {
+    const params = new URLSearchParams();
+    params.set("hub_count", "6");
+    params.set("item_count", "8");
+    params.set("include", "hubs,activities,butler,sections,match_health");
+    if (plexInsightsState.sectionId) params.set("section_id", plexInsightsState.sectionId);
+    if (refresh) params.set("refresh", "1");
+    const res = await fetch(apiUrl(`/api/plex/insights?${params.toString()}`));
+    if (!res.ok) {
+      throw new Error(await res.text());
+    }
+    const payload = await res.json();
+    plexInsightsState.data = payload || {};
+    plexInsightsState.loading = false;
+    renderPlexInsights();
+    const fetchedAt = payload?.fetched_at || payload?.cache_ts || 0;
+    const sectionLabel = getPlexSectionLabel();
+    const metaBits = [];
+    if (fetchedAt) {
+      metaBits.push(`${t("Updated")} ${formatEpochAge(fetchedAt)}`);
+    }
+    if (sectionLabel) {
+      metaBits.push(`${t("Library")}: ${sectionLabel}`);
+    }
+    updatePlexMeta(metaBits.join(" · "));
+  } catch (err) {
+    plexInsightsState.loading = false;
+    updatePlexMeta(t("Plex insights unavailable."), true);
+  }
+}
+
+function openPlexInsights() {
+  if (!configState.plexConfigured) return;
+  ensurePlexOverlay();
+  plexInsightsState.open = true;
+  if (plexOverlayEl) plexOverlayEl.classList.remove("hidden");
+  if (!plexInsightsState.data) {
+    fetchPlexInsights({ refresh: true });
+  } else {
+    renderPlexInsights();
+  }
+}
+
+
+const mismatchCenterState = {
+  open: false,
+  loading: false,
+  dataByApp: { sonarr: null, radarr: null },
+  filters: {
+    provider: "any",
+    status: "any",
+    category: "any",
+    groupBy: "none",
+    search: "",
+  },
+};
+
+let mismatchOverlayEl = null;
+let mismatchDrawerEl = null;
+let mismatchBodyEl = null;
+let mismatchMetaEl = null;
+let mismatchSummaryEl = null;
+let mismatchProviderFilterEl = null;
+let mismatchStatusFilterEl = null;
+let mismatchCategoryFilterEl = null;
+let mismatchGroupByEl = null;
+let mismatchSearchEl = null;
+let mismatchRefreshBtn = null;
+let mismatchExportBtn = null;
+
+function ensureMismatchCenterOverlay() {
+  if (mismatchOverlayEl && mismatchDrawerEl) return;
+  mismatchOverlayEl = document.createElement("div");
+  mismatchOverlayEl.className = "mismatch-overlay hidden";
+  mismatchOverlayEl.innerHTML = `
+    <div class="mismatch-drawer" role="dialog" aria-modal="true" aria-label="${escapeHtml(t("mismatchCenterTitle", "Mismatch Center"))}">
+      <div class="mismatch-header">
+        <div>
+          <div class="mismatch-title">${escapeHtml(t("mismatchCenterTitle", "Mismatch Center"))}</div>
+          <div class="mismatch-meta" data-role="mismatch-meta"></div>
+        </div>
+        <div class="mismatch-actions">
+          <button type="button" data-role="mismatch-refresh">${escapeHtml(t("Refresh", "Refresh"))}</button>
+          <button type="button" data-role="mismatch-export">${escapeHtml(t("Export CSV", "Export CSV"))}</button>
+          <button type="button" data-mismatch-close>${escapeHtml(t("Close", "Close"))}</button>
+        </div>
+      </div>
+      <div class="mismatch-controls">
+        <label>${escapeHtml(t("Provider", "Provider"))}
+          <select data-role="mismatch-provider">
+            <option value="any">${escapeHtml(t("All", "All"))}</option>
+          </select>
+        </label>
+        <label>${escapeHtml(t("Status", "Status"))}
+          <select data-role="mismatch-status">
+            <option value="any">${escapeHtml(t("All", "All"))}</option>
+            <option value="unmatched">${escapeHtml(t("Unmatched", "Unmatched"))}</option>
+            <option value="skipped">${escapeHtml(t("Skipped", "Skipped"))}</option>
+            <option value="unavailable">${escapeHtml(t("Unavailable", "Unavailable"))}</option>
+            <option value="matched">${escapeHtml(t("Matched", "Matched"))}</option>
+          </select>
+        </label>
+        <label>${escapeHtml(t("Category", "Category"))}
+          <select data-role="mismatch-category">
+            <option value="any">${escapeHtml(t("All", "All"))}</option>
+            <option value="provider_conflict">${escapeHtml(t("Provider conflict", "Provider conflict"))}</option>
+            <option value="unmatched_all">${escapeHtml(t("Unmatched all", "Unmatched all"))}</option>
+            <option value="skipped_all">${escapeHtml(t("Skipped all", "Skipped all"))}</option>
+            <option value="unavailable_all">${escapeHtml(t("Unavailable all", "Unavailable all"))}</option>
+          </select>
+        </label>
+        <label>${escapeHtml(t("Group", "Group"))}
+          <select data-role="mismatch-group-by">
+            <option value="none">${escapeHtml(t("None", "None"))}</option>
+            <option value="provider">${escapeHtml(t("Provider", "Provider"))}</option>
+            <option value="status">${escapeHtml(t("Status", "Status"))}</option>
+            <option value="reason">${escapeHtml(t("Reason", "Reason"))}</option>
+            <option value="category">${escapeHtml(t("Category", "Category"))}</option>
+          </select>
+        </label>
+        <label class="mismatch-search-wrap">${escapeHtml(t("Search", "Search"))}
+          <input data-role="mismatch-search" type="search" placeholder="${escapeHtml(t("Search mismatches", "Search mismatches"))}" />
+        </label>
+      </div>
+      <div class="mismatch-summary" data-role="mismatch-summary"></div>
+      <div class="mismatch-body" data-role="mismatch-body"></div>
+    </div>
+  `;
+  document.body.appendChild(mismatchOverlayEl);
+  mismatchDrawerEl = mismatchOverlayEl.querySelector(".mismatch-drawer");
+  mismatchBodyEl = mismatchOverlayEl.querySelector('[data-role="mismatch-body"]');
+  mismatchMetaEl = mismatchOverlayEl.querySelector('[data-role="mismatch-meta"]');
+  mismatchSummaryEl = mismatchOverlayEl.querySelector('[data-role="mismatch-summary"]');
+  mismatchProviderFilterEl = mismatchOverlayEl.querySelector('[data-role="mismatch-provider"]');
+  mismatchStatusFilterEl = mismatchOverlayEl.querySelector('[data-role="mismatch-status"]');
+  mismatchCategoryFilterEl = mismatchOverlayEl.querySelector('[data-role="mismatch-category"]');
+  mismatchGroupByEl = mismatchOverlayEl.querySelector('[data-role="mismatch-group-by"]');
+  mismatchSearchEl = mismatchOverlayEl.querySelector('[data-role="mismatch-search"]');
+  mismatchRefreshBtn = mismatchOverlayEl.querySelector('[data-role="mismatch-refresh"]');
+  mismatchExportBtn = mismatchOverlayEl.querySelector('[data-role="mismatch-export"]');
+
+  [mismatchProviderFilterEl, mismatchStatusFilterEl, mismatchCategoryFilterEl, mismatchGroupByEl]
+    .filter(Boolean)
+    .forEach(selectEl => initCustomSelect(selectEl));
+
+  const onFilterChange = () => {
+    mismatchCenterState.filters.provider = mismatchProviderFilterEl?.value || "any";
+    mismatchCenterState.filters.status = mismatchStatusFilterEl?.value || "any";
+    mismatchCenterState.filters.category = mismatchCategoryFilterEl?.value || "any";
+    mismatchCenterState.filters.groupBy = mismatchGroupByEl?.value || "none";
+    mismatchCenterState.filters.search = mismatchSearchEl?.value || "";
+    renderMismatchCenter();
+  };
+
+  mismatchProviderFilterEl?.addEventListener("change", onFilterChange);
+  mismatchStatusFilterEl?.addEventListener("change", onFilterChange);
+  mismatchCategoryFilterEl?.addEventListener("change", onFilterChange);
+  mismatchGroupByEl?.addEventListener("change", onFilterChange);
+  mismatchSearchEl?.addEventListener("input", onFilterChange);
+
+  mismatchOverlayEl.addEventListener("click", event => {
+    if (event.target === mismatchOverlayEl) {
+      closeMismatchCenter();
+    }
+  });
+}
+
+function mismatchProviderLabel(provider) {
+  if (provider === "tautulli") return "Tautulli";
+  if (provider === "plex") return "Plex";
+  if (provider === "jellystat") return "Jellystat";
+  return String(provider || "");
+}
+
+function mismatchCategoryLabel(category) {
+  const key = String(category || "").trim().toLowerCase();
+  if (key === "provider_conflict") return t("Provider conflict", "Provider conflict");
+  if (key === "unmatched_all") return t("Unmatched all", "Unmatched all");
+  if (key === "skipped_all") return t("Skipped all", "Skipped all");
+  if (key === "unavailable_all") return t("Unavailable all", "Unavailable all");
+  return key || t("Unknown", "Unknown");
+}
+
+function mismatchStatusClass(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (key === "matched") return "is-matched";
+  if (key === "unmatched") return "is-unmatched";
+  if (key === "skipped") return "is-skipped";
+  return "is-unavailable";
+}
+
+function mismatchStatusMatchesFilter(row, providerFilter, statusFilter) {
+  if (statusFilter === "any") return true;
+  const providers = row?.providers || {};
+  if (providerFilter !== "any") {
+    const status = String(providers[providerFilter]?.status || "").trim().toLowerCase();
+    return status === statusFilter;
+  }
+  return Object.values(providers).some(entry => String(entry?.status || "").trim().toLowerCase() === statusFilter);
+}
+
+function mismatchRowSearchText(row) {
+  const fields = [
+    row?.title,
+    row?.year,
+    row?.instance_name,
+    row?.instance_id,
+    row?.path,
+    row?.mismatch_reason,
+    row?.mismatch_category,
+  ];
+  const providers = row?.providers || {};
+  Object.entries(providers).forEach(([provider, value]) => {
+    fields.push(provider);
+    fields.push(value?.status || "");
+    fields.push(value?.reason || "");
+  });
+  return fields.map(value => String(value || "").toLowerCase()).join(" ");
+}
+
+function mismatchGroupKey(row, groupBy, providerFilter) {
+  if (groupBy === "provider") {
+    const providers = row?.providers || {};
+    const keys = providerFilter === "any"
+      ? Object.keys(providers)
+      : [providerFilter];
+    for (const provider of keys) {
+      const status = String(providers?.[provider]?.status || "").trim().toLowerCase();
+      if (status && status !== "matched") {
+        return mismatchProviderLabel(provider);
+      }
+    }
+    return t("Matched", "Matched");
+  }
+  if (groupBy === "status") {
+    const providers = row?.providers || {};
+    const keys = providerFilter === "any"
+      ? Object.keys(providers)
+      : [providerFilter];
+    for (const provider of keys) {
+      const status = String(providers?.[provider]?.status || "").trim().toLowerCase();
+      if (status && status !== "matched") {
+        return status;
+      }
+    }
+    return "matched";
+  }
+  if (groupBy === "reason") {
+    return row?.mismatch_reason || t("Unknown", "Unknown");
+  }
+  if (groupBy === "category") {
+    return mismatchCategoryLabel(row?.mismatch_category || "");
+  }
+  return "";
+}
+
+function getFilteredMismatchRows(data) {
+  const rows = Array.isArray(data?.rows) ? data.rows : [];
+  const providerFilter = mismatchCenterState.filters.provider || "any";
+  const statusFilter = mismatchCenterState.filters.status || "any";
+  const categoryFilter = mismatchCenterState.filters.category || "any";
+  const searchFilter = String(mismatchCenterState.filters.search || "").trim().toLowerCase();
+  return rows.filter(row => {
+    if (categoryFilter !== "any" && String(row?.mismatch_category || "") !== categoryFilter) {
+      return false;
+    }
+    if (!mismatchStatusMatchesFilter(row, providerFilter, statusFilter)) {
+      return false;
+    }
+    if (providerFilter !== "any" && !row?.providers?.[providerFilter]) {
+      return false;
+    }
+    if (searchFilter) {
+      const haystack = mismatchRowSearchText(row);
+      if (!haystack.includes(searchFilter)) return false;
+    }
+    return true;
+  });
+}
+
+function populateMismatchProviderFilter(data) {
+  if (!mismatchProviderFilterEl) return;
+  const providers = Array.isArray(data?.providers) ? data.providers : [];
+  const previous = mismatchCenterState.filters.provider || "any";
+  const options = [`<option value="any">${escapeHtml(t("All", "All"))}</option>`];
+  providers.forEach(provider => {
+    const id = String(provider?.provider || "").trim().toLowerCase();
+    if (!id) return;
+    options.push(`<option value="${escapeHtml(id)}">${escapeHtml(provider.label || mismatchProviderLabel(id))}</option>`);
+  });
+  mismatchProviderFilterEl.innerHTML = options.join("");
+  mismatchProviderFilterEl.value = options.some(item => item.includes(`value="${previous}"`)) ? previous : "any";
+  mismatchCenterState.filters.provider = mismatchProviderFilterEl.value || "any";
+  updateCustomSelect(mismatchProviderFilterEl);
+}
+
+function renderMismatchRows(rows, data) {
+  if (!mismatchBodyEl) return;
+  if (!rows.length) {
+    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(t("No mismatch rows found.", "No mismatch rows found."))}</div>`;
+    return;
+  }
+
+  const groupBy = mismatchCenterState.filters.groupBy || "none";
+  const providerFilter = mismatchCenterState.filters.provider || "any";
+  const groups = new Map();
+  if (groupBy === "none") {
+    groups.set("", rows);
+  } else {
+    rows.forEach(row => {
+      const key = mismatchGroupKey(row, groupBy, providerFilter);
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+  }
+
+  const providerOrder = (Array.isArray(data?.providers) ? data.providers : [])
+    .map(item => String(item?.provider || "").trim().toLowerCase())
+    .filter(Boolean);
+
+  const html = [];
+  for (const [groupName, groupRows] of groups.entries()) {
+    if (groupBy !== "none") {
+      html.push(`<div class="mismatch-group-title">${escapeHtml(groupName || t("Other", "Other"))} <span>${groupRows.length}</span></div>`);
+    }
+    html.push('<div class="mismatch-table-wrap"><table class="mismatch-table"><thead><tr><th>' +
+      escapeHtml(t("Title", "Title")) + '</th><th>' +
+      escapeHtml(t("Instance", "Instance")) + '</th><th>' +
+      escapeHtml(t("Category", "Category")) + '</th><th>' +
+      escapeHtml(t("Reason", "Reason")) + '</th><th>' +
+      escapeHtml(t("Providers", "Providers")) +
+      '</th></tr></thead><tbody>');
+
+    groupRows.forEach(row => {
+      const providerCells = [];
+      const providers = row?.providers || {};
+      const ordered = providerOrder.length ? providerOrder : Object.keys(providers);
+      ordered.forEach(provider => {
+        if (providerFilter !== "any" && provider !== providerFilter) return;
+        const entry = providers[provider];
+        if (!entry) return;
+        const status = String(entry.status || "").trim().toLowerCase() || "unavailable";
+        const reason = String(entry.reason || "");
+        providerCells.push(`<div class="mismatch-provider-row ${mismatchStatusClass(status)}"><span class="mismatch-provider-name">${escapeHtml(mismatchProviderLabel(provider))}</span><span class="mismatch-provider-status">${escapeHtml(status)}</span><span class="mismatch-provider-reason">${escapeHtml(reason)}</span></div>`);
+      });
+      html.push(`<tr>
+        <td>
+          <div class="mismatch-title-cell">${escapeHtml(row.title || "")}</div>
+          <div class="mismatch-sub muted">${escapeHtml(row.year || "")}${row.path ? " • " + escapeHtml(row.path) : ""}</div>
+        </td>
+        <td>${escapeHtml(row.instance_name || row.instance_id || "")}</td>
+        <td><span class="mismatch-category-pill">${escapeHtml(mismatchCategoryLabel(row.mismatch_category || ""))}</span></td>
+        <td>${escapeHtml(row.mismatch_reason || "")}</td>
+        <td>${providerCells.join("")}</td>
+      </tr>`);
+    });
+
+    html.push('</tbody></table></div>');
+  }
+
+  mismatchBodyEl.innerHTML = html.join("");
+}
+
+function renderMismatchCenter() {
+  if (!mismatchOverlayEl || !mismatchBodyEl || !mismatchSummaryEl || !mismatchMetaEl) return;
+  const data = mismatchCenterState.dataByApp[activeApp];
+  if (mismatchCenterState.loading) {
+    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(t("Loading mismatch data...", "Loading mismatch data..."))}</div>`;
+    return;
+  }
+  if (!data) {
+    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(t("No mismatch data yet.", "No mismatch data yet."))}</div>`;
+    return;
+  }
+
+  populateMismatchProviderFilter(data);
+  const rows = getFilteredMismatchRows(data);
+  const total = Array.isArray(data.rows) ? data.rows.length : 0;
+  mismatchSummaryEl.textContent = t("showingMismatchRows", "Showing %(filtered)s of %(total)s mismatches", {
+    filtered: rows.length,
+    total,
+  });
+
+  const providers = Array.isArray(data.providers) ? data.providers : [];
+  const metaParts = [
+    `${activeApp === "sonarr" ? t("Shows", "Shows") : t("Movies", "Movies")}`,
+    providers.map(provider => provider.label || mismatchProviderLabel(provider.provider)).join(" vs "),
+  ].filter(Boolean);
+  mismatchMetaEl.textContent = metaParts.join(" • ");
+
+  renderMismatchRows(rows, data);
+}
+
+function exportMismatchCsv(data) {
+  const rows = getFilteredMismatchRows(data);
+  if (!rows.length) return;
+  const providers = Array.isArray(data?.providers)
+    ? data.providers.map(item => String(item?.provider || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const csvRows = rows.map(row => {
+    const out = {
+      title: row.title || "",
+      year: row.year || "",
+      instance_name: row.instance_name || "",
+      instance_id: row.instance_id || "",
+      path: row.path || "",
+      category: row.mismatch_category || "",
+      reason: row.mismatch_reason || "",
+    };
+    providers.forEach(provider => {
+      const entry = row?.providers?.[provider] || {};
+      out[`${provider}_status`] = entry.status || "";
+      out[`${provider}_reason`] = entry.reason || "";
+    });
+    return out;
+  });
+  const header = Object.keys(csvRows[0]);
+  const csv = [header.join(",")].concat(
+    csvRows.map(item => header.map(key => `"${String(item[key] ?? "").replace(/"/g, '""')}"`).join(","))
+  ).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `mismatches_${activeApp}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  setTimeout(() => {
+    URL.revokeObjectURL(link.href);
+    link.remove();
+  }, 100);
+}
+
+async function fetchMismatchCenterData(app, { force = false, silent = false } = {}) {
+  const appName = app === "radarr" ? "radarr" : "sonarr";
+  if (!force && mismatchCenterState.dataByApp[appName]) {
+    if (appName === activeApp) renderMismatchCenter();
+    return mismatchCenterState.dataByApp[appName];
+  }
+  mismatchCenterState.loading = true;
+  if (appName === activeApp) renderMismatchCenter();
+  try {
+    const params = [
+      `app=${encodeURIComponent(appName)}`,
+      "limit=3000",
+      ...getPlexScopeParams(appName),
+    ];
+    const res = await fetch(apiUrl(`/api/mismatches?${params.join("&")}`));
+    if (!res.ok) {
+      const txt = await res.text();
+      throw new Error(txt || `${res.status} ${res.statusText}`);
+    }
+    const payload = await res.json();
+    mismatchCenterState.dataByApp[appName] = payload;
+    return payload;
+  } catch (err) {
+    if (!silent) {
+      setStatus(t("errorPrefix", "Error: ") + (err?.message || String(err)));
+    }
+    throw err;
+  } finally {
+    mismatchCenterState.loading = false;
+    if (appName === activeApp) renderMismatchCenter();
+  }
+}
+
+function openMismatchCenter() {
+  ensureMismatchCenterOverlay();
+  mismatchCenterState.open = true;
+  if (mismatchOverlayEl) mismatchOverlayEl.classList.remove("hidden");
+  fetchMismatchCenterData(activeApp, { force: true, silent: true }).catch(() => {
+    renderMismatchCenter();
+  });
+}
+
+function closeMismatchCenter() {
+  mismatchCenterState.open = false;
+  if (mismatchOverlayEl) mismatchOverlayEl.classList.add("hidden");
+}
 async function fetchHistoryData(target) {
   const params = new URLSearchParams();
   params.set("app", target.app);
@@ -12776,11 +14449,170 @@ document.addEventListener("click", event => {
   }
 });
 
+document.addEventListener("click", event => {
+  const plexBtn = event.target.closest("#plexInsightsBtn");
+  if (plexInsightsBtn && plexBtn) {
+    event.preventDefault();
+    openPlexInsights();
+    return;
+  }
+  const mismatchBtn = event.target.closest("#mismatchCenterBtn");
+  if (mismatchCenterBtn && mismatchBtn) {
+    event.preventDefault();
+    openMismatchCenter();
+    return;
+  }
+  const sectionBtn = event.target.closest("[data-plex-section]");
+  if (sectionBtn) {
+    const nextSection = String(sectionBtn.dataset.plexSection || "");
+    if (String(plexInsightsState.sectionId || "") !== nextSection) {
+      plexInsightsState.sectionId = nextSection;
+      plexInsightsState.selectedHub = 0;
+      fetchPlexInsights({ refresh: true });
+    }
+    return;
+  }
+  const hubBtn = event.target.closest("[data-plex-hub]");
+  if (hubBtn) {
+    const idx = Number(hubBtn.dataset.plexHub || 0);
+    if (!Number.isNaN(idx)) {
+      plexInsightsState.selectedHub = idx;
+      renderPlexInsights();
+    }
+    return;
+  }
+  if (plexOverlayEl && !plexOverlayEl.classList.contains("hidden")) {
+    if (event.target.matches("[data-plex-close]")) {
+      closePlexOverlay();
+    } else if (plexRefreshBtn && event.target === plexRefreshBtn) {
+      fetchPlexInsights({ refresh: true });
+    } else if (plexLiveBtn && event.target === plexLiveBtn) {
+      if (plexInsightsState.live) stopPlexLive();
+      else startPlexLive();
+    }
+  }
+  if (mismatchOverlayEl && !mismatchOverlayEl.classList.contains("hidden")) {
+    if (event.target.matches("[data-mismatch-close]")) {
+      closeMismatchCenter();
+    } else if (mismatchRefreshBtn && event.target === mismatchRefreshBtn) {
+      fetchMismatchCenterData(activeApp, { force: true }).catch(() => { });
+    } else if (mismatchExportBtn && event.target === mismatchExportBtn) {
+      exportMismatchCsv(mismatchCenterState.dataByApp[activeApp]);
+    }
+  }
+});
 document.addEventListener("keydown", event => {
   if (event.key === "Escape" && historyOverlayEl && !historyOverlayEl.classList.contains("hidden")) {
     closeHistoryDrawer();
   }
 });
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && plexOverlayEl && !plexOverlayEl.classList.contains("hidden")) {
+    closePlexOverlay();
+  }
+});
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && mismatchOverlayEl && !mismatchOverlayEl.classList.contains("hidden")) {
+    closeMismatchCenter();
+  }
+});
+
+async function syncOptionSetFromApi() {
+  try {
+    const res = await fetch(apiUrl("/api/config"));
+    if (!res.ok) return;
+    const cfg = await res.json();
+    configState.optionSet = cfg.option_set || {};
+    configState.optionCapabilities = configState.optionSet.capabilities || {};
+    configState.optionSelected = configState.optionSet.selected || {};
+    if (typeof cfg.sonarr_configured !== "undefined") configState.sonarrConfigured = !!cfg.sonarr_configured;
+    if (typeof cfg.radarr_configured !== "undefined") configState.radarrConfigured = !!cfg.radarr_configured;
+    if (typeof cfg.plex_configured !== "undefined") configState.plexConfigured = !!cfg.plex_configured;
+    configState.historySourcesAvailable = Array.isArray(cfg.history_sources_available)
+      ? cfg.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
+      : configState.historySourcesAvailable;
+    const plexLibraries = (cfg.plex_libraries && typeof cfg.plex_libraries === "object")
+      ? cfg.plex_libraries
+      : {};
+    setPlexAvailableForApp("sonarr", plexLibraries.sonarr || []);
+    setPlexAvailableForApp("radarr", plexLibraries.radarr || []);
+    applyOptionSetCapabilities();
+  } catch {
+    // Best-effort only; retain existing behavior when config API is unavailable.
+  }
+}
+
+function initStatusHoverBindings() {
+  if (statusHoverBindingsReady) return;
+  statusHoverBindingsReady = true;
+  if (!statusPillEl || !statusRowEl) return;
+  if (statusEl) {
+    statusEl.addEventListener("mouseenter", () => {
+      if (!statusCollapsed) return;
+      showStatusRow();
+      pauseStatusCountdown();
+    });
+  }
+
+  statusPillEl.addEventListener("mouseenter", () => {
+    if (!statusCollapsed || !statusReadyAfterFirstData) return;
+    pauseStatusCountdown();
+    showStatusRow();
+    statusPillEl.classList.add("status-pill--active");
+  });
+  statusPillEl.addEventListener("mouseleave", () => {
+    if (!statusCollapsed) return;
+    statusPillEl.classList.remove("status-pill--active");
+    setTimeout(() => {
+      if (!statusRowEl.matches(":hover") && !statusPillEl.matches(":hover")) {
+        if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
+          startStatusCountdown();
+        } else {
+          showStatusRow();
+        }
+      }
+    }, 50);
+  });
+  statusRowEl.addEventListener("mouseenter", () => {
+    if (statusCollapsed) pauseStatusCountdown();
+  });
+  statusRowEl.addEventListener("mouseleave", () => {
+    if (!statusCollapsed) return;
+    if (!statusRowEl.matches(":hover") && !(statusPillEl && statusPillEl.matches(":hover"))) {
+      if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
+        startStatusCountdown();
+      } else {
+        showStatusRow();
+      }
+    }
+  });
+}
+
+function initDeferredUiBindings() {
+  if (deferredUiBindingsReady) return;
+  deferredUiBindingsReady = true;
+  bindChipButtons();
+  initStatusHoverBindings();
+}
+
+function scheduleDeferredUiBindings() {
+  if (deferredUiBindingsScheduled || deferredUiBindingsReady) return;
+  deferredUiBindingsScheduled = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        deferredUiBindingsScheduled = false;
+        firstPaintSettled = true;
+        initDeferredUiBindings();
+        fetchStatus({ silent: true, lite: true });
+        startStatusTick();
+        startStatusFetchPoll();
+      }, 60);
+    });
+  });
+}
 
 /* init */
 (async function init() {
@@ -12788,10 +14620,7 @@ document.addEventListener("keydown", event => {
   updatePrimaryRefreshButton();
 
   if (resetUiRequested) {
-    localStorage.removeItem(COLUMN_STORAGE_KEY);
-    localStorage.removeItem(CSV_COLUMNS_KEY);
-    localStorage.removeItem(CHIPS_ENABLED_KEY);
-    localStorage.removeItem(VIEW_STATE_KEY);
+    resetUiState();
     try {
       const url = new URL(window.location.href);
       url.searchParams.delete(RESET_UI_PARAM);
@@ -12803,6 +14632,7 @@ document.addEventListener("keydown", event => {
   loadColumnPrefsState();
   loadColumnPrefs();
   loadCsvColumnsState();
+  loadPlexLibrarySelection();
   loadViewState();
   applyViewState(activeApp);
   updateFilterBuilderOptions();
@@ -12818,58 +14648,22 @@ document.addEventListener("keydown", event => {
   if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
   scheduleTitlePathWidthLock();
   await loadConfig();
-  fetchStatus({ silent: true, lite: true });
-  startStatusTick();
-  startStatusFetchPoll();
+  await syncOptionSetFromApi();
   setChipsVisible(false);
-  if (statusPillEl && statusRowEl) {
-    if (statusEl) {
-      statusEl.addEventListener("mouseenter", () => {
-        if (!statusCollapsed) return;
-        showStatusRow();
-        pauseStatusCountdown();
-      });
-    }
-
-    statusPillEl.addEventListener("mouseenter", () => {
-      if (!statusCollapsed) return;
-      pauseStatusCountdown();
-      statusRowEl.classList.remove("status-row--hidden");
-      statusPillEl.classList.add("status-pill--active");
-    });
-    statusPillEl.addEventListener("mouseleave", () => {
-      if (!statusCollapsed) return;
-      statusPillEl.classList.remove("status-pill--active");
-      setTimeout(() => {
-        if (!statusRowEl.matches(":hover") && !statusPillEl.matches(":hover")) {
-          if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
-            startStatusCountdown();
-          } else {
-            showStatusRow();
-          }
-        }
-      }, 50);
-    });
-    statusRowEl.addEventListener("mouseenter", () => {
-      if (statusCollapsed) pauseStatusCountdown();
-    });
-    statusRowEl.addEventListener("mouseleave", () => {
-      if (!statusCollapsed) return;
-      if (!statusRowEl.matches(":hover") && !(statusPillEl && statusPillEl.matches(":hover"))) {
-        if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
-          startStatusCountdown();
-        } else {
-          showStatusRow();
-        }
-      }
-    });
-  }
   const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
   if (isAppConfigured(otherApp)) {
     queuePrefetch(otherApp, false);
 
   }
-  await load(false);
+  if (capabilityEnabled("arr_tables", configState.sonarrConfigured || configState.radarrConfigured)) {
+    await load(false);
+  } else if (configState.plexConfigured) {
+    setStatus(t("noArrMediaSourcePlexAvailable", "No Sonarr/Radarr media source configured. Plex features are available."));
+    setLoading(false);
+  } else {
+    setStatus(t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, or Plex."));
+    setLoading(false);
+  }
 
 
   if (IS_IOS && typeof lockPageZoomIOSButAllowTableCustomZoom === "function") {
@@ -12890,4 +14684,30 @@ document.addEventListener("keydown", event => {
   ) {
     enableStatusRowScrollChaining();
   }
+
+  scheduleDeferredUiBindings();
 })();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

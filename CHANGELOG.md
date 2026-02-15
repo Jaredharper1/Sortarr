@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.1] - 2026-02-16
+
+- Added a Mismatch Center drawer to compare provider-by-provider playback match outcomes (Tautulli/Plex/Jellystat when multiple history providers are configured), with filtering/grouping and CSV export backed by GET /api/mismatches.
+- Resolved an issue where bitrate estimations were falling back to audio only totals, causing unexpectedly small bitrates estimations for some entries. Thanks, sorthe!
+
+- Added Plex as a read-only playback provider (library scan + history ingestion) with cache-aware matching.
+- Setup: Added Plex connection fields, section filters, and history page sizing.
+- Added Plex diagnostics endpoint summary (sections, history stats, activities).
+- Added provider-agnostic playback diagnostics endpoint (`POST /api/diagnostics/playback-match`) with shared match/health fields and provider-specific details for Tautulli/Plex.
+- Added Plex media-source table fallback: when Sonarr/Radarr are not configured, `/api/shows` and `/api/movies` can populate from Plex library rows (with selected playback/history overlay).
+- Added Plex Insights drawer (hubs, section filter, match health summary, activities, butler) with optional live updates.
+- Fixed playback cache serialization when multiple users are present (user_ids now stored as a list).
+- Fallback when Plex rejects the viewedAt history filter (retries without cutoff).
+- Fixed Plex/Jellystat cache serialization for title-year index keys.
+- Setup now supports multiple history providers at once (Tautulli, Jellystat, Plex) with an explicit preferred history source selector.
+- Added preferred media source selector in setup for clearer provider delineation when multiple sources are configured.
+- Playback provider selection now honors saved history source preference before falling back to auto-priority.
+- Setup validation now supports Plex-only media configurations; Sonarr/Radarr are no longer required when Plex is the selected media source.
+- Added backend provider option-set metadata (`option_set`) to `/api/config` for deterministic source/capability handling.
+- UI tabs now use Shows/Movies labels while preserving Sonarr/Radarr internals.
+- Added per-tab Plex library scoping (multi-select) with persisted UI selection.
+- Plex library scope is now exposed in status/diagnostics payloads and response headers for clear in-scope visibility.
+- Fixed status-row hidden state pointer interception that could block top action buttons.
+- Standardized UI wording to Shows/Movies for load and refresh status text.
+- Compacted health badges by default and added inline details expansion for long alerts.
+- Simplified numeric cell rendering to improve table readability.
+- Matching: kept ID-first and title+year-first order, then added guarded plain-title fallback (<=2-year drift when Plex year is known) to reduce Plex/*arr false negatives.
+- Performance/UI: enabled Sonarr virtual row rendering for large lists and kept season expansion in-place (no forced full-table handoff) to reduce DOM/a11y snapshot pressure.
+- UI: ensured Columns popout layers above status/progress regions (including fullscreen transitions), with stable header/status/chip loading placeholders.
+- UI: consolidated Reset UI clearing so startup `reset_ui` and Reset UI button both clear filters/chips/query/view state consistently.
+- Rendering: reduced reflow churn with read/write layout batching, per-render title/path measurement caching, and wrap-height recalculation memoization.
+- Startup/perf: deferred non-critical chip/status bindings until first paint settles, lowered initial hydration pressure, coalesced status poll fetches, and added font preload/fallback metric stabilization.
+
 ## [0.8.0] - 2026-01-31
 
 - Fullscreen Data Table: Added a toolbar button to hide panels and expand the table to fill the screen; Escape/✕ exits. Attempts true browser fullscreen when supported.
@@ -416,4 +449,5 @@ Translations are managed using Flask-Babel with gettext .po and .mo catalogs to 
 - Validate Tautulli connection during setup when configured
 - Add per-instance test buttons with inline setup errors
 - Add advanced UI columns for CSV-only fields, include TMDB ID in Sonarr CSV exports, and surface Content Hours in the Sonarr columns
+
 

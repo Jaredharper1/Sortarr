@@ -41,8 +41,9 @@
         <div>
           <div class="setup-title">{{ app_name }} {{ _('Setup') }} v{{ app_version }}</div>
           <div class="setup-sub">
-            {% trans %}Add Sonarr/Radarr details. Tautulli or Jellystat is optional for playback stats.{% endtrans %}
+            {% trans %}Add Sonarr/Radarr details and optional Plex/Jellystat/Tautulli providers. When multiple providers overlap, set your preferred media and history sources.{% endtrans %}
           </div>
+          <div class="setup-hint" id="setupEffectiveSources">{{ _('Effective sources') }}: {{ _('Media') }} {{ values.media_source or _('Auto') }}, {{ _('History') }} {{ values.history_source or _('Auto') }}</div>
         </div>
       </div>
 
@@ -52,6 +53,27 @@
 
       <form method="post" class="setup-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <div class="setup-category-title">{{ _('Media Sources') }}</div>
+        <label>
+          {{ _('Preferred media source') }}
+          <select name="media_source_preference">
+            <option value="arr" {% if (values.media_source_preference or 'arr') == 'arr' %}selected{% endif %}>
+              {{ _('Sonarr/Radarr') }}
+            </option>
+            <option value="plex" {% if (values.media_source_preference or '') == 'plex' %}selected{% endif %}>
+              {{ _('Plex') }}
+            </option>
+            <option value="auto" {% if (values.media_source_preference or '') == 'auto' %}selected{% endif %}>
+              {{ _('Auto') }}
+            </option>
+          </select>
+        </label>
+        <div class="setup-hint">
+          {% trans %}Choose which source should be treated as primary when multiple media sources are configured.{% endtrans %}
+        </div>
+        <div class="setup-hint">
+          {% trans %}If Plex is your preferred media source, Sonarr and Radarr can be left unconfigured.{% endtrans %}
+        </div>
         <div class="setup-section-title">{{ _('Sonarr Instance 1') }}</div>
         <label>
           {{ _('Instance name') }}
@@ -380,6 +402,27 @@
           </div>
         </details>
 
+        <div class="setup-category-title">{{ _('Playback History Sources') }}</div>
+        <label>
+          {{ _('Preferred history source') }}
+          <select name="history_source_preference">
+            <option value="auto" {% if (values.history_source_preference or 'auto') == 'auto' %}selected{% endif %}>
+              {{ _('Auto') }}
+            </option>
+            <option value="tautulli" {% if (values.history_source_preference or '') == 'tautulli' %}selected{% endif %}>
+              {{ _('Tautulli') }}
+            </option>
+            <option value="jellystat" {% if (values.history_source_preference or '') == 'jellystat' %}selected{% endif %}>
+              {{ _('Jellystat') }}
+            </option>
+            <option value="plex" {% if (values.history_source_preference or '') == 'plex' %}selected{% endif %}>
+              {{ _('Plex') }}
+            </option>
+          </select>
+        </label>
+        <div class="setup-hint">
+          {% trans %}When multiple history providers are configured, this preference decides which one is used for watch stats/matching.{% endtrans %}
+        </div>
         <div class="setup-section-title">{{ _('Jellystat (optional)') }}</div>
         <label>
           {{ _('Jellystat URL') }}
@@ -411,8 +454,7 @@
         </div>
         <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
         <div class="setup-hint">
-          {% trans %}Configure either Jellystat or Tautulli for playback stats. If both are set, Jellystat is used.{%
-          endtrans %}
+          {% trans %}You can configure multiple history sources. Use Preferred history source above to pick which provider should win when more than one is available.{% endtrans %}
         </div>
 
 
@@ -435,6 +477,32 @@
           <span class="setup-inline-message{% if field_errors.get('tautulli') %} is-error{% else %} hidden{% endif %}"
             data-inline="tautulli">{{ field_errors.get('tautulli', '') }}</span>
         </div>
+
+        <div class="setup-category-title">{{ _('Playback Providers') }}</div>
+        <div class="setup-section-title">{{ _('Plex (optional)') }}</div>
+        <label>
+          {{ _('Plex URL') }}
+          <input name="plex_url" placeholder="{{ _('http://192.168.1.120:32400') }}" value="{{ values.plex_url }}" />
+        </label>
+        <label>
+          {{ _('Plex Token') }}
+          <input name="plex_token" type="password" autocomplete="off" spellcheck="false"
+            placeholder="{{ _('optional') }}" value="{{ values.plex_token }}" />
+        </label>
+        <label>
+          {{ _('Plex section IDs (optional)') }}
+          <input name="plex_section_filters" placeholder="{{ _('optional, comma-separated') }}"
+            value="{{ values.plex_section_filters }}" />
+        </label>
+        <div class="setup-inline">
+          <button class="setup-test" type="button" data-kind="plex" data-url-id="plex_url" data-key-id="plex_token"
+            data-client-id="plex_client_id" data-inline-key="plex">
+            {{ _('Test connection') }}
+          </button>
+          <span class="setup-inline-message{% if field_errors.get('plex') %} is-error{% else %} hidden{% endif %}"
+            data-inline="plex">{{ field_errors.get('plex', '') }}</span>
+        </div>
+        <div class="setup-hint">{{ _('Leave section IDs blank to scan all libraries.') }}</div>
 
         <div class="setup-section-title">{{ _('Security') }}</div>
         <label>
@@ -507,6 +575,22 @@
               {% trans trimmed %}Metadata lookups are enforced as unlimited for accuracy. Leave fields blank for
               defaults; seconds fields accept 0 for no time limit.{% endtrans %}
             </div>
+
+            <div class="setup-section-title">{{ _('Plex settings') }}</div>
+            <label>
+              {{ _('Plex client identifier (optional)') }}
+              <input name="plex_client_id" placeholder="{{ _('auto-generated when empty') }}"
+                value="{{ values.plex_client_id }}" />
+            </label>
+            <label>
+              {{ _('Plex history page size') }}
+              <input name="plex_history_page_size" type="number" min="1" step="1"
+                value="{{ values.plex_history_page_size }}" />
+            </label>
+            <div class="setup-hint">
+              {% trans trimmed %}History page size controls how many Plex history rows are fetched per request. Leave
+              blank for defaults.{% endtrans %}
+            </div>
           </div>
         </details>
 
@@ -516,7 +600,10 @@
             connection_failed: "{{ _('Connection failed.') }}",
             url_key_required: "{{ _('URL and API key are required.') }}",
             testing_connection: "{{ _('Testing connection...') }}",
-            connection_failed_check: "{{ _('Connection failed. Check URL and API key.') }}"
+            connection_failed_check: "{{ _('Connection failed. Check URL and API key.') }}",
+            media_sources: "{{ _('Media Sources') }}",
+            playback_history_sources: "{{ _('Playback History Sources') }}",
+            playback_providers: "{{ _('Playback Providers') }}"
           };
         </script>
 
