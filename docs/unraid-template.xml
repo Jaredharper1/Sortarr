@@ -1,25 +1,65 @@
 <?xml version="1.0"?>
-<Container>
+<Container version="2">
   <Name>Sortarr</Name>
+
   <Repository>ghcr.io/jaredharper1/sortarr:latest</Repository>
   <Registry>https://github.com/jaredharper1/Sortarr/pkgs/container/sortarr</Registry>
+
   <Network>bridge</Network>
+  <Shell>bash</Shell>
   <Privileged>false</Privileged>
+
   <Support>https://github.com/jaredharper1/sortarr/issues</Support>
   <Project>https://github.com/jaredharper1/sortarr</Project>
   <TemplateURL>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/docs/unraid-template.xml</TemplateURL>
+
   <Overview>Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage.</Overview>
-  <Category>MediaApp:Video</Category>
+  <Description>Storage insights dashboard for Sonarr and Radarr libraries. Read-only and safe.</Description>
+
+  <Category>MediaApp:Tools</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>
   <Icon>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/static/Logo.png</Icon>
-  <Config Name="WebUI Port" Target="8787" Default="9595" Mode="tcp" Description="Sortarr web port." Type="Port" Display="always" Required="true" Mask="false">9595</Config>
-  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/sortarr" Mode="rw" Description="Persistent app data (env file and cache)." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/sortarr</Config>
-  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="Run container as this user ID (Unraid default 99)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
-  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Run container as this group ID (Unraid default 100)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
-  <Config Name="ENV_FILE_PATH" Target="ENV_FILE_PATH" Default="/config/Sortarr.env" Mode="" Description="Path to the .env file." Type="Variable" Display="advanced" Required="false" Mask="false">/config/Sortarr.env</Config>
-  <Config Name="CACHE_SECONDS" Target="CACHE_SECONDS" Default="300" Mode="" Description="Cache duration in seconds." Type="Variable" Display="advanced" Required="false" Mask="false">300</Config>
-  <Config Name="Tautulli metadata lookup limit" Target="TAUTULLI_METADATA_LOOKUP_LIMIT" Default="" Mode="" Description="Optional: cap metadata lookups per load (-1 no limit, 0 disables lookups). Leave blank for default." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Tautulli metadata lookup seconds" Target="TAUTULLI_METADATA_LOOKUP_SECONDS" Default="" Mode="" Description="Optional: time limit for metadata lookups (0 means no time limit). Leave blank for default." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Tautulli timeout seconds" Target="TAUTULLI_TIMEOUT_SECONDS" Default="" Mode="" Description="Optional per-request timeout. Leave blank for default." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
-  <Config Name="Tautulli fetch seconds" Target="TAUTULLI_FETCH_SECONDS" Default="" Mode="" Description="Optional total Tautulli fetch budget (0 means no limit). Leave blank for default." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+
+  <Config Name="WebUI Port"
+          Target="8787"
+          Default="9595"
+          Mode="tcp"
+          Description="Host port for accessing Sortarr WebUI. Container listens on 8787."
+          Type="Port"
+          Display="always"
+          Required="true"
+          Mask="false">9595</Config>
+
+  <Config Name="Appdata"
+          Target="/config"
+          Default="/mnt/user/appdata/sortarr"
+          Mode="rw"
+          Type="Path"
+          Display="always"
+          Required="true"
+          Mask="false">/mnt/user/appdata/sortarr</Config>
+
+  <Config Name="PUID"
+          Target="PUID"
+          Default="99"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">99</Config>
+
+  <Config Name="PGID"
+          Target="PGID"
+          Default="100"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">100</Config>
+
+  <Config Name="ENV_FILE_PATH"
+          Target="ENV_FILE_PATH"
+          Default="/config/Sortarr.env"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">/config/Sortarr.env</Config>
 </Container>
