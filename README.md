@@ -21,6 +21,8 @@ Sortarr does not modify, move, or rename your media. It can analyse Sonarr and R
 * Integrate playback history from Tautulli, Jellystat, or Plex
 * Identify missing media, mismatches, and optimisation opportunities
 * Support multiple Sonarr and Radarr instances
+* Highlight duplicate titles across instances and filter them quickly
+* Support global quick text filtering across row data (for example `aac`)
 * Fully read-only operation for safety
 
 ---

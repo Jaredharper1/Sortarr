@@ -5,6 +5,7 @@
     { column: "RootFolder", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: true },
     { column: "TitleSlug", strategy: "fixed", min: "260px", ideal: "260px", max: "260px", apps: "sonarr", lockDuringBatch: true, truncate: true },
     { column: "TmdbId", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
+    { column: "Year", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "DateAdded", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
 
     { column: "ContentHours", strategy: "capped", min: "var(--cap-ContentHours, auto)", ideal: "var(--cap-ContentHours, auto)", max: "var(--cap-ContentHours, auto)", apps: "sonarr", lockDuringBatch: true, truncate: false },

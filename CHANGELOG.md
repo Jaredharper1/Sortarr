@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.2] - 2026-02-26
+
+- Added a new `Year` column in the main table and Columns panel so duplicate titles can be distinguished at a glance.
+- Added duplicate detection across instances (title + year key) with filter support via `duplicate:true/false`.
+- Added quick duplicate chips to Sonarr and Radarr chip groups.
+- Enhanced advanced/global filtering so bare tokens (for example `aac`) search across row text, with explicit alias support via `any:value`.
+- Updated mixed-resolution filtering to also inspect `ResolutionAll` when rows are marked mixed (`ResolutionMixed`), so values like `resolution:1080p` match mixed rows correctly.
+
 ## [0.8.1] - 2026-02-16
 
 - Added a Mismatch Center drawer to compare provider-by-provider playback match outcomes (Tautulli/Plex/Jellystat when multiple history providers are configured), with filtering/grouping and CSV export backed by GET /api/mismatches.

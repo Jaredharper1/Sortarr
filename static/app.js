@@ -2609,6 +2609,12 @@ const FILTER_BUILDER_FIELDS = [
     allowCustom: true,
   },
   {
+    id: "year",
+    label: t("Year"),
+    type: "number",
+    placeholder: "2024",
+  },
+  {
     id: "titleslug",
     label: t("Title Slug"),
     type: "string",
@@ -2993,6 +2999,12 @@ const FILTER_BUILDER_FIELDS = [
         }))
         .filter(opt => opt.label && opt.value);
     },
+  },
+  {
+    id: "duplicate",
+    label: t("Duplicate Across Instances"),
+    type: "bool",
+    values: FILTER_TRUE_FALSE_VALUES,
   },
   {
     id: "matchstatus",
@@ -5920,6 +5932,23 @@ function matchPattern(value, pattern) {
   return text.toLowerCase().includes(raw.toLowerCase());
 }
 
+function buildRowSearchText(row) {
+  const cache = getDisplayCache(row);
+  if (Object.prototype.hasOwnProperty.call(cache, "searchText")) {
+    return cache.searchText;
+  }
+  const parts = [];
+  Object.entries(row || {}).forEach(([key, value]) => {
+    if (!key || key.startsWith("__")) return;
+    if (value === null || value === undefined || value === "") return;
+    if (typeof value === "object") return;
+    parts.push(String(value));
+  });
+  const text = parts.join(" ");
+  cache.searchText = text;
+  return text;
+}
+
 const RESOLUTION_ALIASES = {
   "4k": 2160,
   uhd: 2160,
@@ -6046,6 +6075,47 @@ function assignRowKeys(rows, app) {
       key = `${key}#${count}`;
     }
     row.__sortarrKey = key;
+  }
+  annotateDuplicateRows(rows);
+}
+
+function normalizeDuplicateKeyPart(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^\p{L}\p{N} ]+/gu, "");
+}
+
+function getDuplicateGroupKey(row) {
+  const title = normalizeDuplicateKeyPart(row?.Title ?? row?.title ?? "");
+  const year = String(row?.Year ?? row?.year ?? "").trim();
+  if (!title || !year) return "";
+  return `${title}::${year}`;
+}
+
+function annotateDuplicateRows(rows) {
+  const byKey = new Map();
+  for (const row of rows || []) {
+    const key = getDuplicateGroupKey(row);
+    if (!key) continue;
+    const instanceId = String(row?.InstanceId ?? row?.instanceId ?? "").trim() || "default";
+    let bucket = byKey.get(key);
+    if (!bucket) {
+      bucket = { count: 0, instances: new Set() };
+      byKey.set(key, bucket);
+    }
+    bucket.count += 1;
+    bucket.instances.add(instanceId);
+  }
+  for (const row of rows || []) {
+    const key = getDuplicateGroupKey(row);
+    if (!key) {
+      row.__sortarrDuplicate = false;
+      continue;
+    }
+    const bucket = byKey.get(key);
+    row.__sortarrDuplicate = Boolean(bucket && bucket.count > 1 && bucket.instances.size > 1);
   }
 }
 
@@ -8991,6 +9061,7 @@ function formatBitrateCell(row, app) {
 
 const FIELD_MAP = {
   title: "Title",
+  year: "Year",
   titleslug: "TitleSlug",
   tmdbid: "TmdbId",
   dateadded: "DateAdded",
@@ -9093,6 +9164,7 @@ const NUMERIC_FIELDS = new Set([
   "userswatched",
   "users",
   "customformatscore",
+  "year",
 ]);
 
 const BUCKET_FIELDS = new Set(["gbperhour", "totalsize"]);
@@ -9363,6 +9435,21 @@ function parseAdvancedQuery(query) {
         continue;
       }
 
+      if (field === "duplicate" || field === "duplicates") {
+        const boolVal = parseBoolValue(value);
+        if (boolVal === null) {
+          warnings.push(t(`Invalid value for '${field}' (use true/false).`));
+          addPred(() => false);
+          continue;
+        }
+        addPred(row => {
+          const duplicated = row.__sortarrDuplicate === true;
+          const want = boolVal ? duplicated : !duplicated;
+          return neg ? !want : want;
+        });
+        continue;
+      }
+
       if (field === "matchstatus" || field === "match") {
         const matchPred = getMatchStatusFilterPredicate(value);
         if (matchPred) {
@@ -9380,6 +9467,14 @@ function parseAdvancedQuery(query) {
             matchPattern(row?.InstanceName ?? "", value) ||
             matchPattern(row?.InstanceId ?? "", value)
           );
+          return neg ? !hit : hit;
+        });
+        continue;
+      }
+
+      if (field === "any" || field === "text" || field === "q" || field === "search") {
+        addPred(row => {
+          const hit = matchPattern(buildRowSearchText(row), value);
           return neg ? !hit : hit;
         });
         continue;
@@ -9477,9 +9572,9 @@ function parseAdvancedQuery(query) {
       continue;
     }
 
-    // Fallback search: Title or Path
+    // Fallback search: global text match across row fields
     addPred(row => {
-      const hit = matchPattern(getFieldValue(row, "Title"), token) || matchPattern(getFieldValue(row, "Path"), token);
+      const hit = matchPattern(buildRowSearchText(row), token);
       return neg ? !hit : hit;
     });
   }
@@ -11257,6 +11352,7 @@ function buildRow(row, app, options = {}) {
   const historyButton = app === "radarr" ? buildHistoryButton(row, app) : "";
   const titleCell = `${seriesExpander}<span class="title-control-wrap">${ROW_REFRESH_BUTTON_HTML}${historyButton}</span><span class="title-orb-wrap">${matchOrb}${titleLink}</span>`;
   const dateAdded = formatDateAdded(row.DateAdded);
+  const year = escapeHtml(row.Year ?? "");
   const videoQuality = videoQualityState.value;
   const resolution = resolutionState.value;
   const videoCodec = videoCodecState.value;
@@ -11355,6 +11451,7 @@ function buildRow(row, app, options = {}) {
   if (app === "sonarr") {
     tr.innerHTML = `
     <td data-col="Title">${titleCell}</td>
+    <td data-col="Year">${year}</td>
     <td data-col="DateAdded">${dateAdded}</td>
     <td data-col="Instance">${instanceName}</td>
     <td data-col="SeriesType" data-app="sonarr">${seriesType}</td>
@@ -11402,6 +11499,7 @@ function buildRow(row, app, options = {}) {
   } else {
     tr.innerHTML = `
     <td data-col="Title">${titleCell}</td>
+    <td data-col="Year">${year}</td>
     <td data-col="DateAdded">${dateAdded}</td>
     <td data-col="Instance">${instanceName}</td>
     <td class="right" data-col="RuntimeMins" data-app="radarr">${runtimeMins}</td>
