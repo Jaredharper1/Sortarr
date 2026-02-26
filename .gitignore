@@ -25,3 +25,11 @@ Jellystat-1.1.7
 .gemini
 icon.ico
 prepatch/
+docs/emby-openapi.json
+docs/export_jellyfin_docs.py
+docs/jellyfin-openapi.json
+docs/markdown-preview.css
+docs/openapitools.json
+docs/plex-openapi.yaml
+docs/radarr-openapi.json
+docs/sonarr-openapi.json

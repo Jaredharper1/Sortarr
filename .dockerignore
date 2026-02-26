@@ -24,3 +24,11 @@ icon.ico
 run_waitress.py
 compile_exe.ps1
 prepatch/
+docs/emby-openapi.json
+docs/export_jellyfin_docs.py
+docs/jellyfin-openapi.jsons
+docs/markdown-preview.css
+docs/openapitools.json
+docs/plex-openapi.yaml
+docs/radarr-openapi.json
+docs/sonarr-openapi.json

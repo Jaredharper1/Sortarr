@@ -11,6 +11,8 @@
 - Added provider-agnostic playback diagnostics endpoint (`POST /api/diagnostics/playback-match`) with shared match/health fields and provider-specific details for Tautulli/Plex.
 - Added Plex media-source table fallback: when Sonarr/Radarr are not configured, `/api/shows` and `/api/movies` can populate from Plex library rows (with selected playback/history overlay).
 - Added Plex Insights drawer (hubs, section filter, match health summary, activities, butler) with optional live updates.
+- UI: Hid native scrollbar chrome in the Plex Insights drawer while preserving scroll behavior.
+- UI: Unified glass styling for History, Plex Insights, and Mismatch Center drawers so background blur renders consistently.
 - Fixed playback cache serialization when multiple users are present (user_ids now stored as a list).
 - Fallback when Plex rejects the viewedAt history filter (retries without cutoff).
 - Fixed Plex/Jellystat cache serialization for title-year index keys.
@@ -23,6 +25,7 @@
 - Added per-tab Plex library scoping (multi-select) with persisted UI selection.
 - Plex library scope is now exposed in status/diagnostics payloads and response headers for clear in-scope visibility.
 - Fixed status-row hidden state pointer interception that could block top action buttons.
+- Fixed status-row auto-hide spacing so no layout gap remains between the filters panel and table controls after the 5s hide countdown.
 - Standardized UI wording to Shows/Movies for load and refresh status text.
 - Compacted health badges by default and added inline details expansion for long alerts.
 - Simplified numeric cell rendering to improve table readability.
@@ -32,6 +35,7 @@
 - UI: consolidated Reset UI clearing so startup `reset_ui` and Reset UI button both clear filters/chips/query/view state consistently.
 - Rendering: reduced reflow churn with read/write layout batching, per-render title/path measurement caching, and wrap-height recalculation memoization.
 - Startup/perf: deferred non-critical chip/status bindings until first paint settles, lowered initial hydration pressure, coalesced status poll fetches, and added font preload/fallback metric stabilization.
+- Startup/perf: split boot path work so non-critical UI features (advanced filter custom-select wiring, Radarr poster tooltip delegation, option-set sync) defer to interaction/late idle after first paint.
 
 ## [0.8.0] - 2026-01-31
 
@@ -449,5 +453,8 @@ Translations are managed using Flask-Babel with gettext .po and .mo catalogs to 
 - Validate Tautulli connection during setup when configured
 - Add per-instance test buttons with inline setup errors
 - Add advanced UI columns for CSV-only fields, include TMDB ID in Sonarr CSV exports, and surface Content Hours in the Sonarr columns
+
+
+
 
 

@@ -170,6 +170,7 @@ td.right,
   --panel-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
 
   --table-header-bg: rgba(230, 236, 245, 0.92);
+  --table-header-bg-glass: rgba(230, 236, 245, 0.8);
 
   --table-header-height: calc(0.95em * 1.2 + 16px);
 
@@ -303,6 +304,7 @@ html[data-theme="dark"] {
   --panel-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
 
   --table-header-bg: rgba(24, 28, 34, 0.86);
+  --table-header-bg-glass: rgba(24, 28, 34, 0.74);
 
 }
 
@@ -431,7 +433,7 @@ body {
 
   transition: opacity var(--motion-slow) var(--motion-ease), transform var(--motion-slow) var(--motion-ease), max-height var(--motion-slow) var(--motion-ease), margin var(--motion-slow) var(--motion-ease), padding var(--motion-slow) var(--motion-ease), border-width var(--motion-slow) var(--motion-ease);
 
-  will-change: opacity, transform;
+  will-change: opacity, transform, max-height;
 
   position: relative;
   z-index: 1;
@@ -1088,11 +1090,6 @@ html.custom-selects .mismatch-controls select {
     flex-wrap: wrap;
   }
 
-.status-row {
-    max-height: none;
-    overflow: visible;
-  }
-
   .status-actions {
     margin-left: 0;
     width: 100%;
@@ -1325,7 +1322,10 @@ html[data-theme="dark"] .advanced-warnings {
 
   overflow: visible;
 
-  transition: opacity var(--motion-slow) var(--motion-ease), transform var(--motion-slow) var(--motion-ease);
+  transition:
+    opacity var(--motion-slow) var(--motion-ease),
+    transform var(--motion-slow) var(--motion-ease),
+    max-height var(--motion-slow) var(--motion-ease);
 
   will-change: opacity, transform;
 
@@ -2217,6 +2217,27 @@ html[data-theme="dark"] .column-panel {
   transform: translateY(-50%) scale(1.3);
 }
 
+@media (max-width: 900px) {
+  .health-badge__details,
+  .health-badge__close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .health-badge__close {
+    right: 2px;
+  }
+
+  .health-badge__details {
+    right: 46px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
 
   .health-badge,
@@ -2836,38 +2857,50 @@ button:disabled {
 .status-row {
 
   margin-top: 10px;
-
   padding: 10px 12px;
 
   display: flex;
-
   flex-wrap: wrap;
-
   gap: 12px;
-
   align-items: center;
 
   background: var(--panel-surface-soft);
-
   border: 1px solid var(--border);
-
   border-radius: 10px;
-
   box-shadow: var(--panel-shadow);
+  box-sizing: border-box;
 
-  transition: opacity var(--motion-slow) var(--motion-ease), transform var(--motion-slow) var(--motion-ease), max-height var(--motion-slow) var(--motion-ease), margin var(--motion-slow) var(--motion-ease), padding var(--motion-slow) var(--motion-ease);
-
-  max-height: 140px;
-
-  overflow: auto;
-
+  height: auto !important;
+  min-height: 84px;
+  max-height: 1200px;
   position: relative;
-  z-index: 50;
-  touch-action: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
+  align-content: flex-start;
+
+  transition:
+    opacity var(--motion-slow) var(--motion-ease),
+    transform var(--motion-slow) var(--motion-ease),
+    max-height var(--motion-slow) var(--motion-ease),
+    margin-top var(--motion-slow) var(--motion-ease),
+    padding-top var(--motion-slow) var(--motion-ease),
+    padding-bottom var(--motion-slow) var(--motion-ease),
+    border-width var(--motion-slow) var(--motion-ease);
+
+  /* prevent scroll chaining but allow page scrolling */
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: auto;
+  touch-action: pan-y;
+  -webkit-tap-highlight-color: transparent;
+  /* prevent height reduction on touch */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  font-family: var(--font-sans-fallback);
 
 }
+
+
+
 
 .status-row.status-row--complete-flash {
 
@@ -2977,8 +3010,19 @@ button:disabled {
 
   gap: 2px;
 
-  min-width: 140px;
+  flex: 0 0 180px;
+  min-width: 180px;
 
+}
+
+.status-row .status-block:first-of-type {
+  flex-basis: 320px;
+  min-width: 320px;
+}
+
+.status-row .status-block:nth-of-type(3) {
+  flex-basis: 300px;
+  min-width: 300px;
 }
 
 
@@ -2992,6 +3036,7 @@ button:disabled {
   letter-spacing: 0.08em;
 
   color: var(--muted);
+  line-height: 1.2;
 
 }
 
@@ -3000,7 +3045,19 @@ button:disabled {
 .status-value {
 
   font-weight: 600;
+  line-height: 1.25;
 
+}
+
+#progressStatus {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#cacheStatus {
+  white-space: nowrap;
 }
 
 
@@ -3021,17 +3078,50 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+  min-height: 34px;
+}
+
+.status-actions-group button {
+  min-height: 32px;
+  line-height: 1.2;
+  font-family: var(--font-sans-fallback);
+}
+
+.status-actions-group #deepRefreshTautulliBtn,
+.status-actions-group #plexInsightsBtn,
+.status-actions-group #mismatchCenterBtn {
+  min-width: 164px;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.status-actions-group #deepRefreshTautulliBtn.hidden,
+.status-actions-group #plexInsightsBtn.hidden,
+.status-actions-group #mismatchCenterBtn.hidden {
+  display: inline-flex !important;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+@media (min-width: 960px) {
+  .status-actions-group {
+    flex-wrap: nowrap;
+  }
 }
 
 
 
 .status-complete {
-
-  flex-basis: 100%;
-
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 8px;
+  margin: 0;
   font-size: 0.82em;
-
   color: var(--muted);
+  pointer-events: none;
+  z-index: 1;
 
 }
 
@@ -3045,6 +3135,11 @@ button:disabled {
 
 }
 
+.status-row .status-complete.hidden {
+  display: block !important;
+  opacity: 0;
+}
+
 
 
 .status-row.status-row--hidden {
@@ -3053,6 +3148,9 @@ button:disabled {
 
   transform: translateY(-6px);
 
+  height: 0;
+  min-height: 0;
+
   max-height: 0;
 
   margin-top: 0;
@@ -3060,6 +3158,7 @@ button:disabled {
   padding-top: 0;
 
   padding-bottom: 0;
+  border-width: 0;
   pointer-events: none;
   overflow: hidden;
 
@@ -3213,22 +3312,45 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
 
 
-.status-row:hover {
+@media (hover: hover) and (pointer: fine) {
+  .status-row:hover {
 
-  opacity: 1;
+    opacity: 1;
 
-  transform: translateY(0);
+    transform: translateY(0);
 
-  max-height: 140px;
+    margin-top: 10px;
 
-  margin-top: 10px;
+    padding-top: 10px;
 
-  padding-top: 10px;
+    padding-bottom: 10px;
 
-  padding-bottom: 10px;
+    pointer-events: auto;
 
-  pointer-events: auto;
+  }
+}
 
+.status-row:active,
+.status-row:focus {
+  transform: none;
+}
+
+@media (max-width: 900px) {
+  .status-row {
+    padding-bottom: 28px;
+    min-height: 92px;
+  }
+
+  .status-complete {
+    bottom: 6px;
+  }
+
+  body.sortarr-loading .status-row,
+  body.sortarr-loading .status-row.status-row--hidden {
+    height: 92px !important;
+    min-height: 92px;
+    max-height: 92px !important;
+  }
 }
 
 
@@ -3704,6 +3826,14 @@ th {
 
 }
 
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  th {
+    background: var(--table-header-bg-glass, var(--table-header-bg));
+    backdrop-filter: blur(calc(var(--glass-blur) * 0.3)) saturate(104%);
+    -webkit-backdrop-filter: blur(calc(var(--glass-blur) * 0.3)) saturate(104%);
+  }
+}
+
 
 
 th[data-col="Title"],
@@ -3714,11 +3844,11 @@ td[data-col="Title"] {
 
   text-align: left;
 
-  width: var(--title-col-width);
+  width: var(--w-Title);
 
-  min-width: var(--title-col-width);
+  min-width: var(--w-Title);
 
-  max-width: var(--title-col-width);
+  max-width: var(--w-Title);
 
 }
 
@@ -4309,6 +4439,8 @@ th.active-sort .sort-indicator {
 
   height: 8px;
 
+
+
   border-radius: 50%;
 
   display: inline-block;
@@ -4318,6 +4450,8 @@ th.active-sort .sort-indicator {
   background: var(--match-orb-fill);
 
   box-shadow: 0 0 0 3px var(--match-orb-ring);
+
+
 
 }
 
@@ -4870,17 +5004,8 @@ td[data-col="SubtitleLanguagesMixed"]>* {
   min-width: 0;
 }
 
-/* Force Audio Channels to single line with ellipsis */
-td[data-col="AudioChannels"] {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 
-/* Allow inner flex/grid content to shrink properly */
-td[data-col="AudioChannels"]>* {
-  min-width: 0;
-}
+
 
 /* Last Watched: keep single-line */
 td[data-col="LastWatched"] {
@@ -4898,9 +5023,9 @@ td[data-col="TitleSlug"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 260px;
+  max-width: var(--w-TitleSlug);
   position: relative;
-  width: 260px;
+  width: var(--w-TitleSlug);
 }
 
 /* ===========================
@@ -4913,59 +5038,179 @@ td[data-col="TitleSlug"] {
 table[data-app] {
   /* Title / Path */
   --w-Title: var(--title-col-width);
-  --w-RootFolder: clamp(12ch, 16vw, 36ch);
   --w-Path: var(--path-col-width);
+  --w-Path-min: 400px;
+  --w-RootFolder-min: auto;
+  --w-RootFolder-width: auto;
+  --w-RootFolder-max: max-content;
 
-  /* Core numeric columns */
+  /* Shared / compact defaults */
+  --w-TitleSlug: 260px;
+
   --w-ContentHours: var(--cap-ContentHours, auto);
   --w-RuntimeMins: var(--cap-RuntimeMins, auto);
-  --w-EpisodesCounted: var(--cap-EpisodesCounted, auto);
-  --w-SeasonCount: var(--cap-SeasonCount, auto);
-  --w-MissingCount: var(--cap-MissingCount, auto);
-  --w-CutoffUnmetCount: var(--cap-CutoffUnmetCount, auto);
-  --w-QualityCutoffNotMet: var(--cap-QualityCutoffNotMet, auto);
-  --w-AvgEpisodeSizeGB: var(--cap-AvgEpisodeSizeGB, auto);
-  --w-TotalSizeGB: var(--cap-TotalSizeGB, auto);
+  --w-EpisodesCounted-min: var(--cap-EpisodesCounted, 60px);
+  --w-EpisodesCounted-width: max-content;
+  --w-EpisodesCounted-max: none;
+  --w-SeasonCount-min: var(--cap-SeasonCount, 80px);
+  --w-SeasonCount-width: max-content;
+  --w-SeasonCount-max: none;
+  --w-MissingCount-min: var(--cap-MissingCount, 80px);
+  --w-MissingCount-width: max-content;
+  --w-MissingCount-max: none;
+  --w-CutoffUnmetCount-min: var(--cap-CutoffUnmetCount, 80px);
+  --w-CutoffUnmetCount-width: max-content;
+  --w-CutoffUnmetCount-max: none;
+  --w-AvgEpisodeSizeGB-min: var(--cap-AvgEpisodeSizeGB, 80px);
+  --w-AvgEpisodeSizeGB-width: max-content;
+  --w-AvgEpisodeSizeGB-max: none;
+  --w-TotalSizeGB-min: var(--cap-TotalSizeGB, 100px);
+  --w-TotalSizeGB-width: max-content;
+  --w-TotalSizeGB-max: none;
   --w-FileSizeGB: var(--cap-FileSizeGB, auto);
   --w-GBPerHour: var(--cap-GBPerHour, auto);
   --w-BitrateMbps: var(--cap-BitrateMbps, auto);
 
-  /* Media details */
   --w-VideoQuality: var(--cap-VideoQuality, auto);
   --w-Resolution: var(--cap-Resolution, auto);
   --w-VideoCodec: var(--cap-VideoCodec, auto);
-  --w-AudioCodec: var(--cap-AudioCodec, auto);
-  --w-AudioChannels: var(--cap-AudioChannels, auto);
   --w-VideoHDR: var(--cap-VideoHDR, auto);
 
-  /* Metadata columns */
-  --w-Status: var(--cap-Status, auto);
-  --w-Instance: var(--cap-Instance, auto);
-  --w-QualityProfile: var(--cap-QualityProfile, auto);
-  --w-ReleaseGroup: var(--cap-ReleaseGroup, auto);
-  --w-Tags: var(--cap-Tags, auto);
-  --w-Studio: var(--cap-Studio, auto);
+  --w-AudioCodec-min: 112px;
+  --w-AudioCodec-width: max-content;
+  --w-AudioCodec-max: var(--cap-AudioCodec, 160px);
+  --w-AudioChannels-min: 200px;
+  --w-AudioChannels-width: max-content;
+  --w-AudioChannels-max: var(--cap-AudioChannels, 201px);
+
+  --w-Status-min: var(--cap-Status, 100px);
+  --w-Status-width: max-content;
+  --w-Status-max: none;
+  --w-Instance-min: var(--cap-Instance, 100px);
+  --w-Instance-width: max-content;
+  --w-Instance-max: none;
+  --w-QualityProfile-min: var(--cap-QualityProfile, 100px);
+  --w-QualityProfile-width: max-content;
+  --w-QualityProfile-max: none;
+  --w-ReleaseGroup-min: var(--cap-ReleaseGroup, 100px);
+  --w-ReleaseGroup-width: max-content;
+  --w-ReleaseGroup-max: none;
+  --w-Tags-min: var(--cap-Tags, 100px);
+  --w-Tags-width: max-content;
+  --w-Tags-max: none;
+  --w-Studio-min: var(--cap-Studio, 100px);
+  --w-Studio-width: max-content;
+  --w-Studio-max: none;
+
   --w-OriginalLanguage: var(--cap-OriginalLanguage, auto);
-  --w-Genres: var(--cap-Genres, auto);
+  --w-Genres-min: auto;
+  --w-Genres-width: auto;
+  --w-Genres-max: max-content;
   --w-Edition: var(--cap-Edition, auto);
   --w-CustomFormats: var(--cap-CustomFormats, auto);
-  --w-Languages: var(--cap-Languages, auto);
-  --w-AudioLanguages: var(--cap-AudioLanguages, auto);
-  --w-SubtitleLanguages: var(--cap-SubtitleLanguages, auto);
+  --w-QualityCutoffNotMet: var(--cap-QualityCutoffNotMet, auto);
 
-  /* Optional: Sonarr-only, keep fairly tight */
-  --w-TitleSlug: 260px;
+  --w-Languages-min: var(--cap-Languages, 220px);
+  --w-Languages-width: var(--cap-Languages, auto);
+  --w-Languages-max: max-content;
+  --w-AudioLanguages-min: var(--cap-AudioLanguages, 220px);
+  --w-AudioLanguages-width: var(--cap-AudioLanguages, auto);
+  --w-AudioLanguages-max: max-content;
+  --w-SubtitleLanguages-min: var(--cap-SubtitleLanguages, 220px);
+  --w-SubtitleLanguages-width: var(--cap-SubtitleLanguages, auto);
+  --w-SubtitleLanguages-max: max-content;
+
+  --w-Monitored-min: 96px;
+  --w-Monitored-width: auto;
+  --w-Monitored-max: none;
+  --w-UsersWatched-min: 96px;
+  --w-UsersWatched-width: auto;
+  --w-UsersWatched-max: 120px;
+  --w-Diagnostics-min: 72px;
+  --w-Diagnostics-width: 72px;
+  --w-Diagnostics-max: 72px;
+  --w-watchtimehours-min: 100px;
+  --w-watchtimehours-width: auto;
+  --w-totalwatchtime-min: 100px;
+  --w-totalwatchtime-width: auto;
+  --w-LastWatched-min: 100px;
+  --w-LastWatched-width: auto;
+  --w-LastWatched-max: none;
+  --w-LastSearchTime-min: auto;
+  --w-LastSearchTime-width: auto;
+  --w-LastSearchTime-max: max-content;
 }
 
-/* Mapping rules (one selector per column). */
-th[data-col="Title"],
-td[data-col="Title"] {
-  padding-left: calc(10px + var(--title-refresh-gutter) + var(--title-expand-gutter));
-  text-align: left;
-  width: var(--w-Title);
-  min-width: var(--w-Title);
-  max-width: var(--w-Title);
+table[data-app="radarr"] {
+  --title-expand-gutter: 22px;
+  --w-TitleSlug: 0px;
 
+  --w-Monitored-min: 96px;
+  --w-Monitored-width: 96px;
+  --w-Monitored-max: 96px;
+
+  --w-Tags-min: 190px;
+  --w-Tags-width: 190px;
+  --w-Tags-max: 190px;
+  --w-Studio-min: 260px;
+  --w-Studio-width: 260px;
+  --w-Studio-max: 260px;
+  --w-Genres-min: 280px;
+  --w-Genres-width: 280px;
+  --w-Genres-max: 280px;
+
+  --w-LastSearchTime-min: 190px;
+  --w-LastSearchTime-width: 190px;
+  --w-LastSearchTime-max: 190px;
+  --w-LastWatched-min: 190px;
+  --w-LastWatched-width: 190px;
+  --w-LastWatched-max: 190px;
+
+  --w-Languages-min: 280px;
+  --w-Languages-width: 280px;
+  --w-Languages-max: 280px;
+  --w-AudioLanguages-min: 280px;
+  --w-AudioLanguages-width: 280px;
+  --w-AudioLanguages-max: 280px;
+  --w-SubtitleLanguages-min: 280px;
+  --w-SubtitleLanguages-width: 280px;
+  --w-SubtitleLanguages-max: 280px;
+}
+
+table[data-app="sonarr"] {
+  --w-AudioCodec-min: 190px;
+  --w-AudioCodec-width: 190px;
+  --w-AudioCodec-max: 190px;
+  --w-VideoQuality: 184px;
+  --w-Resolution: 170px;
+
+  --w-AudioLanguages-min: 300px;
+  --w-AudioLanguages-width: 300px;
+  --w-AudioLanguages-max: 300px;
+  --w-SubtitleLanguages-min: 300px;
+  --w-SubtitleLanguages-width: 300px;
+  --w-SubtitleLanguages-max: 300px;
+
+  --w-CustomFormats: 280px;
+  --w-Genres-min: 300px;
+  --w-Genres-width: 300px;
+  --w-Genres-max: 300px;
+
+  --w-Tags-min: 240px;
+  --w-Tags-width: 240px;
+  --w-Tags-max: 240px;
+
+  --w-LastWatched-min: 190px;
+  --w-LastWatched-width: 190px;
+  --w-LastWatched-max: 190px;
+  --w-LastSearchTime-min: 190px;
+  --w-LastSearchTime-width: 190px;
+  --w-LastSearchTime-max: 190px;
+
+  --w-CutoffUnmetCount-min: 110px;
+  --w-CutoffUnmetCount-width: 110px;
+  --w-CutoffUnmetCount-max: 110px;
+  --w-QualityCutoffNotMet: 110px;
 }
 
 th[data-col="TotalSizeGB"],
@@ -4975,9 +5220,9 @@ td[data-col="TotalSizeGB"] {
 
 th[data-col="RootFolder"],
 td[data-col="RootFolder"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
+  width: var(--w-RootFolder-width);
+  min-width: var(--w-RootFolder-min);
+  max-width: var(--w-RootFolder-max);
   text-align: left;
 }
 
@@ -4990,7 +5235,7 @@ td[data-col="RootFolder"] {
 th[data-col="Path"],
 td[data-col="Path"] {
   width: var(--w-Path);
-  min-width: 400px;
+  min-width: var(--w-Path-min);
   max-width: var(--w-Path);
   text-align: left;
 }
@@ -5001,7 +5246,6 @@ td[data-col="Path"] {
   text-overflow: ellipsis;
 }
 
-/* TitleSlug (Sonarr) */
 th[data-col="TitleSlug"],
 td[data-col="TitleSlug"] {
   width: var(--w-TitleSlug);
@@ -5012,7 +5256,6 @@ td[data-col="TitleSlug"] {
   text-overflow: ellipsis;
 }
 
-/* Numeric / compact columns */
 th[data-col="ContentHours"],
 td[data-col="ContentHours"] {
   width: var(--w-ContentHours);
@@ -5029,44 +5272,44 @@ td[data-col="RuntimeMins"] {
 
 th[data-col="EpisodesCounted"],
 td[data-col="EpisodesCounted"] {
-  min-width: 60px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-EpisodesCounted-min);
+  width: var(--w-EpisodesCounted-width);
+  max-width: var(--w-EpisodesCounted-max);
 }
 
 th[data-col="SeasonCount"],
 td[data-col="SeasonCount"] {
-  min-width: 80px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-SeasonCount-min);
+  width: var(--w-SeasonCount-width);
+  max-width: var(--w-SeasonCount-max);
 }
 
 th[data-col="MissingCount"],
 td[data-col="MissingCount"] {
-  min-width: 80px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-MissingCount-min);
+  width: var(--w-MissingCount-width);
+  max-width: var(--w-MissingCount-max);
 }
 
 th[data-col="CutoffUnmetCount"],
 td[data-col="CutoffUnmetCount"] {
-  min-width: 80px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-CutoffUnmetCount-min);
+  width: var(--w-CutoffUnmetCount-width);
+  max-width: var(--w-CutoffUnmetCount-max);
 }
 
 th[data-col="AvgEpisodeSizeGB"],
 td[data-col="AvgEpisodeSizeGB"] {
-  min-width: 80px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-AvgEpisodeSizeGB-min);
+  width: var(--w-AvgEpisodeSizeGB-width);
+  max-width: var(--w-AvgEpisodeSizeGB-max);
 }
 
 th[data-col="TotalSizeGB"],
 td[data-col="TotalSizeGB"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-TotalSizeGB-min);
+  width: var(--w-TotalSizeGB-width);
+  max-width: var(--w-TotalSizeGB-max);
 }
 
 th[data-col="FileSizeGB"],
@@ -5109,21 +5352,20 @@ td[data-col="VideoCodec"] {
   width: var(--w-VideoCodec);
   min-width: var(--w-VideoCodec);
   max-width: var(--w-VideoCodec);
-
 }
 
 th[data-col="AudioCodec"],
 td[data-col="AudioCodec"] {
-  min-width: 112px;
-  width: max-content;
-  max-width: 160px;
+  min-width: var(--w-AudioCodec-min);
+  width: var(--w-AudioCodec-width);
+  max-width: var(--w-AudioCodec-max);
 }
 
 th[data-col="AudioChannels"],
 td[data-col="AudioChannels"] {
-  min-width: 200px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-AudioChannels-min);
+  width: var(--w-AudioChannels-width);
+  max-width: var(--w-AudioChannels-max);
 }
 
 th[data-col="VideoHDR"],
@@ -5135,46 +5377,51 @@ td[data-col="VideoHDR"] {
 
 th[data-col="Status"],
 td[data-col="Status"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-Status-min);
+  width: var(--w-Status-width);
+  max-width: var(--w-Status-max);
+}
+
+th[data-col="Monitored"],
+td[data-col="Monitored"] {
+  min-width: var(--w-Monitored-min);
+  width: var(--w-Monitored-width);
+  max-width: var(--w-Monitored-max);
 }
 
 th[data-col="Instance"],
 td[data-col="Instance"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-Instance-min);
+  width: var(--w-Instance-width);
+  max-width: var(--w-Instance-max);
 }
 
 th[data-col="QualityProfile"],
 td[data-col="QualityProfile"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-QualityProfile-min);
+  width: var(--w-QualityProfile-width);
+  max-width: var(--w-QualityProfile-max);
 }
 
 th[data-col="ReleaseGroup"],
 td[data-col="ReleaseGroup"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-ReleaseGroup-min);
+  width: var(--w-ReleaseGroup-width);
+  max-width: var(--w-ReleaseGroup-max);
 }
 
 th[data-col="Tags"],
 td[data-col="Tags"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-Tags-min);
+  width: var(--w-Tags-width);
+  max-width: var(--w-Tags-max);
 }
-
-
 
 th[data-col="Studio"],
 td[data-col="Studio"] {
-  min-width: 100px;
-  width: max-content;
-  max-width: none;
+  min-width: var(--w-Studio-min);
+  width: var(--w-Studio-width);
+  max-width: var(--w-Studio-max);
 }
 
 th[data-col="OriginalLanguage"],
@@ -5186,16 +5433,16 @@ td[data-col="OriginalLanguage"] {
 
 th[data-col="Genres"],
 td[data-col="Genres"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
+  width: var(--w-Genres-width);
+  min-width: var(--w-Genres-min);
+  max-width: var(--w-Genres-max);
 }
 
 th[data-col="Genre"],
 td[data-col="Genre"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
+  width: var(--w-Genres-width);
+  min-width: var(--w-Genres-min);
+  max-width: var(--w-Genres-max);
 }
 
 th[data-col="Edition"],
@@ -5221,126 +5468,62 @@ td[data-col="CustomFormats"] {
 
 th[data-col="Languages"],
 td[data-col="Languages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: max-content;
+  min-width: var(--w-Languages-min);
+  width: var(--w-Languages-width);
+  max-width: var(--w-Languages-max);
 }
 
 th[data-col="AudioLanguages"],
 td[data-col="AudioLanguages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: max-content;
+  min-width: var(--w-AudioLanguages-min);
+  width: var(--w-AudioLanguages-width);
+  max-width: var(--w-AudioLanguages-max);
 }
 
 th[data-col="SubtitleLanguages"],
 td[data-col="SubtitleLanguages"] {
-  min-width: 220px;
-  width: var(--w-OriginalLanguage);
-  max-width: max-content;
-}
-
-table[data-app="radarr"] {
-  --title-expand-gutter: 22px;
-}
-
-/* App specific tweaks */
-table[data-app="radarr"] {
-  --w-TitleSlug: 0px;
+  min-width: var(--w-SubtitleLanguages-min);
+  width: var(--w-SubtitleLanguages-width);
+  max-width: var(--w-SubtitleLanguages-max);
 }
 
 th[data-col="UsersWatched"],
 td[data-col="UsersWatched"] {
-  min-width: 96px;
-  width: auto;
-  max-width: 120px;
+  min-width: var(--w-UsersWatched-min);
+  width: var(--w-UsersWatched-width);
+  max-width: var(--w-UsersWatched-max);
 }
 
 th[data-col="Diagnostics"],
 td[data-col="Diagnostics"] {
-  min-width: 72px;
-  width: 72px;
-  max-width: 72px;
+  min-width: var(--w-Diagnostics-min);
+  width: var(--w-Diagnostics-width);
+  max-width: var(--w-Diagnostics-max);
 }
 
 th[data-col="watchtimehours"],
 td[data-col="watchtimehours"] {
-  min-width: 100px;
-  width: auto;
+  min-width: var(--w-watchtimehours-min);
+  width: var(--w-watchtimehours-width);
 }
 
 th[data-col="totalwatchtime"],
 td[data-col="totalwatchtime"] {
-  min-width: 100px;
-  width: auto;
+  min-width: var(--w-totalwatchtime-min);
+  width: var(--w-totalwatchtime-width);
 }
-
 
 th[data-col="LastWatched"],
 td[data-col="LastWatched"] {
-  min-width: 100px;
-  width: auto;
-  max-width: none;
+  min-width: var(--w-LastWatched-min);
+  width: var(--w-LastWatched-width);
+  max-width: var(--w-LastWatched-max);
 }
-
-table[data-app="radarr"] th[data-col="Studio"],
-table[data-app="radarr"] td[data-col="Studio"] {
-  min-width: 220px;
-  width: auto;
-}
-
-table[data-app="radarr"] {
-  --cap-Studio: 300px;
-}
-
-table[data-app="radarr"] th[data-col="Genres"],
-table[data-app="radarr"] td[data-col="Genres"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-table[data-app="radarr"] th[data-col="LastSearchTime"],
-table[data-app="radarr"] td[data-col="LastSearchTime"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-table[data-app="radarr"] th[data-col="Languages"],
-table[data-app="radarr"] td[data-col="Languages"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-table[data-app="radarr"] th[data-col="AudioLanguages"],
-table[data-app="radarr"] td[data-col="AudioLanguages"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-table[data-app="radarr"] th[data-col="SubtitleLanguages"],
-table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-table[data-app="radarr"] th[data-col="LastWatched"],
-table[data-app="radarr"] td[data-col="LastWatched"] {
-  width: auto;
-  min-width: auto;
-  max-width: max-content;
-}
-
-/* Radarr-only width and truncation tuning */
-table[data-app="radarr"] th[data-col="Monitored"],
-table[data-app="radarr"] td[data-col="Monitored"] {
-  min-width: 96px;
-  width: 96px;
-  max-width: 96px;
+th[data-col="LastSearchTime"],
+td[data-col="LastSearchTime"] {
+  min-width: var(--w-LastSearchTime-min);
+  width: var(--w-LastSearchTime-width);
+  max-width: var(--w-LastSearchTime-max);
 }
 
 table[data-app="radarr"] th[data-col="Tags"],
@@ -5366,120 +5549,9 @@ table[data-app="radarr"] td[data-col="LastWatched"] {
   white-space: nowrap;
 }
 
-/* Explicit Radarr widths for columns that should not truncate in normal usage. */
-table[data-app="radarr"] th[data-col="Tags"],
-table[data-app="radarr"] td[data-col="Tags"] {
-  min-width: 190px;
-  width: 190px;
-  max-width: 190px;
-}
-
-table[data-app="radarr"] th[data-col="Studio"],
-table[data-app="radarr"] td[data-col="Studio"] {
-  min-width: 260px;
-  width: 260px;
-  max-width: 260px;
-}
-
-table[data-app="radarr"] th[data-col="Genres"],
-table[data-app="radarr"] td[data-col="Genres"] {
-  min-width: 280px;
-  width: 280px;
-  max-width: 280px;
-}
-
-table[data-app="radarr"] th[data-col="LastSearchTime"],
-table[data-app="radarr"] td[data-col="LastSearchTime"],
-table[data-app="radarr"] th[data-col="LastWatched"],
-table[data-app="radarr"] td[data-col="LastWatched"] {
-  min-width: 190px;
-  width: 190px;
-  max-width: 190px;
-}
-
-table[data-app="radarr"] th[data-col="Languages"],
-table[data-app="radarr"] td[data-col="Languages"],
-table[data-app="radarr"] th[data-col="AudioLanguages"],
-table[data-app="radarr"] td[data-col="AudioLanguages"],
-table[data-app="radarr"] th[data-col="SubtitleLanguages"],
-table[data-app="radarr"] td[data-col="SubtitleLanguages"] {
-  min-width: 280px;
-  width: 280px;
-  max-width: 280px;
-}
-
 /* Shows-only width and truncation tuning (do not affect Movies). */
-table[data-app="sonarr"] tbody tr:not(.series-child-row) > td {
+table[data-app="sonarr"] tbody tr:not(.series-child-row)>td {
   white-space: nowrap;
-}
-
-table[data-app="sonarr"] th[data-col="AudioCodec"],
-table[data-app="sonarr"] td[data-col="AudioCodec"] {
-  min-width: 190px;
-  width: 190px;
-  max-width: 190px;
-}
-
-table[data-app="sonarr"] th[data-col="VideoQuality"],
-table[data-app="sonarr"] td[data-col="VideoQuality"] {
-  min-width: 184px;
-  width: 184px;
-  max-width: 184px;
-}
-
-table[data-app="sonarr"] th[data-col="Resolution"],
-table[data-app="sonarr"] td[data-col="Resolution"] {
-  min-width: 170px;
-  width: 170px;
-  max-width: 170px;
-}
-
-table[data-app="sonarr"] th[data-col="AudioLanguages"],
-table[data-app="sonarr"] td[data-col="AudioLanguages"],
-table[data-app="sonarr"] th[data-col="SubtitleLanguages"],
-table[data-app="sonarr"] td[data-col="SubtitleLanguages"] {
-  min-width: 300px;
-  width: 300px;
-  max-width: 300px;
-}
-
-table[data-app="sonarr"] th[data-col="CustomFormats"],
-table[data-app="sonarr"] td[data-col="CustomFormats"] {
-  min-width: 280px;
-  width: 280px;
-  max-width: 280px;
-}
-
-table[data-app="sonarr"] th[data-col="Genres"],
-table[data-app="sonarr"] td[data-col="Genres"] {
-  min-width: 300px;
-  width: 300px;
-  max-width: 300px;
-}
-
-table[data-app="sonarr"] th[data-col="Tags"],
-table[data-app="sonarr"] td[data-col="Tags"] {
-  min-width: 240px;
-  width: 240px;
-  max-width: 240px;
-}
-
-table[data-app="sonarr"] th[data-col="LastWatched"],
-table[data-app="sonarr"] td[data-col="LastWatched"],
-table[data-app="sonarr"] th[data-col="LastSearchTime"],
-table[data-app="sonarr"] td[data-col="LastSearchTime"] {
-  min-width: 190px;
-  width: 190px;
-  max-width: 190px;
-}
-
-table[data-app="sonarr"] th[data-col="CutoffUnmetCount"],
-table[data-app="sonarr"] td[data-col="CutoffUnmetCount"],
-table[data-app="sonarr"] th[data-col="QualityCutoffNotMet"],
-table[data-app="sonarr"] td[data-col="QualityCutoffNotMet"] {
-  min-width: 110px;
-  width: 110px;
-  max-width: 110px;
 }
 
 table[data-app="sonarr"] td[data-col="Tags"],
@@ -5488,7 +5560,6 @@ table[data-app="sonarr"] td[data-col="LastSearchTime"] {
   overflow: visible;
   text-overflow: clip;
 }
-
 /* Keep Show all / Mixed badges contained for Shows language-like cells. */
 table[data-app="sonarr"] td[data-col="AudioCodec"],
 table[data-app="sonarr"] td[data-col="Genres"],
@@ -5772,7 +5843,11 @@ html.is-android body {
   -webkit-overflow-scrolling: touch;
 }
 
-html.is-android .table-wrap,
+/* Android: keep table scroll contained (avoid page scroll chaining) */
+html.is-android .table-wrap {
+  overscroll-behavior: contain;
+}
+
 html.is-android .history-body {
   overscroll-behavior: auto;
 }
@@ -5813,15 +5888,15 @@ html.is-ios .perf-overlay {
 /* History drawer */
 .history-btn {
   margin-left: 4px;
-  padding: 0 4px;
-  border: 1px solid var(--border-color, #444);
+  padding: 0 4px 4px;
+  border-top: 2px solid var(--border-color, #444);
   background: var(--bg-surface, rgba(255, 255, 255, 0.06));
   color: inherit;
   border-radius: 3px;
   cursor: pointer;
-  height: 20px;
-  min-height: 20px;
-  line-height: 18px;
+  height: 17px;
+  line-height: 17px;
+  width: fit-content;
 }
 
 .history-btn:hover {
@@ -5858,6 +5933,7 @@ html.is-ios .perf-overlay {
   overflow: hidden;
   padding: 16px;
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   z-index: 20000;
   border-left: 1px solid var(--border-color, #444);
 }
@@ -5892,7 +5968,8 @@ html.is-ios .perf-overlay {
   padding: 16px;
   overflow: hidden;
   border-left: 1px solid var(--border-color, #444);
-  background: var(--panel-surface-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .plex-header {
@@ -5951,6 +6028,13 @@ html.is-ios .perf-overlay {
   padding-right: 2px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.plex-body::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .plex-section {
@@ -6258,12 +6342,14 @@ html.is-ios .perf-overlay {
   margin-top: 4px;
 }
 
-body.history-open {
+body.history-open,
+body.overlay-open {
   overflow: hidden;
 }
 
 /* When History is open, freeze the table scroll container too (it has its own scrollbars). */
-body.history-open #tableWrap {
+body.history-open #tableWrap,
+body.overlay-open #tableWrap {
   overflow: hidden !important;
 }
 
@@ -6290,16 +6376,17 @@ body.history-open #tableWrap {
 }
 
 tr[data-app="radarr"] .title-control-wrap {
-  margin-right: 13px;
-  position: relative;
-  left: -4px;
-  gap: 1px;
+  /* Keep Title layout identical across Shows/Movies for stable truncation/width. */
+  margin-right: 6px;
+  position: static;
+  left: auto;
+  gap: 6px;
 }
 
 tr[data-app="radarr"] .title-orb-wrap {
-  position: relative;
-  left: -4px;
-  gap: 11px;
+  position: static;
+  left: auto;
+  gap: 16px;
 }
 
 tr[data-app="radarr"] .title-control-wrap .row-refresh-btn--title {
@@ -6314,15 +6401,21 @@ tr[data-app="radarr"] .title-control-wrap .row-refresh-btn--title {
 
 tr[data-app="radarr"] .title-control-wrap .history-btn {
   position: relative;
-  left: 0;
+  left: -7px;
+}
+
+tr[data-app="radarr"] .status-orb {
+  position: relative;
+  left: -10px;
 }
 
 tr[data-app="radarr"] td[data-col="Title"] {
-  padding-left: 12px;
+  /* Match the shared Title column padding/gutter */
+  padding-left: 10px;
 }
 
 tr[data-app="radarr"] .title-orb-wrap .title-text {
-  max-width: calc(100% - 16px);
+  max-width: 100%;
 }
 
 /* Progress status clickable filters */
@@ -6347,6 +6440,37 @@ tr[data-app="radarr"] .title-orb-wrap .title-text {
   opacity: 0.7;
 }
 
+@media (max-width: 900px) and (pointer: coarse) {
+  :root {
+    --touch-target-min: 44px;
+  }
+
+  .toolbar>button,
+  .toolbar .column-menu>button,
+  .filters .filter-controls button,
+  .filters-footer .tabs button,
+  .filters-footer #chipsToggle,
+  .filters-footer .chip-advanced,
+  .filter-builder-row .filter-add-btn,
+  .chip-row .chip,
+  .column-actions button {
+    min-height: var(--touch-target-min);
+  }
+
+  #themeBtn,
+  #tableFullscreenBtn,
+  .advanced-help-btn {
+    min-width: var(--touch-target-min);
+    min-height: var(--touch-target-min);
+    padding-left: 0;
+    padding-right: 0;
+  }
+
+  .chip-row {
+    gap: 8px;
+  }
+}
+
 /* Sortarr plan fixes: layering + loading stability */
 .toolbar {
   position: relative;
@@ -6367,11 +6491,61 @@ body.sortarr-loading .filters-footer-chips {
 }
 
 body.sortarr-loading .status-row {
-  min-height: 112px;
+  height: 84px !important;
+  min-height: 84px;
+  max-height: 84px;
+  overflow: hidden;
 }
 
 body.sortarr-loading .status-banner {
   min-height: 22px;
+}
+
+body.sortarr-loading .filters-body,
+body.sortarr-loading .chip-wrap,
+body.sortarr-loading .status-row,
+body.sortarr-loading .status-pill {
+  transition: none !important;
+  animation: none !important;
+}
+
+body.sortarr-loading #filtersPanel.filters--collapsed {
+  padding: 14px 16px;
+  width: auto;
+  align-self: stretch;
+  display: block;
+}
+
+body.sortarr-loading #filtersPanel .filters-body,
+body.sortarr-loading #filtersPanel.filters--collapsed .filters-body {
+  opacity: 1 !important;
+  transform: none !important;
+  max-height: none !important;
+  pointer-events: none;
+}
+
+body.sortarr-loading .status-row.status-row--hidden {
+  display: flex !important;
+  opacity: 1;
+  transform: none;
+  height: 84px !important;
+  min-height: 84px;
+  max-height: 84px !important;
+  margin-top: 10px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  border-width: 1px;
+  visibility: visible;
+  pointer-events: none;
+}
+
+@media (max-width: 900px) {
+  body.sortarr-loading .status-row,
+  body.sortarr-loading .status-row.status-row--hidden {
+    height: 92px !important;
+    min-height: 92px;
+    max-height: 92px !important;
+  }
 }
 
 .health-badges-slot {
@@ -6416,11 +6590,17 @@ body.sortarr-loading .status-banner {
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
-  background: rgba(0, 0, 0, 0.45);
+  overflow: hidden;
 }
 
 .mismatch-overlay.hidden {
   display: none;
+}
+
+.mismatch-scrim {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.45);
+  touch-action: auto;
 }
 
 .mismatch-drawer {
@@ -6432,7 +6612,8 @@ body.sortarr-loading .status-banner {
   padding: 14px;
   overflow: hidden;
   border-left: 1px solid var(--border-color, #444);
-  background: var(--panel-surface-strong);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .mismatch-header {
@@ -6492,6 +6673,7 @@ body.sortarr-loading .status-banner {
 }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+
   .mismatch-controls select,
   .mismatch-controls input {
     backdrop-filter: blur(var(--glass-blur)) saturate(120%);
@@ -6517,6 +6699,8 @@ body.sortarr-loading .status-banner {
   gap: 8px;
 }
 
+
+
 .mismatch-empty {
   padding: 14px;
   border: 1px solid var(--border-color, #444);
@@ -6535,8 +6719,20 @@ body.sortarr-loading .status-banner {
 
 .mismatch-table-wrap {
   border: 1px solid var(--border-color, #444);
+  min-height: 0;
+  flex: 1;
   border-radius: 8px;
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: auto;
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* legacy Edge */
+}
+
+.mismatch-table-wrap::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .mismatch-table {
@@ -6553,11 +6749,25 @@ body.sortarr-loading .status-banner {
   font-size: 12px;
 }
 
-.mismatch-table th:nth-child(1) { width: 24%; }
-.mismatch-table th:nth-child(2) { width: 14%; }
-.mismatch-table th:nth-child(3) { width: 14%; }
-.mismatch-table th:nth-child(4) { width: 22%; }
-.mismatch-table th:nth-child(5) { width: 26%; }
+.mismatch-table th:nth-child(1) {
+  width: 24%;
+}
+
+.mismatch-table th:nth-child(2) {
+  width: 14%;
+}
+
+.mismatch-table th:nth-child(3) {
+  width: 14%;
+}
+
+.mismatch-table th:nth-child(4) {
+  width: 22%;
+}
+
+.mismatch-table th:nth-child(5) {
+  width: 26%;
+}
 
 .mismatch-title-cell {
   font-weight: 600;
@@ -6630,3 +6840,8 @@ body.sortarr-loading .status-banner {
   }
 }
 
+
+
+
+t e s t  
+ 

@@ -9717,11 +9717,13 @@ def index():
     if not _config_complete(cfg):
         return redirect(url_for("setup"))
     csrf_token = _get_csrf_token()
+    bootstrap_config = _frontend_bootstrap_config(cfg)
     return render_template(
         "index.html",
         app_name=APP_NAME,
         app_version=APP_VERSION,
         csrf_token=csrf_token,
+        bootstrap_config=bootstrap_config,
     )
 
 
@@ -10076,10 +10078,7 @@ def setup():
     )
 
 
-@app.route("/api/config")
-@_auth_required
-def api_config():
-    cfg = _get_config()
+def _frontend_bootstrap_config(cfg: dict) -> dict:
     provider = _playback_provider(cfg)
     playback_enabled = bool(provider)
     plex_configured = bool(cfg.get("plex_url") and cfg.get("plex_token"))
@@ -10105,29 +10104,39 @@ def api_config():
     sonarr_configured = bool(cfg.get("sonarr_instances")) or _is_plex_media_fallback_enabled(cfg, "sonarr")
     radarr_configured = bool(cfg.get("radarr_instances")) or _is_plex_media_fallback_enabled(cfg, "radarr")
     plex_scope = _get_plex_library_scope(cfg)
-    return jsonify(
+    return {
+        "sonarr_url": sonarr_public_base,
+        "radarr_url": radarr_public_base,
+        "sonarr_instances": sonarr_instances_public,
+        "radarr_instances": radarr_instances_public,
+        "tautulli_configured": playback_enabled,
+        "playback_configured": playback_enabled,
+        "playback_provider": provider,
+        "plex_configured": plex_configured,
+        "media_source_preference": media_source_preference,
+        "media_source": effective_media_source,
+        "history_source_preference": history_source_preference,
+        "history_sources_available": history_sources_available,
+        "option_set": option_set,
+        "plex_libraries": plex_scope.get("available", {}),
+        "sonarr_configured": sonarr_configured,
+        "radarr_configured": radarr_configured,
+    }
+
+
+@app.route("/api/config")
+@_auth_required
+def api_config():
+    cfg = _get_config()
+    payload = _frontend_bootstrap_config(cfg)
+    payload.update(
         {
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
-            "sonarr_url": sonarr_public_base,
-            "radarr_url": radarr_public_base,
-            "sonarr_instances": sonarr_instances_public,
-            "radarr_instances": radarr_instances_public,
-            "tautulli_configured": playback_enabled,
-            "playback_configured": playback_enabled,
-            "playback_provider": provider,
-            "plex_configured": plex_configured,
-            "media_source_preference": media_source_preference,
-            "media_source": effective_media_source,
-            "history_source_preference": history_source_preference,
-            "history_sources_available": history_sources_available,
-            "option_set": option_set,
-            "plex_libraries": plex_scope.get("available", {}),
-            "sonarr_configured": sonarr_configured,
-            "radarr_configured": radarr_configured,
             "configured": _config_complete(cfg),
         }
     )
+    return jsonify(payload)
 
 
 @app.route("/api/status")
@@ -12443,4 +12452,3 @@ if __name__ == "__main__":
             serve(app, host=host, port=port, threads=threads)
     else:
         app.run(host=host, port=port)
-

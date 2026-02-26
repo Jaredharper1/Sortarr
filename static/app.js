@@ -323,7 +323,7 @@ function updateMismatchCenterButtonVisibility() {
     ? configState.historySourcesAvailable
     : [];
   const supported = available.filter(provider => provider === "tautulli" || provider === "plex" || provider === "jellystat");
-  mismatchCenterBtn.classList.toggle("hidden", supported.length < 2);
+  mismatchCenterBtn.disabled = supported.length < 2;
 }
 function applyOptionSetCapabilities() {
   const arrTables = capabilityEnabled("arr_tables", configState.sonarrConfigured || configState.radarrConfigured);
@@ -748,6 +748,8 @@ let lastAppliedTableWrapMaxHeight = "";
 let firstPaintSettled = false;
 let deferredUiBindingsReady = false;
 let deferredUiBindingsScheduled = false;
+let startupReady = !document.body.classList.contains("sortarr-loading");
+let startupReadyFlipScheduled = false;
 const FILTER_RENDER_DEBOUNCE_MS = 140;
 const FILTER_RENDER_DEBOUNCE_MS_MOBILE_RADARR = 500;
 let filterRenderTimer = null;
@@ -1891,6 +1893,7 @@ function updateTruncationTooltips() {
 function lockTitlePathWidths() {
   if (!root || !tableEl) return;
   const app = activeApp;
+  const otherApp = app === "sonarr" ? "radarr" : "sonarr";
   const titleTh = tableEl.querySelector('th[data-col="Title"]');
   const pathTh = tableEl.querySelector('th[data-col="Path"]');
   if (!titleTh || !pathTh) return;
@@ -1898,9 +1901,13 @@ function lockTitlePathWidths() {
   const hasTitleWidth = titleWidthByApp[app] > 0;
   const hasPathWidth = pathWidthByApp[app] > 0;
   const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+
   if (filtersActive && sharedTitleWidth > 0 && hasPathWidth) {
     root.style.setProperty("--title-col-width", `${sharedTitleWidth}px`);
     root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
+    // Always propagate canonical width to both apps for cross-tab consistency
+    titleWidthByApp.sonarr = sharedTitleWidth;
+    titleWidthByApp.radarr = sharedTitleWidth;
     applyTitleWidth(app, null, { skipIfUnchanged: true });
     return;
   }
@@ -1923,12 +1930,16 @@ function lockTitlePathWidths() {
     } else {
       root.style.removeProperty("--title-col-width");
       root.style.removeProperty("--path-col-width");
-      const titleMin = parseFloat(window.getComputedStyle(titleTh).minWidth || "0");
-      const titleSignal = Number.isFinite(titleMin) && titleMin > 0
-        ? Math.round(titleMin)
-        : Math.round(titleTh.scrollWidth || 0);
+
+      // Clear inline styles on header to allow accurate measurement
+      widthService.clearCellWidth(titleTh);
+      
+      
+
+      const titleSignal = Math.round(titleTh.getBoundingClientRect().width);
       const titleWidth = clampTitleWidth(titleSignal);
       const pathWidth = Math.round(pathTh.getBoundingClientRect().width);
+
       if (titleWidth > 0) {
         titleWidthByApp[app] = titleWidth;
       }
@@ -1947,13 +1958,11 @@ function lockTitlePathWidths() {
     titlePathWidthFilterDirtyByApp[app] = filtersActive;
   }
   const canonicalTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
-  if (canonicalTitleWidth > 0) {
-    root.style.setProperty("--title-col-width", `${canonicalTitleWidth}px`);
-  }
   if (pathWidthByApp[app] > 0) {
     root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
   }
-  applyTitleWidth(app, null, { skipIfUnchanged: true });
+  // Pass the canonical width so it syncs to both apps immediately
+  applyTitleWidth(app, null, { skipIfUnchanged: true }, canonicalTitleWidth);
 }
 
 function isTableWrapOffscreen(rect) {
@@ -2186,10 +2195,20 @@ let statusNotice = "";
 let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
-let playbackProvider = "";
-let playbackLabel = t("Playback");
-let playbackSupportsItemRefresh = false;
-let playbackSupportsDiagnostics = false;
+const PLAYBACK_PROVIDER_STORAGE_KEY = "Sortarr-playback-provider";
+const cachedPlaybackProvider = (() => {
+  try {
+    return localStorage.getItem(PLAYBACK_PROVIDER_STORAGE_KEY) || "";
+  } catch {
+    return "";
+  }
+})();
+let playbackProvider = cachedPlaybackProvider;
+let playbackLabel = playbackProvider === "jellystat"
+  ? "Jellystat"
+  : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
+let playbackSupportsItemRefresh = playbackProvider === "tautulli";
+let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
 let backgroundLoading = false;
 let chipsVisible = true;
 let filtersCollapsed = false;
@@ -2490,7 +2509,7 @@ const followUpRefreshTimers = { sonarr: null, radarr: null };
 const arrRefreshBusy = { sonarr: new Set(), radarr: new Set() };
 let arrRefreshRenderKey = "";
 const TITLE_WIDTH_MIN = 420;
-const TITLE_WIDTH_MAX = 620;
+const TITLE_WIDTH_MAX = 500;
 
 function clampTitleWidth(value) {
   const width = Number(value);
@@ -2506,6 +2525,40 @@ const titlePathMeasurePassByApp = {
   sonarr: { token: -1, columnVersion: -1, filtersActive: false, titleWidth: 0, pathWidth: 0 },
   radarr: { token: -1, columnVersion: -1, filtersActive: false, titleWidth: 0, pathWidth: 0 },
 };
+
+const widthSchema = window.SortarrColumnWidths || null;
+const widthDebugState = {
+  transitions: [],
+  measuredWhitelist: [],
+  schemaCount: 0,
+  inlineWritesViaService: 0,
+};
+
+function pushWidthTransition(state, detail = "") {
+  widthDebugState.transitions.push({
+    ts: new Date().toISOString(),
+    state,
+    detail,
+  });
+  if (widthDebugState.transitions.length > 60) {
+    widthDebugState.transitions.shift();
+  }
+}
+
+function syncWidthDebug() {
+  if (!widthSchema) return;
+  widthDebugState.measuredWhitelist = widthSchema.getMeasuredColumnsWhitelist();
+  widthDebugState.schemaCount = Array.isArray(widthSchema.COLUMN_WIDTHS) ? widthSchema.COLUMN_WIDTHS.length : 0;
+  window.__sortarrWidthDebug = {
+    schemaCount: widthDebugState.schemaCount,
+    measuredWhitelist: widthDebugState.measuredWhitelist.slice(),
+    transitions: widthDebugState.transitions.slice(),
+    inlineWritesViaService: widthDebugState.inlineWritesViaService,
+  };
+}
+
+syncWidthDebug();
+pushWidthTransition("INIT", "width schema initialized");
 
 const ADVANCED_PLACEHOLDER_BASE = I18N.advancedPlaceholderBase;
 const ADVANCED_PLACEHOLDER_TAUTULLI = I18N.advancedPlaceholderTautulli;
@@ -3664,6 +3717,32 @@ function updateLoadingIndicator() {
   loadingIndicator.classList.toggle("hidden", !(isLoading || backgroundLoading));
 }
 
+function markStartupReady() {
+  if (startupReady) return;
+  startupReady = true;
+  document.body.classList.remove("sortarr-loading");
+  document.body.classList.add("sortarr-ready");
+  if (plexInsightsBtn) {
+    plexInsightsBtn.disabled = !configState.plexConfigured;
+  }
+  updateMismatchCenterButtonVisibility();
+  const playbackReady = Boolean(statusState.tautulli?.configured);
+  if (deepRefreshTautulliBtn) {
+    deepRefreshTautulliBtn.disabled = !playbackReady;
+  }
+}
+
+function scheduleStartupReadyFlip() {
+  if (startupReady || startupReadyFlipScheduled) return;
+  startupReadyFlipScheduled = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      startupReadyFlipScheduled = false;
+      markStartupReady();
+    });
+  });
+}
+
 function clearLoadingUiPlaceholders() {
   STATUS_VALUE_ELS.forEach(el => {
     el.classList.remove("status-value--skeleton");
@@ -3671,7 +3750,6 @@ function clearLoadingUiPlaceholders() {
   if (healthBadgesEl) {
     healthBadgesEl.classList.remove("health-badges-slot--loading");
   }
-  document.body.classList.remove("sortarr-loading");
 }
 
 function setLoading(loading, label) {
@@ -3682,6 +3760,9 @@ function setLoading(loading, label) {
   if (label) setStatus(label);
   if (!loading) {
     clearLoadingUiPlaceholders();
+    if (deferredUiBindingsReady || firstPaintSettled) {
+      scheduleStartupReadyFlip();
+    }
   }
 }
 
@@ -4125,16 +4206,26 @@ function renderProgressStatus(appState, tautulliState) {
     ? displayState.processed
     : null;
   if (progressStatusEl) {
+    const holdConfiguredPlaybackValue = Boolean(
+      configState.playbackConfigured &&
+      !(tautulliState && tautulliState.configured) &&
+      progressStatusEl.dataset.hasValue === "1"
+    );
     if (tautulliState && tautulliState.configured) {
-      progressStatusEl.innerHTML = formatProgressHtml(
+      const next = formatProgressHtml(
         appState?.counts,
         appState?.configured,
         appState?.progress,
         tautulliState,
         displayProcessed
       );
+      progressStatusEl.innerHTML = next;
+      progressStatusEl.dataset.hasValue = next ? "1" : "0";
     } else {
-      progressStatusEl.textContent = "--";
+      if (!holdConfiguredPlaybackValue) {
+        progressStatusEl.textContent = "--";
+        progressStatusEl.dataset.hasValue = "0";
+      }
     }
   }
   updateStatusPill(appState, tautulliState, displayProcessed);
@@ -4167,7 +4258,7 @@ function markStatusReadyFromRows(rowCount) {
 }
 
 function showStatusRow() {
-  if (!statusRowEl || !statusReadyAfterFirstData) return;
+  if (!statusRowEl) return;
   clearStatusPillTimer();
   statusRowEl.classList.remove("status-row--hidden");
   statusCollapsed = false;
@@ -4176,6 +4267,11 @@ function showStatusRow() {
 
 function hideStatusRow() {
   if (!statusRowEl) return;
+  // Keep the row visible during startup; only allow collapse after first data is rendered.
+  if (!statusReadyAfterFirstData) {
+    showStatusRow();
+    return;
+  }
   clearStatusPillTimer();
   statusRowEl.classList.add("status-row--hidden");
   statusCollapsed = true;
@@ -4241,8 +4337,19 @@ function startStatusCountdown() {
 
 function updateStatusRowVisibility(appState, tautulli) {
   if (!statusRowEl) return;
+  const loadingPhase = document.body.classList.contains("sortarr-loading");
   if (!statusReadyAfterFirstData) {
-    hideStatusRow();
+    clearStatusCountdown();
+    statusCompletionFlashed = false;
+    updateStatusCompleteNote("", false);
+    showStatusRow();
+    return;
+  }
+  if (loadingPhase) {
+    clearStatusCountdown();
+    statusCompletionFlashed = false;
+    updateStatusCompleteNote("", false);
+    showStatusRow();
     return;
   }
   const shouldAutoHide = shouldAutoHideStatus(appState, tautulli);
@@ -4449,9 +4556,13 @@ function updateStatusPanel() {
   if (!progressStatusEl && !tautulliStatusEl && !cacheStatusEl) return;
   const appState = statusState.apps?.[activeApp];
   const tautulli = statusState.tautulli;
+  const loadingPhase = document.body.classList.contains("sortarr-loading");
   const progressBlock = progressStatusEl?.closest(".status-block");
   if (progressBlock) {
-    progressBlock.classList.toggle("hidden", !(tautulli && tautulli.configured));
+    progressBlock.classList.toggle(
+      "hidden",
+      !(configState.playbackConfigured || (tautulli && tautulli.configured))
+    );
   }
   const ageSeed = appState?.cache?.memory_age_seconds ??
     appState?.cache?.disk_age_seconds ??
@@ -4463,7 +4574,23 @@ function updateStatusPanel() {
   updateProgressTargets(activeApp, appState?.progress, tautulli);
   renderProgressStatus(appState, tautulli);
   if (tautulliStatusEl) {
-    tautulliStatusEl.textContent = formatTautulliStatus(tautulli, appState?.progress);
+    if (loadingPhase && !(tautulli && tautulli.configured)) {
+      if (tautulliStatusEl.dataset.hasValue !== "1") {
+        tautulliStatusEl.textContent = "--";
+        tautulliStatusEl.dataset.hasValue = "0";
+      }
+    } else {
+    const holdConfiguredPlaybackValue = Boolean(
+      configState.playbackConfigured &&
+      !(tautulli && tautulli.configured) &&
+      tautulliStatusEl.dataset.hasValue === "1"
+    );
+    if (!holdConfiguredPlaybackValue) {
+      const next = formatTautulliStatus(tautulli, appState?.progress);
+      tautulliStatusEl.textContent = next;
+      tautulliStatusEl.dataset.hasValue = (next && next !== "--") ? "1" : "0";
+    }
+    }
   }
   if (cacheStatusEl) {
     const parts = [];
@@ -4476,15 +4603,21 @@ function updateStatusPanel() {
     if (tautulli && tautulli.configured) {
       parts.push(formatCacheStatus(getPlaybackLabel(), withElapsedAge(tautulli.index_age_seconds)));
     }
-    cacheStatusEl.textContent = parts.length ? parts.join(" | ") : "--";
+    if (parts.length) {
+      cacheStatusEl.textContent = parts.join(" | ");
+      cacheStatusEl.dataset.hasValue = "1";
+    } else if (
+      !(
+        cacheStatusEl.dataset.hasValue === "1" &&
+        (statusFetchInFlight || configState.playbackConfigured)
+      )
+    ) {
+      cacheStatusEl.textContent = "--";
+      cacheStatusEl.dataset.hasValue = "0";
+    }
   }
   setPartialBanner(Boolean(tautulli?.partial));
-  if (refreshTautulliBtn) {
-    refreshTautulliBtn.classList.toggle("hidden", !(tautulli && tautulli.configured));
-    refreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
-  }
   if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.classList.toggle("hidden", !(tautulli && tautulli.configured));
     deepRefreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
   }
   updatePrimaryRefreshButton();
@@ -4559,299 +4692,301 @@ function scheduleStatusPoll() {
 }
 
 
-  function enableTablePinchZoom() {
-    const wrap = document.querySelector(".table-wrap");
-    if (!wrap) return;
+function enableTablePinchZoom() {
+  const wrap = document.querySelector(".table-wrap");
+  if (!wrap) return;
 
 
-    if (wrap.dataset.pinchZoomEnabled === "1") return;
+  if (wrap.dataset.pinchZoomEnabled === "1") return;
 
-    // Allow the browser to handle page pinch-zoom everywhere else,
-    // but take over pinch gestures that start on the table area.
-    let table = wrap.querySelector("table");
-    if (!table) return;
+  // Allow the browser to handle page pinch-zoom everywhere else,
+  // but take over pinch gestures that start on the table area.
+  let table = wrap.querySelector("table");
+  if (!table) return;
 
-    wrap.dataset.pinchZoomEnabled = "1";
+  wrap.dataset.pinchZoomEnabled = "1";
 
-    let inner = wrap.querySelector(".table-zoom-inner");
-    if (!inner) {
-      inner = document.createElement("div");
-      inner.className = "table-zoom-inner";
-      table.parentNode.insertBefore(inner, table);
+  let inner = wrap.querySelector(".table-zoom-inner");
+  if (!inner) {
+    inner = document.createElement("div");
+    inner.className = "table-zoom-inner";
+    table.parentNode.insertBefore(inner, table);
+    inner.appendChild(table);
+  }
+
+  let scale = 1;
+  let startScale = 1;
+  let startDist = 0;
+  let baseW = 0;
+  let baseH = 0;
+  let isPinching = false;
+  let measureFrame = null;
+
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  const dist = (t1, t2) => {
+    const dx = t2.clientX - t1.clientX;
+    const dy = t2.clientY - t1.clientY;
+    return Math.hypot(dx, dy);
+  };
+
+  const getAnchor = (clientX, clientY) => {
+    const rect = wrap.getBoundingClientRect();
+    const offsetX = clientX - rect.left;
+    const offsetY = clientY - rect.top;
+    return {
+      offsetX,
+      offsetY,
+      contentX: (wrap.scrollLeft + offsetX) / scale,
+      contentY: (wrap.scrollTop + offsetY) / scale,
+    };
+  };
+
+  const applyScale = (nextScale, anchor = null) => {
+    scale = clamp(nextScale, 0.85, 2.75);
+    inner.style.transformOrigin = "0 0";
+    inner.style.transform = `scale(${scale})`;
+
+    // Keep the scrollable area consistent with the scaled table size.
+    if (baseW && baseH) {
+      inner.style.width = `${Math.ceil(baseW * scale)}px`;
+      inner.style.height = `${Math.ceil(baseH * scale)}px`;
+    }
+    if (anchor && baseW && baseH) {
+      const scaledW = Math.ceil(baseW * scale);
+      const scaledH = Math.ceil(baseH * scale);
+      const maxLeft = Math.max(0, scaledW - wrap.clientWidth);
+      const maxTop = Math.max(0, scaledH - wrap.clientHeight);
+      const nextLeft = anchor.contentX * scale - anchor.offsetX;
+      const nextTop = anchor.contentY * scale - anchor.offsetY;
+      wrap.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
+      wrap.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
+    }
+  };
+
+  const getTouchCenter = (t1, t2) => ({
+    x: (t1.clientX + t2.clientX) / 2,
+    y: (t1.clientY + t2.clientY) / 2,
+  });
+
+  const scheduleMeasure = () => {
+    if (measureFrame) return;
+    measureFrame = requestAnimationFrame(() => {
+      measureFrame = null;
+      measureBase();
+    });
+  };
+
+  const measureBase = () => {
+    // Reset transforms to measure intrinsic size
+    inner.style.transform = "scale(1)";
+    inner.style.width = "";
+    inner.style.height = "";
+
+    // Re-find table in case the app re-rendered it
+    const newTable = wrap.querySelector("table");
+    if (newTable && newTable !== table) {
+      table = newTable;
+      inner.innerHTML = "";
       inner.appendChild(table);
     }
 
-    let scale = 1;
-    let startScale = 1;
-    let startDist = 0;
-    let baseW = 0;
-    let baseH = 0;
-    let isPinching = false;
-    let measureFrame = null;
+    baseW = table ? table.offsetWidth : baseW;
+    baseH = table ? table.offsetHeight : baseH;
+    applyScale(scale);
+  };
 
-    const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-
-    const dist = (t1, t2) => {
-      const dx = t2.clientX - t1.clientX;
-      const dy = t2.clientY - t1.clientY;
-      return Math.hypot(dx, dy);
-    };
-
-    const getAnchor = (clientX, clientY) => {
-      const rect = wrap.getBoundingClientRect();
-      const offsetX = clientX - rect.left;
-      const offsetY = clientY - rect.top;
-      return {
-        offsetX,
-        offsetY,
-        contentX: (wrap.scrollLeft + offsetX) / scale,
-        contentY: (wrap.scrollTop + offsetY) / scale,
-      };
-    };
-
-    const applyScale = (nextScale, anchor = null) => {
-      scale = clamp(nextScale, 0.85, 2.75);
-      inner.style.transformOrigin = "0 0";
-      inner.style.transform = `scale(${scale})`;
-
-      // Keep the scrollable area consistent with the scaled table size.
-      if (baseW && baseH) {
-        inner.style.width = `${Math.ceil(baseW * scale)}px`;
-        inner.style.height = `${Math.ceil(baseH * scale)}px`;
-      }
-      if (anchor && baseW && baseH) {
-        const scaledW = Math.ceil(baseW * scale);
-        const scaledH = Math.ceil(baseH * scale);
-        const maxLeft = Math.max(0, scaledW - wrap.clientWidth);
-        const maxTop = Math.max(0, scaledH - wrap.clientHeight);
-        const nextLeft = anchor.contentX * scale - anchor.offsetX;
-        const nextTop = anchor.contentY * scale - anchor.offsetY;
-        wrap.scrollLeft = Math.max(0, Math.min(maxLeft, nextLeft));
-        wrap.scrollTop = Math.max(0, Math.min(maxTop, nextTop));
-      }
-    };
-
-    const getTouchCenter = (t1, t2) => ({
-      x: (t1.clientX + t2.clientX) / 2,
-      y: (t1.clientY + t2.clientY) / 2,
-    });
-
-    const scheduleMeasure = () => {
-      if (measureFrame) return;
-      measureFrame = requestAnimationFrame(() => {
-        measureFrame = null;
-        measureBase();
-      });
-    };
-
-    const measureBase = () => {
-      // Reset transforms to measure intrinsic size
-      inner.style.transform = "scale(1)";
-      inner.style.width = "";
-      inner.style.height = "";
-
-      // Re-find table in case the app re-rendered it
-      const newTable = wrap.querySelector("table");
-      if (newTable && newTable !== table) {
-        table = newTable;
-        inner.innerHTML = "";
-        inner.appendChild(table);
-      }
-
-      baseW = table ? table.offsetWidth : baseW;
-      baseH = table ? table.offsetHeight : baseH;
-      applyScale(scale);
-    };
-
-    // Re-measure after layout-affecting DOM updates in the table area
-    const obs = new MutationObserver(() => {
-      scheduleMeasure();
-    });
-    obs.observe(wrap, { childList: true, subtree: true });
-
+  // Re-measure after layout-affecting DOM updates in the table area
+  const obs = new MutationObserver(() => {
     scheduleMeasure();
+  });
+  obs.observe(wrap, { childList: true, subtree: true });
 
-    // iOS Safari requires passive:false to prevent default pinch-zoom.
-    wrap.addEventListener(
-      "touchstart",
-      (e) => {
-        if (e.touches && e.touches.length === 2) {
+  scheduleMeasure();
+
+  // iOS Safari requires passive:false to prevent default pinch-zoom.
+  wrap.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches && e.touches.length === 2) {
+        e.preventDefault();
+        isPinching = true;
+        startScale = scale;
+        startDist = dist(e.touches[0], e.touches[1]);
+      }
+    },
+    { passive: false }
+  );
+
+  wrap.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!isPinching) return;
+      if (!e.touches || e.touches.length !== 2) return;
+
+      // This prevents the page from zooming when the pinch starts on the table.
+      e.preventDefault();
+
+      const d = dist(e.touches[0], e.touches[1]);
+      if (!startDist) return;
+      const center = getTouchCenter(e.touches[0], e.touches[1]);
+      const anchor = getAnchor(center.x, center.y);
+      const nextScale = startScale * (d / startDist);
+      requestApplyScale(nextScale, anchor);
+    },
+    { passive: false }
+  );
+
+  wrap.addEventListener(
+    "touchend",
+    (e) => {
+      if (!e.touches || e.touches.length < 2) {
+        isPinching = false;
+        startDist = 0;
+      }
+    },
+    { passive: true }
+  );
+
+  if (document.documentElement.classList.contains("is-ios")) {
+    ["gesturestart", "gesturechange", "gestureend"].forEach(eventName => {
+      wrap.addEventListener(
+        eventName,
+        (e) => {
           e.preventDefault();
-          isPinching = true;
-          startScale = scale;
-          startDist = dist(e.touches[0], e.touches[1]);
-        }
-      },
-      { passive: false }
-    );
-
-    wrap.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!isPinching) return;
-        if (!e.touches || e.touches.length !== 2) return;
-
-        // This prevents the page from zooming when the pinch starts on the table.
-        e.preventDefault();
-
-        const d = dist(e.touches[0], e.touches[1]);
-        if (!startDist) return;
-        const center = getTouchCenter(e.touches[0], e.touches[1]);
-        const anchor = getAnchor(center.x, center.y);
-        const nextScale = startScale * (d / startDist);
-        requestApplyScale(nextScale, anchor);
-      },
-      { passive: false }
-    );
-
-    wrap.addEventListener(
-      "touchend",
-      (e) => {
-        if (!e.touches || e.touches.length < 2) {
-          isPinching = false;
-          startDist = 0;
-        }
-      },
-      { passive: true }
-    );
-
-    if (document.documentElement.classList.contains("is-ios")) {
-      ["gesturestart", "gesturechange", "gestureend"].forEach(eventName => {
-        wrap.addEventListener(
-          eventName,
-          (e) => {
-            e.preventDefault();
-            if (eventName === "gestureend") {
-              isPinching = false;
-              startDist = 0;
-            }
-          },
-          { passive: false }
-        );
-      });
-    }
-    const isFirefox = document.documentElement.classList.contains("is-firefox");
-    wrap.addEventListener(
-      "wheel",
-      (e) => {
-        if (!isFirefox || !e.ctrlKey) return;
-        if (!wrap.contains(e.target)) return;
-        e.preventDefault();
-        const anchor = getAnchor(e.clientX, e.clientY);
-        const zoomFactor = Math.exp(-e.deltaY * 0.002);
-        requestApplyScale(scale * zoomFactor, anchor);
-      },
-      { passive: false }
-    );
-
-    // Optional: double-tap to reset zoom on touch devices
-    let lastTap = 0;
-    wrap.addEventListener(
-      "touchend",
-      (e) => {
-        if (isPinching) return;
-        if (e.changedTouches && e.changedTouches.length === 1) {
-          const now = Date.now();
-          if (now - lastTap < 320) {
-            const touch = e.changedTouches[0];
-            const anchor = touch ? getAnchor(touch.clientX, touch.clientY) : null;
-            applyScale(1, anchor);
-            lastTap = 0;
-          } else {
-            lastTap = now;
+          if (eventName === "gestureend") {
+            isPinching = false;
+            startDist = 0;
           }
-        }
-      },
-      { passive: false }
-    );
+        },
+        { passive: false }
+      );
+    });
   }
+  const isFirefox = document.documentElement.classList.contains("is-firefox");
+  wrap.addEventListener(
+    "wheel",
+    (e) => {
+      if (!isFirefox || !e.ctrlKey) return;
+      if (!wrap.contains(e.target)) return;
+      e.preventDefault();
+      const anchor = getAnchor(e.clientX, e.clientY);
+      const zoomFactor = Math.exp(-e.deltaY * 0.002);
+      requestApplyScale(scale * zoomFactor, anchor);
+    },
+    { passive: false }
+  );
 
-  function enableTableScrollChaining() {
-    if (!tableWrapEl) return;
-    if (!document.documentElement.classList.contains("is-ios")) return;
-    let tracking = false;
-    let lastY = 0;
-    tableWrapEl.addEventListener(
-      "touchstart",
-      (e) => {
-        if (!e.touches || e.touches.length !== 1) {
-          tracking = false;
-          return;
+  // Optional: double-tap to reset zoom on touch devices
+  let lastTap = 0;
+  wrap.addEventListener(
+    "touchend",
+    (e) => {
+      if (isPinching) return;
+      if (e.changedTouches && e.changedTouches.length === 1) {
+        const now = Date.now();
+        if (now - lastTap < 320) {
+          const touch = e.changedTouches[0];
+          const anchor = touch ? getAnchor(touch.clientX, touch.clientY) : null;
+          applyScale(1, anchor);
+          lastTap = 0;
+        } else {
+          lastTap = now;
         }
-        tracking = true;
-        lastY = e.touches[0].clientY;
-      },
-      { passive: true }
-    );
-    tableWrapEl.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!tracking || !e.touches || e.touches.length !== 1) return;
-        const currentY = e.touches[0].clientY;
-        const deltaY = currentY - lastY;
-        lastY = currentY;
-        const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
-        if (maxScroll <= 0) return;
-        const atTop = tableWrapEl.scrollTop <= 0;
-        const atBottom = tableWrapEl.scrollTop >= maxScroll - 1;
-        if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
-          window.scrollBy(0, -deltaY);
-        }
-      },
-      { passive: true }
-    );
-    tableWrapEl.addEventListener(
-      "touchend",
-      () => {
+      }
+    },
+    { passive: false }
+  );
+}
+
+function enableTableScrollChaining() {
+  if (!tableWrapEl) return;
+  if (!document.documentElement.classList.contains("is-ios")) return;
+  let tracking = false;
+  let lastY = 0;
+  tableWrapEl.addEventListener(
+    "touchstart",
+    (e) => {
+      if (!e.touches || e.touches.length !== 1) {
         tracking = false;
-      },
-      { passive: true }
-    );
-  }
-
-  function enableStatusRowScrollChaining() {
-    if (!statusRowEl) return;
-    if (!document.documentElement.classList.contains("is-coarse")) return;
-    let tracking = false;
-    let lastY = 0;
-    statusRowEl.addEventListener(
-      "touchstart",
-      (e) => {
-        if (!e.touches || e.touches.length !== 1) {
-          tracking = false;
-          return;
-        }
-        tracking = true;
-        lastY = e.touches[0].clientY;
-      },
-      { passive: true }
-    );
-    statusRowEl.addEventListener(
-      "touchmove",
-      (e) => {
-        if (!tracking || !e.touches || e.touches.length !== 1) return;
-        const currentY = e.touches[0].clientY;
-        const deltaY = currentY - lastY;
-        lastY = currentY;
-        if (!deltaY) return;
-        if (!tableWrapEl) return;
-        const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
-        if (maxScroll <= 0) return;
-        const nextTop = Math.max(0, Math.min(maxScroll, tableWrapEl.scrollTop - deltaY));
-        if (nextTop === tableWrapEl.scrollTop) return;
+        return;
+      }
+      tracking = true;
+      lastY = e.touches[0].clientY;
+    },
+    { passive: true }
+  );
+  tableWrapEl.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!tracking || !e.touches || e.touches.length !== 1) return;
+      const currentY = e.touches[0].clientY;
+      const deltaY = currentY - lastY;
+      lastY = currentY;
+      const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+      if (maxScroll <= 0) return;
+      const atTop = tableWrapEl.scrollTop <= 0;
+      const atBottom = tableWrapEl.scrollTop >= maxScroll - 1;
+      // iOS Safari: prevent "scroll chaining" to the page when the table is at an edge.
+      // We want swipes inside the table to never scroll the document behind it.
+      if ((atTop && deltaY > 0) || (atBottom && deltaY < 0)) {
         e.preventDefault();
-        tableWrapEl.scrollTop = nextTop;
-      },
-      { passive: false }
-    );
-    statusRowEl.addEventListener(
-      "touchend",
-      () => {
+      }
+    },
+    { passive: false }
+  );
+  tableWrapEl.addEventListener(
+    "touchend",
+    () => {
+      tracking = false;
+    },
+    { passive: true }
+  );
+}
+
+function enableStatusRowScrollChaining() {
+  if (!statusRowEl) return;
+  if (!document.documentElement.classList.contains("is-coarse")) return;
+  let tracking = false;
+  let lastY = 0;
+  statusRowEl.addEventListener(
+    "touchstart",
+    (e) => {
+      if (!e.touches || e.touches.length !== 1) {
         tracking = false;
-      },
-      { passive: true }
-    );
-  }
+        return;
+      }
+      tracking = true;
+      lastY = e.touches[0].clientY;
+    },
+    { passive: true }
+  );
+  statusRowEl.addEventListener(
+    "touchmove",
+    (e) => {
+      if (!tracking || !e.touches || e.touches.length !== 1) return;
+      const currentY = e.touches[0].clientY;
+      const deltaY = currentY - lastY;
+      lastY = currentY;
+      if (!deltaY) return;
+      if (!tableWrapEl) return;
+      const maxScroll = Math.max(0, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+      if (maxScroll <= 0) return;
+      const nextTop = Math.max(0, Math.min(maxScroll, tableWrapEl.scrollTop - deltaY));
+      if (nextTop === tableWrapEl.scrollTop) return;
+      e.preventDefault();
+      tableWrapEl.scrollTop = nextTop;
+    },
+    { passive: false }
+  );
+  statusRowEl.addEventListener(
+    "touchend",
+    () => {
+      tracking = false;
+    },
+    { passive: true }
+  );
+}
 function mergeStatusApps(prevApps, nextApps) {
   if (!nextApps) return prevApps;
   const merged = { ...(prevApps || {}) };
@@ -10345,6 +10480,7 @@ function cacheColumnWidths(app, options = {}) {
     if (th.classList.contains("col-hidden")) return;
     const col = th.getAttribute("data-col");
     if (!col || col === "Title") return;
+    if (!isSchemaMeasuredColumn(col)) return;
     const width = getCellContentWidth(th);
     const capWidth = getAppliedColumnCapWidth(col);
     const cachedWidth = capWidth > 0 ? Math.min(width, capWidth) : width;
@@ -10357,6 +10493,68 @@ function cacheColumnWidths(app, options = {}) {
   }
 }
 
+
+function getWidthSchemaEntry(col) {
+  if (!widthSchema || !col) return null;
+  return widthSchema.getColumnWidthEntry(col);
+}
+
+function isSchemaMeasuredColumn(col) {
+  const entry = getWidthSchemaEntry(col);
+  if (!entry) return false;
+  return entry.strategy === "dynamic_title_path" || entry.strategy === "capped";
+}
+
+const widthService = {
+  computeColumnWidths(app, visibilityState = null, filterState = null) {
+    const entries = widthSchema ? widthSchema.getColumnWidthEntriesForApp(app) : [];
+    return {
+      app,
+      visibilityState,
+      filterState,
+      entries,
+      measuredColumns: widthSchema ? widthSchema.getMeasuredColumnsWhitelist() : [],
+    };
+  },
+  applyColumnWidths(table, computed, widthMap, bodyEl) {
+    if (!table || !widthMap || !widthMap.size) return;
+    const headers = table.querySelectorAll("thead th[data-col]");
+    headers.forEach((th) => {
+      const col = th.getAttribute("data-col");
+      const width = widthMap.get(col);
+      if (!width) return;
+      this.setCellWidth(th, `${width}px`);
+    });
+    if (bodyEl) {
+      widthMap.forEach((width, col) => {
+        if (!col || col === "Title") return;
+        bodyEl.querySelectorAll(`td[data-col="${col}"]`).forEach((td) => {
+          this.setCellWidth(td, `${width}px`);
+        });
+      });
+    }
+    if (computed) {
+      pushWidthTransition("JS_MIGRATION", `applyColumnWidths(${computed.app})`);
+      syncWidthDebug();
+    }
+  },
+  measureDynamicColumns() {
+    return widthSchema ? widthSchema.getMeasuredColumnsWhitelist() : ["Title", "Path"];
+  },
+  setCellWidth(el, widthPx) {
+    if (!el) return;
+    el.style.width = widthPx;
+    el.style.minWidth = widthPx;
+    el.style.maxWidth = widthPx;
+    widthDebugState.inlineWritesViaService += 1;
+  },
+  clearCellWidth(el) {
+    if (!el) return;
+    el.style.width = "";
+    el.style.minWidth = "";
+    el.style.maxWidth = "";
+  },
+};
 function lockColumnWidths(token) {
   if (!tableEl) return;
   const app = activeApp;
@@ -10368,6 +10566,7 @@ function lockColumnWidths(token) {
   if (useCache) {
     columnWidthCacheByApp[app].forEach((width, col) => {
       if (!col || col === "Title") return;
+      if (!isSchemaMeasuredColumn(col)) return;
       if (width > 0) {
         columnWidthLock.widths.set(col, width);
       }
@@ -10377,6 +10576,7 @@ function lockColumnWidths(token) {
       if (th.classList.contains("col-hidden")) return;
       const col = th.getAttribute("data-col");
       if (!col || col === "Title") return;
+      if (!isSchemaMeasuredColumn(col)) return;
       const width = getCellContentWidth(th);
       if (width > 0) {
         columnWidthLock.widths.set(col, width);
@@ -10384,26 +10584,8 @@ function lockColumnWidths(token) {
     });
   }
   if (!columnWidthLock.widths.size) return;
-  headers.forEach(th => {
-    const col = th.getAttribute("data-col");
-    const width = columnWidthLock.widths.get(col);
-    if (!width) return;
-    const widthPx = `${width}px`;
-    th.style.width = widthPx;
-    th.style.minWidth = widthPx;
-    th.style.maxWidth = widthPx;
-  });
-  if (tbody && columnWidthLock.widths.size) {
-    columnWidthLock.widths.forEach((width, col) => {
-      if (!col || col === "Title") return;
-      const widthPx = `${width}px`;
-      tbody.querySelectorAll(`td[data-col="${col}"]`).forEach(td => {
-        td.style.width = widthPx;
-        td.style.minWidth = widthPx;
-        td.style.maxWidth = widthPx;
-      });
-    });
-  }
+  const computedWidths = widthService.computeColumnWidths(app, null, hasActiveFilters());
+  widthService.applyColumnWidths(tableEl, computedWidths, columnWidthLock.widths, tbody);
   columnWidthLock.active = true;
   columnWidthLock.token = token || 0;
 }
@@ -10415,17 +10597,17 @@ function unlockColumnWidths(token) {
   headers.forEach(th => {
     const col = th.getAttribute("data-col");
     if (!col || !columnWidthLock.widths.has(col)) return;
-    th.style.width = "";
-    th.style.minWidth = "";
-    th.style.maxWidth = "";
+    widthService.clearCellWidth(th);
+    
+    
   });
   if (tbody && columnWidthLock.widths.size) {
     columnWidthLock.widths.forEach((_width, col) => {
       if (!col || col === "Title") return;
       tbody.querySelectorAll(`td[data-col="${col}"]`).forEach(td => {
-        td.style.width = "";
-        td.style.minWidth = "";
-        td.style.maxWidth = "";
+        widthService.clearCellWidth(td);
+        
+        
       });
     });
   }
@@ -10498,9 +10680,9 @@ function applyColumnHeaderCaps() {
   if (!headerCapCleanupDone) {
     HEADER_WIDTH_CAP_COLUMNS.forEach(col => {
       tableEl.querySelectorAll(`th[data-col="${col}"], td[data-col="${col}"]`).forEach(el => {
-        el.style.width = "";
-        el.style.minWidth = "";
-        el.style.maxWidth = "";
+        widthService.clearCellWidth(el);
+        
+        
       });
     });
     headerCapCleanupDone = true;
@@ -10539,37 +10721,39 @@ function applyColumnHeaderCaps() {
   headerCapAppliedVersionByApp[app] = columnVisibilityVersion;
 }
 
-function applyTitleWidth(app, _rows = null, _options = {}) {
+function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
   if (!tableEl || app !== activeApp) return;
+
+  if (targetWidth > 0) {
+    const clamped = clampTitleWidth(targetWidth);
+    titleWidthByApp.sonarr = clamped;
+    titleWidthByApp.radarr = clamped;
+  }
+
   const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
   const header = tableEl.querySelector('th[data-col="Title"]');
   if (!header) return;
 
   if (sharedTitleWidth <= 0) {
-    header.style.width = "";
-    header.style.minWidth = "";
-    header.style.maxWidth = "";
-    if (tbody) {
-      tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
-        td.style.width = "";
-        td.style.minWidth = "";
-        td.style.maxWidth = "";
-      });
+    widthService.clearCellWidth(header);
+    
+    
+    if (root) {
+      root.style.removeProperty("--title-col-width");
     }
     return;
   }
 
-  const widthPx = `${sharedTitleWidth}px`;
-  header.style.width = widthPx;
-  header.style.minWidth = widthPx;
-  header.style.maxWidth = widthPx;
-  if (tbody) {
-    tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
-      td.style.width = widthPx;
-      td.style.minWidth = widthPx;
-      td.style.maxWidth = widthPx;
-    });
+  // Set the CSS variable on root so all rows (including those in fragment/batch) inherit it.
+  if (root) {
+    root.style.setProperty("--title-col-width", `${sharedTitleWidth}px`);
   }
+
+  // Force the header to match exactly to prevent any layout shifts.
+  const widthPx = `${sharedTitleWidth}px`;
+  widthService.setCellWidth(header, widthPx);
+  
+  
 }
 
 
@@ -10629,6 +10813,13 @@ function setActiveTab(app) {
   updateColumnFilter();
   updateSortIndicators();
   updateLastUpdatedDisplay();
+  // Force canonical title width onto CSS variable before rendering the new tab
+  const canonicalTitleWidthForTab = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  titleWidthByApp.sonarr = canonicalTitleWidthForTab;
+  titleWidthByApp.radarr = canonicalTitleWidthForTab;
+  if (canonicalTitleWidthForTab > 0 && root) {
+    root.style.setProperty("--title-col-width", `${canonicalTitleWidthForTab}px`);
+  }
   applyTitleWidth(activeApp, null, { skipIfUnchanged: true });
   scheduleTitlePathWidthLock();
 
@@ -11267,9 +11458,9 @@ function buildRow(row, app, options = {}) {
       const cell = tr.querySelector(`td[data-col="${col}"]`);
       if (!cell) return;
       const widthPx = `${width}px`;
-      cell.style.width = widthPx;
-      cell.style.minWidth = widthPx;
-      cell.style.maxWidth = widthPx;
+      widthService.setCellWidth(cell, widthPx);
+      
+      
     });
   }
 
@@ -11380,6 +11571,8 @@ function runHydrationPass() {
   hydrationState.app = "";
   hydrationState.index = 0;
   hydrationState.perf = null;
+  // Re-lock title width after hydration finishes so columns stay consistent
+  scheduleTitlePathWidthLock();
 }
 
 function getRowElement(row, app, options = {}) {
@@ -11425,17 +11618,17 @@ function syncRowWidthLock(tr) {
       const cell = tr.querySelector(`td[data-col="${col}"]`);
       if (!cell) return;
       const widthPx = `${width}px`;
-      cell.style.width = widthPx;
-      cell.style.minWidth = widthPx;
-      cell.style.maxWidth = widthPx;
+      widthService.setCellWidth(cell, widthPx);
+      
+      
     });
   } else if (prevToken) {
     // No lock active anymore, clear stale inline widths from prior locks.
     try {
       tr.querySelectorAll("td").forEach(td => {
-        td.style.width = "";
-        td.style.minWidth = "";
-        td.style.maxWidth = "";
+        widthService.clearCellWidth(td);
+        
+        
       });
     } catch { }
   }
@@ -11836,6 +12029,8 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
   }
   updateColumnVisibility(frag);
   tbody.appendChild(frag);
+  // Apply title width to newly-added rows so column stays consistent during batching
+  applyTitleWidth(app);
   markStatusReadyFromRows(index);
 
   if (index < rows.length) {
@@ -12706,6 +12901,10 @@ function setPlaybackProvider(provider) {
     : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
   playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
+  try {
+    localStorage.setItem(PLAYBACK_PROVIDER_STORAGE_KEY, playbackProvider);
+  } catch {
+  }
   updatePlaybackLabels();
 }
 
@@ -12805,13 +13004,13 @@ if (advancedHelpBtn) {
   });
 }
 
-  if (tbody) {
-    tbody.addEventListener("mouseover", e => {
-      const updated = updateSelectionFromPointer(e.target);
-      if (updated) {
-        focusTableWrapIfAllowed();
-      }
-    });
+if (tbody) {
+  tbody.addEventListener("mouseover", e => {
+    const updated = updateSelectionFromPointer(e.target);
+    if (updated) {
+      focusTableWrapIfAllowed();
+    }
+  });
   document.addEventListener("mousemove", () => {
     if (!pointerSelectionEnabled) {
       pointerSelectionEnabled = true;
@@ -13190,7 +13389,7 @@ async function loadConfig() {
     setPlexAvailableForApp("sonarr", plexLibraries.sonarr || []);
     setPlexAvailableForApp("radarr", plexLibraries.radarr || []);
     if (plexInsightsBtn) {
-      plexInsightsBtn.classList.toggle("hidden", !configState.plexConfigured);
+      plexInsightsBtn.disabled = !configState.plexConfigured;
     }
     updateMismatchCenterButtonVisibility();
 
@@ -13927,6 +14126,7 @@ function ensureMismatchCenterOverlay() {
   mismatchOverlayEl = document.createElement("div");
   mismatchOverlayEl.className = "mismatch-overlay hidden";
   mismatchOverlayEl.innerHTML = `
+    <div class="mismatch-scrim" data-mismatch-close></div>
     <div class="mismatch-drawer" role="dialog" aria-modal="true" aria-label="${escapeHtml(t("mismatchCenterTitle", "Mismatch Center"))}">
       <div class="mismatch-header">
         <div>
@@ -14011,12 +14211,6 @@ function ensureMismatchCenterOverlay() {
   mismatchCategoryFilterEl?.addEventListener("change", onFilterChange);
   mismatchGroupByEl?.addEventListener("change", onFilterChange);
   mismatchSearchEl?.addEventListener("input", onFilterChange);
-
-  mismatchOverlayEl.addEventListener("click", event => {
-    if (event.target === mismatchOverlayEl) {
-      closeMismatchCenter();
-    }
-  });
 }
 
 function mismatchProviderLabel(provider) {
@@ -14557,14 +14751,16 @@ function initStatusHoverBindings() {
   }
 
   statusPillEl.addEventListener("mouseenter", () => {
-    if (!statusCollapsed || !statusReadyAfterFirstData) return;
-    pauseStatusCountdown();
-    showStatusRow();
     statusPillEl.classList.add("status-pill--active");
+    if (!statusReadyAfterFirstData) return;
+    if (statusCollapsed) {
+      pauseStatusCountdown();
+      showStatusRow();
+    }
   });
   statusPillEl.addEventListener("mouseleave", () => {
-    if (!statusCollapsed) return;
     statusPillEl.classList.remove("status-pill--active");
+    if (!statusCollapsed) return;
     setTimeout(() => {
       if (!statusRowEl.matches(":hover") && !statusPillEl.matches(":hover")) {
         if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
@@ -14576,10 +14772,9 @@ function initStatusHoverBindings() {
     }, 50);
   });
   statusRowEl.addEventListener("mouseenter", () => {
-    if (statusCollapsed) pauseStatusCountdown();
+    pauseStatusCountdown();
   });
   statusRowEl.addEventListener("mouseleave", () => {
-    if (!statusCollapsed) return;
     if (!statusRowEl.matches(":hover") && !(statusPillEl && statusPillEl.matches(":hover"))) {
       if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
         startStatusCountdown();
@@ -14609,6 +14804,7 @@ function scheduleDeferredUiBindings() {
         fetchStatus({ silent: true, lite: true });
         startStatusTick();
         startStatusFetchPoll();
+        scheduleStartupReadyFlip();
       }, 60);
     });
   });
@@ -14638,7 +14834,6 @@ function scheduleDeferredUiBindings() {
   updateFilterBuilderOptions();
   initFilterCustomSelects();
   syncCsvToggle();
-  setTautulliEnabled(false, "");
   updateRuntimeLabels();
   updateColumnFilter();
   updateColumnVisibility();
@@ -14678,36 +14873,9 @@ function scheduleDeferredUiBindings() {
   if (typeof enableTableScrollChaining === "function") {
     enableTableScrollChaining();
   }
-  if (
-    typeof enableStatusRowScrollChaining === "function" &&
-    document.documentElement.classList.contains("is-coarse")
-  ) {
-    enableStatusRowScrollChaining();
-  }
 
   scheduleDeferredUiBindings();
 })();
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

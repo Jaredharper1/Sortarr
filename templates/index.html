@@ -6,19 +6,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preload" as="style"
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=optional">
   <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=optional">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Sortarr provides Sonarr and Radarr media library insights with filters, playback context, and sortable metrics.">
 
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>{{ app_name }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}" />
+  <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}-startupfix4" />
 </head>
 
 <body class="sortarr-loading">
-  <div class="app">
+  <main id="mainContent" class="app" role="main">
     <div class="toolbar">
       <div class="brand">
         <img id="brandLogo" src="/static/logo.svg" alt="{{ app_name }}" />
@@ -222,7 +223,7 @@
     <div class="filters" id="filtersPanel">
       <div class="filters-body">
         <div class="filter-row">
-          <div class="filter-inputs" id="filterInputs">
+          <div class="filter-inputs hidden" id="filterInputs">
             <div class="simple-filters" id="simpleFilters">
               <input id="titleFilter" placeholder="{{ _('Filter title (supports * and ?)') }}" />
               <input id="pathFilter" placeholder="{{ _('Filter path (supports * and ?)') }}" />
@@ -231,7 +232,7 @@
               placeholder="{{ _('Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2') }}" />
           </div>
           <div class="filter-controls">
-            <button class="chip-advanced" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
+            <button class="chip-advanced hidden" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
               }}</button>
             <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">{{ _('?') }}</button>
           </div>
@@ -267,7 +268,7 @@
           seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours') }}
         </div>
         <div id="advancedWarnings" class="advanced-warnings hidden"></div>
-        <div class="chip-wrap">
+        <div class="chip-wrap chip-wrap--hidden">
           <div class="chip-groups">
             <div class="chip-group">
               <div class="chip-group-title">{{ _('Audio') }}</div>
@@ -439,11 +440,11 @@
           <button id="refreshTabBtn"
             title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
             Shows data') }}</button>
-          <button id="deepRefreshTautulliBtn" title="{{ _('Refresh playback library data and rebuild matches') }}">{{
+          <button id="deepRefreshTautulliBtn" disabled title="{{ _('Refresh playback library data and rebuild matches') }}">{{
             _('Refresh playback
             data') }}</button>
-          <button id="plexInsightsBtn" class="hidden" title="{{ _('Open Plex insights') }}">{{ _('Plex Insights') }}</button>
-          <button id="mismatchCenterBtn" class="hidden" title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center') }}</button>
+          <button id="plexInsightsBtn" disabled title="{{ _('Open Plex insights') }}">{{ _('Plex Insights') }}</button>
+          <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center') }}</button>
           <button id="clearCachesBtn"
             title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
             caches & rebuild') }}</button>
@@ -456,6 +457,34 @@
       {{ _('Partial playback data loaded. Matching will continue in the background.') }}</div>
     <div class="status-banner hidden" id="fastModeBanner">
       {{ _('Sonarr fast mode enabled. Codec and language details may be missing.') }}</div>
+
+    <script>
+      (() => {
+        try {
+          const provider = (localStorage.getItem("Sortarr-playback-provider") || "").toLowerCase();
+          if (!provider) return;
+          const label = provider === "jellystat"
+            ? "Jellystat"
+            : (provider === "tautulli" ? "Tautulli" : "Playback");
+          const refreshBtn = document.getElementById("refreshTautulliBtn");
+          const deepRefreshBtn = document.getElementById("deepRefreshTautulliBtn");
+          const playbackLabelEl = document.querySelector("[data-playback-label]");
+          const title = `Refresh ${label} library data and rebuild matches`;
+          if (playbackLabelEl) {
+            playbackLabelEl.textContent = label;
+          }
+          if (refreshBtn) {
+            refreshBtn.textContent = `Refresh ${label}`;
+            refreshBtn.title = title;
+          }
+          if (deepRefreshBtn) {
+            deepRefreshBtn.textContent = `Refresh ${label} data`;
+            deepRefreshBtn.title = title;
+          }
+        } catch {
+        }
+      })();
+    </script>
 
     <div class="table-wrap table-wrap-y" id="tableWrap">
       <div class="table-wrap-x" id="tableWrapX">
@@ -634,6 +663,7 @@
         </div>
       </div>
     </div>
+  </main>
 
     <template id="sonarrSeriesExpansionTemplate">
       <div class="series-expansion">
@@ -963,13 +993,20 @@
 
 
 
+    <script id="bootstrap-config-json" type="application/json">
+{{ bootstrap_config|tojson }}
+</script>
+
     <script>
       window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
     </script>
 
-    <script src="/static/app.js?v={{ app_version }}"></script>
+    <script src="/static/column_widths.js?v={{ app_version }}-startupfix4"></script>
+    <script src="/static/app.min.js?v={{ app_version }}-startupfix4"></script>
 </body>
 
 </html>
+
+
 
 
