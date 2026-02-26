@@ -9317,6 +9317,12 @@ function parseAdvancedQuery(query) {
 
       if (field === "resolution") {
         addPred(row => {
+          // If mixed, check all resolutions in ResolutionAll
+          if (row.ResolutionMixed && row.ResolutionAll) {
+            const parts = row.ResolutionAll.split(",").map(s => s.trim());
+            const hit = parts.some(part => resolutionMatches(part, value));
+            return neg ? !hit : hit;
+          }
           const hit = resolutionMatches(getFieldValue(row, field), value);
           return neg ? !hit : hit;
         });
