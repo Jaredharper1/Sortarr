@@ -6,6 +6,13 @@
 ![GitHub Repo stars](https://img.shields.io/github/stars/Jaredharper1/Sortarr?style=social)
 ![GHCR](https://img.shields.io/badge/container-ghcr.io-blue)
 
+## Important Migration Notice
+
+Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
+
+This is a transition period, not a permanent default.
+
+In releases approaching `1.0`, this behavior will be flipped to `opt-out` (secure secret resolution enabled by default).
 
 Sortarr is a read-only analytics and organisation tool for Sonarr and Radarr libraries. It helps you identify missing media, mismatches, and optimisation opportunities using real playback data from providers like Tautulli, Jellystat, or Plex.
 
@@ -183,6 +190,33 @@ Typical values:
 2 Double proxy (e.g., Cloudflare Tunnel → Traefik → Sortarr)
 ```
 Security note: If SORTARR_PROXY_HOPS is enabled, make sure Sortarr is only reachable through your reverse proxy. (Do not publish the Sortarr container port directly to the internet).
+
+---
+
+### Secret storage options
+
+Sortarr still supports plain `.env` secrets for backward compatibility, but you can now avoid storing raw API keys/tokens directly in `.env`.
+
+For Docker/Linux/macOS, prefer secret files:
+```
+SONARR_API_KEY_FILE=/run/secrets/sonarr_api_key
+RADARR_API_KEY_FILE=/run/secrets/radarr_api_key
+TAUTULLI_API_KEY_FILE=/run/secrets/tautulli_api_key
+JELLYSTAT_API_KEY_FILE=/run/secrets/jellystat_api_key
+PLEX_TOKEN_FILE=/run/secrets/plex_token
+BASIC_AUTH_PASS_FILE=/run/secrets/basic_auth_pass
+```
+
+On Windows, Sortarr can resolve Credential Manager references:
+```
+SONARR_API_KEY=wincred:Sortarr/SONARR_API_KEY
+```
+This mode is enabled by default for Windows EXE builds and can be overridden with:
+```
+SORTARR_WINDOWS_CREDSTORE=0|1
+```
+
+Resolution order is: `*_FILE` -> Windows credential reference (`*_CRED_TARGET` / `wincred:`) -> plain env value.
 
 ---
 

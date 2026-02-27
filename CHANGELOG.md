@@ -1,12 +1,22 @@
 # Changelog
 
+## Important Migration Notice
+- Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
+- This is a transition period, not a permanent default.
+- In releases approaching `1.0`, this behavior will be flipped to `opt-out` (secure secret resolution enabled by default).
+
 ## [0.8.2] - 2026-02-26
 
-- Added a new `Year` column in the main table and Columns panel so duplicate titles can be distinguished at a glance.
-- Added duplicate detection across instances (title + year key) with filter support via `duplicate:true/false`.
-- Added quick duplicate chips to Sonarr and Radarr chip groups.
-- Enhanced advanced/global filtering so bare tokens (for example `aac`) search across row text, with explicit alias support via `any:value`.
-- Updated mixed-resolution filtering to also inspect `ResolutionAll` when rows are marked mixed (`ResolutionMixed`), so values like `resolution:1080p` match mixed rows correctly.
+### Features
+- Added a new `Year` column in the main table and Columns panel so duplicate titles can be distinguished at a glance. Thanks @dimitricappelle.
+- Added duplicate detection across instances (title + year key) with filter support via `duplicate:true/false`. Thanks @tweety-tv.
+- Added quick duplicate chips to Sonarr and Radarr chip groups. Thanks @tweety-tv.
+- Enhanced advanced/global filtering so bare tokens (for example `aac`) search across row text, with explicit alias support via `any:value`. Thanks @malkinskir.
+- Added secret file support for sensitive settings via `*_FILE` env vars (for example `SONARR_API_KEY_FILE`, `RADARR_API_KEY_FILE`, `PLEX_TOKEN_FILE`), while keeping existing `*_KEY`/`*_TOKEN` env vars fully compatible.
+- Added optional Windows Credential Manager secret references (`wincred:<target>`), with EXE-first defaults and plain `.env` fallback for compatibility.
+
+### Fixes
+- Updated mixed-resolution filtering to also inspect `ResolutionAll` when rows are marked mixed (`ResolutionMixed`), so values like `resolution:1080p` match mixed rows correctly. Thanks @jt3204 for the PR.
 
 ## [0.8.1] - 2026-02-16
 

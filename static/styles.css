@@ -3730,6 +3730,8 @@ table.stable-columns {
 table[data-app="radarr"] {
 
   table-layout: auto;
+  min-width: 100%;
+  width: 100%;
   --cap-RuntimeMins: auto;
   --cap-FileSizeGB: auto;
   --cap-GBPerHour: auto;
@@ -4229,7 +4231,10 @@ tbody tr.row-refresh-focus td {
 
 
 td[data-col="AudioCodec"] {
-  max-width: max-content;
+  max-width: var(--w-AudioCodec-max);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 td[data-col="RootFolder"],
@@ -4427,7 +4432,7 @@ th.active-sort .sort-indicator {
 
   min-width: 0;
 
-  max-width: 100%;
+  max-width: calc(100% - var(--title-text-equalizer));
 
   display: inline-block;
 
@@ -5039,7 +5044,10 @@ table[data-app] {
   /* Title / Path */
   --w-Title: var(--title-col-width);
   --w-Path: var(--path-col-width);
-  --w-Path-min: 400px;
+  --w-Path-min: 560px;
+  --w-Path-max: var(--w-Path);
+  --w-Year: 72px;
+  --title-text-equalizer: 0px;
   --w-RootFolder-min: auto;
   --w-RootFolder-width: auto;
   --w-RootFolder-max: max-content;
@@ -5142,8 +5150,13 @@ table[data-app] {
 }
 
 table[data-app="radarr"] {
-  --title-expand-gutter: 22px;
+  --title-text-equalizer: 90px;
+  --w-Path: auto;
+  --w-Path-max: none;
   --w-TitleSlug: 0px;
+  --w-AudioCodec-min: 190px;
+  --w-AudioCodec-width: 190px;
+  --w-AudioCodec-max: 190px;
 
   --w-Monitored-min: 96px;
   --w-Monitored-width: 96px;
@@ -5236,7 +5249,7 @@ th[data-col="Path"],
 td[data-col="Path"] {
   width: var(--w-Path);
   min-width: var(--w-Path-min);
-  max-width: var(--w-Path);
+  max-width: var(--w-Path-max);
   text-align: left;
 }
 
@@ -5254,6 +5267,14 @@ td[data-col="TitleSlug"] {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+th[data-col="Year"],
+td[data-col="Year"] {
+  width: var(--w-Year);
+  min-width: var(--w-Year);
+  max-width: var(--w-Year);
+  text-align: center;
 }
 
 th[data-col="ContentHours"],
@@ -5677,6 +5698,32 @@ table[data-app="radarr"] td[data-col="SubtitleLanguages"] .lang-toggle,
 table[data-app="radarr"] td[data-col="SubtitleLanguages"] .mixed-badge-inline {
   margin-left: auto;
   flex: 0 0 auto;
+}
+
+/* Expanded inline language/list cells must fully reveal text in both apps. */
+table[data-app="sonarr"] td.lang-cell-expanded,
+table[data-app="radarr"] td.lang-cell-expanded {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+table[data-app="sonarr"] td.lang-cell-expanded .lang-cell-truncated.is-expanded,
+table[data-app="radarr"] td.lang-cell-expanded .lang-cell-truncated.is-expanded {
+  width: 100%;
+  max-width: none;
+  white-space: normal;
+  flex-wrap: wrap;
+}
+
+table[data-app="sonarr"] td.lang-cell-expanded .lang-cell-truncated.is-expanded .lang-list,
+table[data-app="radarr"] td.lang-cell-expanded .lang-cell-truncated.is-expanded .lang-list {
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: none;
+  white-space: normal;
+  word-break: break-word;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .radarr-poster-tooltip {
@@ -6387,6 +6434,8 @@ tr[data-app="radarr"] .title-orb-wrap {
   position: static;
   left: auto;
   gap: 16px;
+  width: var(--title-col-width);
+  max-width: var(--title-col-width);
 }
 
 tr[data-app="radarr"] .title-control-wrap .row-refresh-btn--title {
@@ -6415,7 +6464,7 @@ tr[data-app="radarr"] td[data-col="Title"] {
 }
 
 tr[data-app="radarr"] .title-orb-wrap .title-text {
-  max-width: 100%;
+  max-width: calc(100% - var(--title-text-equalizer));
 }
 
 /* Progress status clickable filters */
@@ -6845,3 +6894,7 @@ body.sortarr-loading .status-row.status-row--hidden {
 
 t e s t  
  
+
+
+
+

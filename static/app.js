@@ -1900,7 +1900,7 @@ function lockTitlePathWidths() {
   const filtersActive = hasActiveFilters();
   const hasTitleWidth = titleWidthByApp[app] > 0;
   const hasPathWidth = pathWidthByApp[app] > 0;
-  const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  const sharedTitleWidth = getCanonicalTitleWidth();
 
   if (filtersActive && sharedTitleWidth > 0 && hasPathWidth) {
     root.style.setProperty("--title-col-width", `${sharedTitleWidth}px`);
@@ -1957,7 +1957,7 @@ function lockTitlePathWidths() {
     titlePathWidthVersionByApp[app] = columnVisibilityVersion;
     titlePathWidthFilterDirtyByApp[app] = filtersActive;
   }
-  const canonicalTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  const canonicalTitleWidth = getCanonicalTitleWidth();
   if (pathWidthByApp[app] > 0) {
     root.style.setProperty("--path-col-width", `${pathWidthByApp[app]}px`);
   }
@@ -2515,6 +2515,11 @@ function clampTitleWidth(value) {
   const width = Number(value);
   if (!Number.isFinite(width) || width <= 0) return 0;
   return Math.max(TITLE_WIDTH_MIN, Math.min(TITLE_WIDTH_MAX, Math.round(width)));
+}
+function getCanonicalTitleWidth() {
+  const sonarrWidth = clampTitleWidth(titleWidthByApp.sonarr || 0);
+  if (sonarrWidth > 0) return sonarrWidth;
+  return clampTitleWidth(titleWidthByApp.radarr || 0);
 }
 
 const titleWidthByApp = { sonarr: null, radarr: null };
@@ -3554,18 +3559,12 @@ function syncChipWrapVisibility() {
 function updateFilterUiMode() {
   const builderMode = !chipsEnabled;
   if (filterBuilder) filterBuilder.classList.toggle("hidden", !builderMode);
-  if (filterInputs) filterInputs.classList.toggle("hidden", builderMode);
-  if (advancedToggle) advancedToggle.classList.toggle("hidden", builderMode);
+  if (filterInputs) filterInputs.classList.remove("hidden");
+  if (advancedToggle) advancedToggle.classList.remove("hidden");
   if (advancedHelpBtn) {
-    if (builderMode) {
-      advancedHelpBtn.classList.add("hidden");
-    } else {
-      advancedHelpBtn.classList.toggle("hidden", !advancedEnabled);
-    }
+    advancedHelpBtn.classList.toggle("hidden", !advancedEnabled);
   }
   if (builderMode) {
-    if (advancedHelp) advancedHelp.classList.add("hidden");
-    if (advancedWarnings) updateAdvancedWarnings([]);
     updateFilterBuilderOptions();
   }
   scheduleTableWrapLayout();
@@ -9595,20 +9594,6 @@ function updateAdvancedWarnings(warnings) {
 
 function applyFilters(data) {
   const chipValue = String(chipQuery ?? "").trim();
-
-  if (!chipsEnabled) {
-    updateAdvancedWarnings([]);
-    if (!chipValue) {
-      return data || [];
-    }
-    let filtered = data || [];
-    if (chipValue) {
-      const chips = parseAdvancedQuery(chipValue);
-      filtered = filtered.filter(row => chips.preds.every(p => p(row)));
-    }
-    return filtered;
-  }
-
   const useAdvanced = advancedEnabled;
   const advValue = String(advancedFilter?.value ?? "").trim();
 
@@ -9663,9 +9648,6 @@ function applyFilters(data) {
 
 function hasActiveFilters() {
   const chipValue = String(chipQuery ?? "").trim();
-  if (!chipsEnabled) {
-    return Boolean(chipValue);
-  }
   if (advancedEnabled) {
     const advValue = String(advancedFilter?.value ?? "").trim();
     return Boolean(chipValue || advValue);
@@ -9678,11 +9660,6 @@ function hasActiveFilters() {
 function rowMatchesCurrentFilters(row) {
   if (!row) return false;
   const chipValue = String(chipQuery ?? "").trim();
-  if (!chipsEnabled) {
-    if (!chipValue) return true;
-    const chips = parseAdvancedQuery(chipValue);
-    return chips.preds.every(p => p(row));
-  }
   if (advancedEnabled) {
     const advValue = String(advancedFilter?.value ?? "").trim();
     if (advValue) {
@@ -9760,9 +9737,6 @@ function getDisplayCache(row) {
 
 function getFilterSignature() {
   const chipValue = String(chipQuery ?? "").trim();
-  if (!chipsEnabled) {
-    return `builder|${chipValue}`;
-  }
   const useAdvanced = advancedEnabled;
   const advValue = String(advancedFilter?.value ?? "").trim();
   if (useAdvanced) {
@@ -10831,7 +10805,7 @@ function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
     titleWidthByApp.radarr = clamped;
   }
 
-  const sharedTitleWidth = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  const sharedTitleWidth = getCanonicalTitleWidth();
   const header = tableEl.querySelector('th[data-col="Title"]');
   if (!header) return;
 
@@ -10841,6 +10815,11 @@ function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
     
     if (root) {
       root.style.removeProperty("--title-col-width");
+    }
+    if (tbody) {
+      tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
+        widthService.clearCellWidth(td);
+      });
     }
     return;
   }
@@ -10853,6 +10832,11 @@ function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
   // Force the header to match exactly to prevent any layout shifts.
   const widthPx = `${sharedTitleWidth}px`;
   widthService.setCellWidth(header, widthPx);
+  if (tbody) {
+    tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
+      widthService.setCellWidth(td, widthPx);
+    });
+  }
   
   
 }
@@ -10915,7 +10899,7 @@ function setActiveTab(app) {
   updateSortIndicators();
   updateLastUpdatedDisplay();
   // Force canonical title width onto CSS variable before rendering the new tab
-  const canonicalTitleWidthForTab = clampTitleWidth(Math.max(titleWidthByApp.sonarr || 0, titleWidthByApp.radarr || 0));
+  const canonicalTitleWidthForTab = getCanonicalTitleWidth();
   titleWidthByApp.sonarr = canonicalTitleWidthForTab;
   titleWidthByApp.radarr = canonicalTitleWidthForTab;
   if (canonicalTitleWidthForTab > 0 && root) {
@@ -13186,6 +13170,7 @@ if (tbody) {
     const btn = e.target.closest(".lang-toggle");
     if (!btn) return;
     const cell = btn.closest(".lang-cell");
+    const td = cell?.closest("td");
     const list = cell?.querySelector(".lang-list");
     if (!list) return;
 
@@ -13197,12 +13182,14 @@ if (tbody) {
       list.textContent = short;
       list.setAttribute("data-lang-state", "short");
       cell.classList.remove("is-expanded");
+      if (td) td.classList.remove("lang-cell-expanded");
       btn.textContent = t("Show all");
       btn.setAttribute("aria-expanded", "false");
     } else {
       list.textContent = full || short;
       list.setAttribute("data-lang-state", "full");
       cell.classList.add("is-expanded");
+      if (td) td.classList.add("lang-cell-expanded");
       btn.textContent = t("Show less");
       btn.setAttribute("aria-expanded", "true");
     }
@@ -14980,6 +14967,7 @@ function scheduleDeferredUiBindings() {
 
   scheduleDeferredUiBindings();
 })();
+
 
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import copy
 import sys
+import ctypes
 import re
 import time
 import datetime
@@ -16,6 +17,7 @@ import zlib
 from urllib.parse import urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
+from ctypes import wintypes
 
 import requests
 # Session hinzugefügt für die dauerhafte Sprachwahl
@@ -31,7 +33,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.1"
+APP_VERSION = "0.8.2"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -594,6 +596,177 @@ def _read_bool_env(key: str, default: bool = False) -> bool:
     if raw in {"0", "false", "no", "off"}:
         return False
     return default
+
+
+_SECRET_ENV_KEYS = [
+    "SONARR_API_KEY",
+    "SONARR_API_KEY_2",
+    "SONARR_API_KEY_3",
+    "RADARR_API_KEY",
+    "RADARR_API_KEY_2",
+    "RADARR_API_KEY_3",
+    "PLEX_TOKEN",
+    "TAUTULLI_API_KEY",
+    "JELLYSTAT_API_KEY",
+    "BASIC_AUTH_PASS",
+]
+
+
+if os.name == "nt":
+    _CRED_TYPE_GENERIC = 1
+    _CRED_PERSIST_LOCAL_MACHINE = 2
+
+    class _CREDENTIAL_ATTRIBUTEW(ctypes.Structure):
+        _fields_ = [
+            ("Keyword", wintypes.LPWSTR),
+            ("Flags", wintypes.DWORD),
+            ("ValueSize", wintypes.DWORD),
+            ("Value", ctypes.POINTER(ctypes.c_ubyte)),
+        ]
+
+    class _CREDENTIALW(ctypes.Structure):
+        _fields_ = [
+            ("Flags", wintypes.DWORD),
+            ("Type", wintypes.DWORD),
+            ("TargetName", wintypes.LPWSTR),
+            ("Comment", wintypes.LPWSTR),
+            ("LastWritten", wintypes.FILETIME),
+            ("CredentialBlobSize", wintypes.DWORD),
+            ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
+            ("Persist", wintypes.DWORD),
+            ("AttributeCount", wintypes.DWORD),
+            ("Attributes", ctypes.POINTER(_CREDENTIAL_ATTRIBUTEW)),
+            ("TargetAlias", wintypes.LPWSTR),
+            ("UserName", wintypes.LPWSTR),
+        ]
+
+    _PCREDENTIALW = ctypes.POINTER(_CREDENTIALW)
+    _advapi32 = ctypes.WinDLL("Advapi32", use_last_error=True)
+    _advapi32.CredReadW.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_PCREDENTIALW)]
+    _advapi32.CredReadW.restype = wintypes.BOOL
+    _advapi32.CredWriteW.argtypes = [_PCREDENTIALW, wintypes.DWORD]
+    _advapi32.CredWriteW.restype = wintypes.BOOL
+    _advapi32.CredDeleteW.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    _advapi32.CredDeleteW.restype = wintypes.BOOL
+    _advapi32.CredFree.argtypes = [ctypes.c_void_p]
+    _advapi32.CredFree.restype = None
+else:
+    _advapi32 = None
+
+
+def _windows_credstore_enabled() -> bool:
+    if "SORTARR_WINDOWS_CREDSTORE" in os.environ:
+        return _read_bool_env("SORTARR_WINDOWS_CREDSTORE", False)
+    return bool(os.name == "nt" and getattr(sys, "frozen", False))
+
+
+def _wincred_write_secret(target: str, secret: str) -> bool:
+    if not (_advapi32 and target):
+        return False
+    encoded = str(secret or "").encode("utf-16-le")
+    blob = (ctypes.c_ubyte * len(encoded)).from_buffer_copy(encoded) if encoded else None
+    cred = _CREDENTIALW()
+    cred.Type = _CRED_TYPE_GENERIC
+    cred.TargetName = target
+    cred.CredentialBlobSize = len(encoded)
+    cred.CredentialBlob = ctypes.cast(blob, ctypes.POINTER(ctypes.c_ubyte)) if blob is not None else None
+    cred.Persist = _CRED_PERSIST_LOCAL_MACHINE
+    try:
+        return bool(_advapi32.CredWriteW(ctypes.byref(cred), 0))
+    except Exception:
+        return False
+
+
+def _wincred_read_secret(target: str) -> str:
+    if not (_advapi32 and target):
+        return ""
+    pcred = _PCREDENTIALW()
+    try:
+        ok = _advapi32.CredReadW(target, _CRED_TYPE_GENERIC, 0, ctypes.byref(pcred))
+        if not ok:
+            return ""
+        cred = pcred.contents
+        size = int(cred.CredentialBlobSize or 0)
+        if size <= 0:
+            return ""
+        raw = ctypes.string_at(cred.CredentialBlob, size)
+        return raw.decode("utf-16-le", errors="ignore")
+    except Exception:
+        return ""
+    finally:
+        try:
+            if pcred:
+                _advapi32.CredFree(pcred)
+        except Exception:
+            pass
+
+
+def _wincred_delete_secret(target: str) -> bool:
+    if not (_advapi32 and target):
+        return False
+    try:
+        return bool(_advapi32.CredDeleteW(target, _CRED_TYPE_GENERIC, 0))
+    except Exception:
+        return False
+
+
+def _read_secret_from_file(secret_path: str) -> str:
+    path = str(secret_path or "").strip()
+    if not path:
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            return handle.read().strip()
+    except OSError:
+        return ""
+
+
+def _resolve_secret_env(key: str, default: str = "") -> str:
+    raw = str(os.environ.get(key, default) or "").strip()
+    file_var = f"{key}_FILE"
+    file_path = os.environ.get(file_var, "")
+    if not file_path:
+        # Backward-compat alias: KEY_FILE_2 style.
+        suffix_match = re.match(r"^(.*)_(\d+)$", key)
+        if suffix_match:
+            file_path = os.environ.get(f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}", "")
+    file_value = _read_secret_from_file(file_path)
+    if file_value:
+        return file_value
+    target = str(os.environ.get(f"{key}_CRED_TARGET", "") or "").strip()
+    if not target and raw.lower().startswith("wincred:"):
+        target = raw.split(":", 1)[1].strip()
+    if target:
+        secret = _wincred_read_secret(target)
+        if secret:
+            return secret
+    return raw
+
+
+def _prepare_windows_secret_refs(values: dict) -> None:
+    if not _windows_credstore_enabled():
+        return
+    for key in _SECRET_ENV_KEYS:
+        secret = str(values.get(key) or "").strip()
+        target_key = f"{key}_CRED_TARGET"
+        current_target = str(os.environ.get(target_key) or "").strip()
+        current_raw = str(os.environ.get(key) or "").strip()
+        if not current_target and current_raw.lower().startswith("wincred:"):
+            current_target = current_raw.split(":", 1)[1].strip()
+
+        if not secret:
+            values[target_key] = ""
+            if current_target:
+                _wincred_delete_secret(current_target)
+            continue
+
+        target = current_target or f"Sortarr/{key}"
+        if _wincred_write_secret(target, secret):
+            values[key] = f"wincred:{target}"
+            values[target_key] = target
+        else:
+            values[target_key] = current_target
+            logger.warning("Windows credential write failed for %s; keeping plaintext fallback.", key)
 
 
 _HISTORY_CACHE_TTL_SECONDS = max(_read_int_env("ARR_HISTORY_CACHE_TTL_SECONDS", 180), 30)
@@ -1467,31 +1640,43 @@ def _write_env_file(path: str, values: dict):
         "SONARR_URL_API",
         "SONARR_URL_EXTERNAL",
         "SONARR_API_KEY",
+        "SONARR_API_KEY_FILE",
+        "SONARR_API_KEY_CRED_TARGET",
         "SONARR_NAME",
         "SONARR_URL_2",
         "SONARR_URL_API_2",
         "SONARR_URL_EXTERNAL_2",
         "SONARR_API_KEY_2",
+        "SONARR_API_KEY_2_FILE",
+        "SONARR_API_KEY_2_CRED_TARGET",
         "SONARR_NAME_2",
         "SONARR_URL_3",
         "SONARR_URL_API_3",
         "SONARR_URL_EXTERNAL_3",
         "SONARR_API_KEY_3",
+        "SONARR_API_KEY_3_FILE",
+        "SONARR_API_KEY_3_CRED_TARGET",
         "SONARR_NAME_3",
         "RADARR_URL",
         "RADARR_URL_API",
         "RADARR_URL_EXTERNAL",
         "RADARR_API_KEY",
+        "RADARR_API_KEY_FILE",
+        "RADARR_API_KEY_CRED_TARGET",
         "RADARR_NAME",
         "RADARR_URL_2",
         "RADARR_URL_API_2",
         "RADARR_URL_EXTERNAL_2",
         "RADARR_API_KEY_2",
+        "RADARR_API_KEY_2_FILE",
+        "RADARR_API_KEY_2_CRED_TARGET",
         "RADARR_NAME_2",
         "RADARR_URL_3",
         "RADARR_URL_API_3",
         "RADARR_URL_EXTERNAL_3",
         "RADARR_API_KEY_3",
+        "RADARR_API_KEY_3_FILE",
+        "RADARR_API_KEY_3_CRED_TARGET",
         "RADARR_NAME_3",
         "SONARR_PATH_MAP",
         "SONARR_PATH_MAP_2",
@@ -1501,6 +1686,8 @@ def _write_env_file(path: str, values: dict):
         "RADARR_PATH_MAP_3",
         "PLEX_URL",
         "PLEX_TOKEN",
+        "PLEX_TOKEN_FILE",
+        "PLEX_TOKEN_CRED_TARGET",
         "PLEX_CLIENT_ID",
         "PLEX_SECTION_FILTERS",
         "PLEX_HISTORY_PAGE_SIZE",
@@ -1509,8 +1696,12 @@ def _write_env_file(path: str, values: dict):
         "PLEX_CACHE_PATH",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
+        "TAUTULLI_API_KEY_FILE",
+        "TAUTULLI_API_KEY_CRED_TARGET",
         "JELLYSTAT_URL",
         "JELLYSTAT_API_KEY",
+        "JELLYSTAT_API_KEY_FILE",
+        "JELLYSTAT_API_KEY_CRED_TARGET",
         "JELLYSTAT_LIBRARY_IDS_SONARR",
         "JELLYSTAT_LIBRARY_IDS_RADARR",
         "JELLYSTAT_TIMEOUT_SECONDS",
@@ -1537,6 +1728,9 @@ def _write_env_file(path: str, values: dict):
         "ARR_CIRCUIT_OPEN_SECONDS",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
+        "BASIC_AUTH_PASS_FILE",
+        "BASIC_AUTH_PASS_CRED_TARGET",
+        "SORTARR_WINDOWS_CREDSTORE",
         "CACHE_SECONDS",
     ]
 
@@ -1748,22 +1942,24 @@ def _apply_startup_migrations() -> None:
 
 def _collect_instance_indexes(prefix: str) -> list[int]:
     indexes = set()
+    indexed_key = re.compile(
+        rf"^{re.escape(prefix)}_(?:URL|URL_API|URL_EXTERNAL|API_KEY|API_KEY_FILE|API_KEY_CRED_TARGET|NAME)_(\d+)(?:_(?:FILE|CRED_TARGET))?$"
+    )
+    legacy_file_key = re.compile(rf"^{re.escape(prefix)}_API_KEY_FILE_(\d+)$")
     for key in os.environ.keys():
-        if (
-            key.startswith(f"{prefix}_URL_")
-            or key.startswith(f"{prefix}_URL_API_")
-            or key.startswith(f"{prefix}_URL_EXTERNAL_")
-            or key.startswith(f"{prefix}_API_KEY_")
-            or key.startswith(f"{prefix}_NAME_")
-        ):
-            suffix = key.split("_")[-1]
-            if suffix.isdigit():
-                indexes.add(int(suffix))
+        match = indexed_key.match(key) or legacy_file_key.match(key)
+        if not match:
+            continue
+        suffix = match.group(1)
+        if suffix.isdigit():
+            indexes.add(int(suffix))
     if (
         os.environ.get(f"{prefix}_URL")
         or os.environ.get(f"{prefix}_URL_API")
         or os.environ.get(f"{prefix}_URL_EXTERNAL")
         or os.environ.get(f"{prefix}_API_KEY")
+        or os.environ.get(f"{prefix}_API_KEY_FILE")
+        or os.environ.get(f"{prefix}_API_KEY_CRED_TARGET")
         or os.environ.get(f"{prefix}_NAME")
     ):
         indexes.add(1)
@@ -1818,7 +2014,7 @@ def _build_instances(prefix: str, label: str) -> list[dict]:
         url_legacy = _normalize_url(os.environ.get(f"{prefix}_URL{suffix}", ""))
         url_api = _normalize_url(os.environ.get(f"{prefix}_URL_API{suffix}", "")) or url_legacy
         url_external = _normalize_url(os.environ.get(f"{prefix}_URL_EXTERNAL{suffix}", "")) or url_legacy or url_api
-        api_key = os.environ.get(f"{prefix}_API_KEY{suffix}", "")
+        api_key = _resolve_secret_env(f"{prefix}_API_KEY{suffix}")
         name = os.environ.get(f"{prefix}_NAME{suffix}", "").strip()
         path_map_raw = str(os.environ.get(f"{prefix}_PATH_MAP{suffix}") or "").strip()
         path_maps = _parse_path_map_entries(path_map_raw)
@@ -1891,17 +2087,17 @@ def _get_config():
         "sonarr_url": _normalize_url(os.environ.get("SONARR_URL", "")),
         "sonarr_url_api": _normalize_url(os.environ.get("SONARR_URL_API", "")),
         "sonarr_url_external": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL", "")),
-        "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else os.environ.get("SONARR_API_KEY", ""),
+        "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else _resolve_secret_env("SONARR_API_KEY", ""),
         "sonarr_name": os.environ.get("SONARR_NAME", ""),
         "sonarr_url_2": _normalize_url(os.environ.get("SONARR_URL_2", "")),
         "sonarr_url_api_2": _normalize_url(os.environ.get("SONARR_URL_API_2", "")),
         "sonarr_url_external_2": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_2", "")),
-        "sonarr_api_key_2": os.environ.get("SONARR_API_KEY_2", ""),
+        "sonarr_api_key_2": _resolve_secret_env("SONARR_API_KEY_2", ""),
         "sonarr_name_2": os.environ.get("SONARR_NAME_2", ""),
         "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
         "sonarr_url_api_3": _normalize_url(os.environ.get("SONARR_URL_API_3", "")),
         "sonarr_url_external_3": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_3", "")),
-        "sonarr_api_key_3": os.environ.get("SONARR_API_KEY_3", ""),
+        "sonarr_api_key_3": _resolve_secret_env("SONARR_API_KEY_3", ""),
         "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
         "sonarr_path_map": sonarr_path_map,
         "sonarr_path_maps": _split_path_map_entries(sonarr_path_map),
@@ -1912,17 +2108,17 @@ def _get_config():
         "radarr_url": _normalize_url(os.environ.get("RADARR_URL", "")),
         "radarr_url_api": _normalize_url(os.environ.get("RADARR_URL_API", "")),
         "radarr_url_external": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL", "")),
-        "radarr_api_key": radarr_primary["api_key"] if radarr_primary else os.environ.get("RADARR_API_KEY", ""),
+        "radarr_api_key": radarr_primary["api_key"] if radarr_primary else _resolve_secret_env("RADARR_API_KEY", ""),
         "radarr_name": os.environ.get("RADARR_NAME", ""),
         "radarr_url_2": _normalize_url(os.environ.get("RADARR_URL_2", "")),
         "radarr_url_api_2": _normalize_url(os.environ.get("RADARR_URL_API_2", "")),
         "radarr_url_external_2": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_2", "")),
-        "radarr_api_key_2": os.environ.get("RADARR_API_KEY_2", ""),
+        "radarr_api_key_2": _resolve_secret_env("RADARR_API_KEY_2", ""),
         "radarr_name_2": os.environ.get("RADARR_NAME_2", ""),
         "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
         "radarr_url_api_3": _normalize_url(os.environ.get("RADARR_URL_API_3", "")),
         "radarr_url_external_3": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_3", "")),
-        "radarr_api_key_3": os.environ.get("RADARR_API_KEY_3", ""),
+        "radarr_api_key_3": _resolve_secret_env("RADARR_API_KEY_3", ""),
         "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
         "radarr_path_map": radarr_path_map,
         "radarr_path_maps": _split_path_map_entries(radarr_path_map),
@@ -1933,7 +2129,7 @@ def _get_config():
         "sonarr_instances": sonarr_instances,
         "radarr_instances": radarr_instances,
         "plex_url": _normalize_url(os.environ.get("PLEX_URL", "")),
-        "plex_token": os.environ.get("PLEX_TOKEN", ""),
+        "plex_token": _resolve_secret_env("PLEX_TOKEN", ""),
         "plex_client_id": os.environ.get("PLEX_CLIENT_ID", ""),
         "plex_section_filters": os.environ.get("PLEX_SECTION_FILTERS", "").strip(),
         "plex_history_page_size": plex_history_page_size,
@@ -1947,9 +2143,9 @@ def _get_config():
             os.environ.get("HISTORY_SOURCE_PREFERENCE", "auto")
         ),
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
-        "tautulli_api_key": os.environ.get("TAUTULLI_API_KEY", ""),
+        "tautulli_api_key": _resolve_secret_env("TAUTULLI_API_KEY", ""),
         "jellystat_url": _normalize_url(os.environ.get("JELLYSTAT_URL", "")),
-        "jellystat_api_key": os.environ.get("JELLYSTAT_API_KEY", ""),
+        "jellystat_api_key": _resolve_secret_env("JELLYSTAT_API_KEY", ""),
         "jellystat_cache_path": os.environ.get(
             "JELLYSTAT_CACHE_PATH",
             _default_jellystat_cache_path(),
@@ -1992,7 +2188,7 @@ def _get_config():
         "arr_circuit_open_seconds": _read_int_env("ARR_CIRCUIT_OPEN_SECONDS", 30),
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
         "basic_auth_user": os.environ.get("BASIC_AUTH_USER", ""),
-        "basic_auth_pass": os.environ.get("BASIC_AUTH_PASS", ""),
+        "basic_auth_pass": _resolve_secret_env("BASIC_AUTH_PASS", ""),
     }
 
 
@@ -10057,6 +10253,7 @@ def setup():
                             error = "Fix the highlighted connection errors."
         if not error:
             try:
+                _prepare_windows_secret_refs(data)
                 _write_env_file(ENV_FILE_PATH, data)
                 for k, v in data.items():
                     os.environ[k] = v

@@ -5,7 +5,7 @@
     { column: "RootFolder", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: true },
     { column: "TitleSlug", strategy: "fixed", min: "260px", ideal: "260px", max: "260px", apps: "sonarr", lockDuringBatch: true, truncate: true },
     { column: "TmdbId", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
-    { column: "Year", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
+    { column: "Year", strategy: "fixed", min: "72px", ideal: "72px", max: "72px", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "DateAdded", strategy: "content", min: "auto", ideal: "auto", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
 
     { column: "ContentHours", strategy: "capped", min: "var(--cap-ContentHours, auto)", ideal: "var(--cap-ContentHours, auto)", max: "var(--cap-ContentHours, auto)", apps: "sonarr", lockDuringBatch: true, truncate: false },
@@ -44,7 +44,7 @@
     { column: "Resolution", strategy: "capped", min: "var(--cap-Resolution, auto)", ideal: "var(--cap-Resolution, auto)", max: "var(--cap-Resolution, auto)", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "VideoCodec", strategy: "capped", min: "var(--cap-VideoCodec, auto)", ideal: "var(--cap-VideoCodec, auto)", max: "var(--cap-VideoCodec, auto)", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "VideoHDR", strategy: "capped", min: "var(--cap-VideoHDR, auto)", ideal: "var(--cap-VideoHDR, auto)", max: "var(--cap-VideoHDR, auto)", apps: "shared", lockDuringBatch: true, truncate: false },
-    { column: "AudioCodec", strategy: "capped", min: "112px", ideal: "max-content", max: "160px", apps: "shared", lockDuringBatch: true, truncate: false },
+    { column: "AudioCodec", strategy: "content", min: "112px", ideal: "max-content", max: "160px", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "AudioChannels", strategy: "capped", min: "200px", ideal: "max-content", max: "201px", apps: "shared", lockDuringBatch: true, truncate: false },
     { column: "Languages", strategy: "content", min: "220px", ideal: "var(--cap-Languages, auto)", max: "max-content", apps: "radarr", lockDuringBatch: true, truncate: false },
     { column: "AudioLanguages", strategy: "content", min: "220px", ideal: "var(--cap-AudioLanguages, auto)", max: "max-content", apps: "shared", lockDuringBatch: true, truncate: false },
