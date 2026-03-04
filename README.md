@@ -6,6 +6,8 @@
 ![GitHub Repo stars](https://img.shields.io/github/stars/Jaredharper1/Sortarr?style=social)
 ![GHCR](https://img.shields.io/badge/container-ghcr.io-blue)
 
+---
+
 ## Important Migration Notice
 
 Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
@@ -13,6 +15,8 @@ Secret-file/Credential-Manager support is currently `opt-in` only to give existi
 This is a transition period, not a permanent default.
 
 In releases approaching `1.0`, this behavior will be flipped to `opt-out` (secure secret resolution enabled by default).
+
+---
 
 Sortarr is a read-only analytics and organisation tool for Sonarr and Radarr libraries. It helps you identify missing media, mismatches, and optimisation opportunities using real playback data from providers like Tautulli, Jellystat, or Plex.
 
