@@ -270,7 +270,7 @@ Sortarr is a free project and I will never require donations to support or maint
 
 That said, if you would like to support me directly, in the interest of transparency I should mention that any donations will most likely be spent on beer and beer-related activities. If you're still willing to contribute, I appreciate it greatly.
 
-[![Support me](https://i.imgur.com/k10gv0c.png)](https://buymeacoffee.com/jaredharper1)
+[![Support me](https://i.imgur.com/9LLuB8H.png)](https://buymeacoffee.com/jaredharper1)
 
 ## License
 
