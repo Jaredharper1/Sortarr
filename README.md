@@ -260,6 +260,18 @@ Sortarr is strictly read-only. It does not modify media files or change Sonarr/R
 
 ---
 
+## Supporting the project
+
+Enjoying the project? Looking for a way to contribute?
+
+The best way to support Sortarr is simply to use it. If you encounter bugs or issues, please report them. Feature requests and suggestions are also very welcome.
+
+Sortarr is a free project and I will never require donations to support or maintain it.
+
+That said, if you would like to support me directly, in the interest of transparency I should mention that any donations will most likely be spent on beer and beer-related activities. If you're still willing to contribute, I appreciate it greatly.
+
+[![Support me](https://i.imgur.com/k10gv0c.png)](https://buymeacoffee.com/jaredharper1)
+
 ## License
 
 [MIT License](https://github.com/Jaredharper1/Sortarr/blob/main/LICENSE)
