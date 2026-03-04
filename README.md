@@ -195,6 +195,8 @@ Typical values:
 ```
 By default, `SORTARR_PROXY_HOPS` trusts that many `X-Forwarded-For` entries, while `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Port`, and `X-Forwarded-Prefix` default to trusting a single forwarded value when proxy mode is enabled. This matches common proxy chains where only `X-Forwarded-For` grows per hop.
 
+As of `0.8.2.1`, these settings are loaded from the config file before `ProxyFix` initializes, so values defined in `.env` / your mounted config are honored on startup.
+
 If your proxies emit a different number of values per header, override them individually:
 ```
 SORTARR_PROXY_HOPS_FOR=2
@@ -205,6 +207,8 @@ SORTARR_PROXY_HOPS_PREFIX=0
 ```
 
 For example, for `Cloudflare -> Caddy -> Sortarr`, `SORTARR_PROXY_HOPS=2` is usually correct, and the default per-header behavior already maps to `x_for=2`, `x_host=1`, `x_proto=1`.
+
+If a proxied POST still fails with a CSRF mismatch, Sortarr now logs a sanitized warning with the effective request URL plus forwarded header context so you can confirm what Flask actually received.
 
 Security note: If SORTARR_PROXY_HOPS is enabled, make sure Sortarr is only reachable through your reverse proxy. (Do not publish the Sortarr container port directly to the internet).
 

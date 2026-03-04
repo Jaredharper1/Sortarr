@@ -33,7 +33,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.8.2.1"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -96,6 +96,50 @@ def get_locale():
 babel = Babel(app, locale_selector=get_locale, default_locale="en")
 # --- SPRACHSTEUERUNG (i18n) ENDE ---
 
+def _default_env_file_path() -> str:
+    # When frozen into a single-file EXE (PyInstaller), __file__ lives in a temp extraction dir.
+    # Use the EXE folder so config persists across launches.
+    try:
+        if getattr(sys, "frozen", False):
+            return os.path.join(os.path.dirname(sys.executable), ".env")
+    except Exception:
+        pass
+    return os.path.join(os.path.dirname(__file__), ".env")
+
+
+ENV_FILE_PATH = (
+    os.environ.get("SORTARR_CONFIG_PATH")
+    or os.environ.get("ENV_FILE_PATH")
+    or _default_env_file_path()
+)
+
+
+def _preload_env_file(path: str):
+    if not path or not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if not key or key in os.environ:
+                    continue
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] == '"':
+                    value = value[1:-1]
+                    value = value.replace("\\\\", "\\").replace('\\"', '"')
+                elif len(value) >= 2 and value[0] == value[-1] == "'":
+                    value = value[1:-1]
+                os.environ[key] = value
+    except OSError:
+        return
+
+
+_preload_env_file(ENV_FILE_PATH)
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)).strip())
@@ -140,6 +184,57 @@ if not logging.getLogger().handlers:
     )
 logger = logging.getLogger("sortarr")
 logger.setLevel(LOG_LEVEL)
+
+
+def _redact_url_for_log(value: str) -> str:
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    try:
+        parts = urlsplit(value)
+    except Exception:
+        if "?" in value:
+            return value.split("?", 1)[0] + "?<redacted>"
+        return value
+    hostname = parts.hostname or ""
+    if parts.port:
+        hostname = f"{hostname}:{parts.port}"
+    if not parts.scheme and not parts.netloc:
+        if parts.query:
+            return urlunsplit(("", "", parts.path, "<redacted>", ""))
+        return urlunsplit(("", "", parts.path, "", ""))
+    netloc = hostname
+    if parts.username or parts.password:
+        netloc = f"<redacted>@{hostname}" if hostname else "<redacted>"
+    query = "<redacted>" if parts.query else ""
+    return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
+
+
+def _log_csrf_mismatch(reason: str):
+    details = {
+        "reason": reason,
+        "method": request.method,
+        "path": request.path,
+        "host": request.host,
+        "host_url": _redact_url_for_log(request.host_url),
+        "url": _redact_url_for_log(request.url),
+        "scheme": request.scheme,
+        "is_secure": bool(request.is_secure),
+        "remote_addr": request.remote_addr or "",
+        "headers": {
+            "Host": request.headers.get("Host") or "",
+            "Origin": _redact_url_for_log(request.headers.get("Origin") or ""),
+            "Referer": _redact_url_for_log(request.headers.get("Referer") or ""),
+            "X-Forwarded-For": request.headers.get("X-Forwarded-For") or "",
+            "X-Forwarded-Host": request.headers.get("X-Forwarded-Host") or "",
+            "X-Forwarded-Proto": request.headers.get("X-Forwarded-Proto") or "",
+            "X-Forwarded-Port": request.headers.get("X-Forwarded-Port") or "",
+            "X-Forwarded-Prefix": request.headers.get("X-Forwarded-Prefix") or "",
+        },
+        "proxy_fix": dict(proxy_fix_kwargs),
+    }
+    logger.warning("CSRF request rejected: %s", json.dumps(details, sort_keys=True))
+
 
 _http = requests.Session()
 
@@ -364,23 +459,6 @@ RADARR_LITE_FIELDS = {
     "TautulliMatched",
 }
 
-def _default_env_file_path() -> str:
-    # When frozen into a single-file EXE (PyInstaller), __file__ lives in a temp extraction dir.
-    # Use the EXE folder so config persists across launches.
-    try:
-        if getattr(sys, "frozen", False):
-            return os.path.join(os.path.dirname(sys.executable), ".env")
-    except Exception:
-        pass
-    return os.path.join(os.path.dirname(__file__), ".env")
-
-
-ENV_FILE_PATH = (
-    os.environ.get("SORTARR_CONFIG_PATH")
-    or os.environ.get("ENV_FILE_PATH")
-    or _default_env_file_path()
-)
-
 # UX: for frozen EXE builds, create a blank .env on first launch so users can see where config is saved.
 try:
     if getattr(sys, "frozen", False) and ENV_FILE_PATH and not os.path.exists(ENV_FILE_PATH):
@@ -521,8 +599,10 @@ def _csrf_protect():
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
     if origin and not _origin_matches_request(origin):
+        _log_csrf_mismatch("origin")
         return jsonify({"error": "CSRF origin mismatch."}), 403
     if referer and not _origin_matches_request(referer):
+        _log_csrf_mismatch("referer")
         return jsonify({"error": "CSRF referer mismatch."}), 403
     cookie_token = request.cookies.get(CSRF_COOKIE_NAME) or ""
     request_token = _read_csrf_token_from_request()
@@ -616,6 +696,17 @@ _SECRET_ENV_KEYS = [
     "JELLYSTAT_API_KEY",
     "BASIC_AUTH_PASS",
 ]
+
+
+def _secret_env_log_category(key: str) -> str:
+    key = str(key or "").strip().upper()
+    if key.startswith("SONARR_API_KEY") or key.startswith("RADARR_API_KEY"):
+        return "arr_api_key"
+    if key in {"PLEX_TOKEN", "TAUTULLI_API_KEY", "JELLYSTAT_API_KEY"}:
+        return "playback_credential"
+    if key == "BASIC_AUTH_PASS":
+        return "basic_auth"
+    return "secret"
 
 
 if os.name == "nt":
@@ -772,7 +863,10 @@ def _prepare_windows_secret_refs(values: dict) -> None:
             values[target_key] = target
         else:
             values[target_key] = current_target
-            logger.warning("Windows credential write failed for %s; keeping plaintext fallback.", key)
+            logger.warning(
+                "Windows credential write failed for %s; keeping plaintext fallback.",
+                _secret_env_log_category(key),
+            )
 
 
 _HISTORY_CACHE_TTL_SECONDS = max(_read_int_env("ARR_HISTORY_CACHE_TTL_SECONDS", 180), 30)

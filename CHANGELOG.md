@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.2.1] - 2026-03-04
+
+### Fixes
+- Preloaded the env file before reverse-proxy `ProxyFix` initialization so `SORTARR_PROXY_HOPS*` settings from `.env` apply at startup.
+- Added targeted CSRF mismatch warning logs with sanitized request URL plus `Host` / `Origin` / `Referer` / `X-Forwarded-*` context for proxy troubleshooting.
+- Replaced Windows credential write warning key names with non-sensitive category labels to avoid logging secret-setting identifiers.
+
 ## Important Migration Notice
 - Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
 - This is a transition period, not a permanent default.
