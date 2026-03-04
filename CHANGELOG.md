@@ -1,5 +1,7 @@
 # Changelog
 
+## [Unreleased]
+
 ## Important Migration Notice
 - Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
 - This is a transition period, not a permanent default.
@@ -17,6 +19,7 @@
 
 ### Fixes
 - Updated mixed-resolution filtering to also inspect `ResolutionAll` when rows are marked mixed (`ResolutionMixed`), so values like `resolution:1080p` match mixed rows correctly. Thanks @jt3204 for the PR.
+- Adjusted reverse-proxy `ProxyFix` handling so `SORTARR_PROXY_HOPS` now applies the full hop count to `X-Forwarded-For`, while `X-Forwarded-Host` / `Proto` / `Port` / `Prefix` default to a single trusted forwarded value and can be overridden individually via `SORTARR_PROXY_HOPS_*`. This fixes CSRF origin mismatches behind mixed proxy chains such as Cloudflare plus Caddy.
 
 ## [0.8.1] - 2026-02-16
 

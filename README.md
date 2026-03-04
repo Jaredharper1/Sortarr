@@ -189,6 +189,19 @@ Typical values:
 1 Single proxy (default)
 2 Double proxy (e.g., Cloudflare Tunnel → Traefik → Sortarr)
 ```
+By default, `SORTARR_PROXY_HOPS` trusts that many `X-Forwarded-For` entries, while `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Port`, and `X-Forwarded-Prefix` default to trusting a single forwarded value when proxy mode is enabled. This matches common proxy chains where only `X-Forwarded-For` grows per hop.
+
+If your proxies emit a different number of values per header, override them individually:
+```
+SORTARR_PROXY_HOPS_FOR=2
+SORTARR_PROXY_HOPS_HOST=1
+SORTARR_PROXY_HOPS_PROTO=1
+SORTARR_PROXY_HOPS_PORT=1
+SORTARR_PROXY_HOPS_PREFIX=0
+```
+
+For example, for `Cloudflare -> Caddy -> Sortarr`, `SORTARR_PROXY_HOPS=2` is usually correct, and the default per-header behavior already maps to `x_for=2`, `x_host=1`, `x_proto=1`.
+
 Security note: If SORTARR_PROXY_HOPS is enabled, make sure Sortarr is only reachable through your reverse proxy. (Do not publish the Sortarr container port directly to the internet).
 
 ---

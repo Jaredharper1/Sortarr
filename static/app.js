@@ -40,7 +40,6 @@ const healthBadgesEl = document.getElementById("healthBadges");
 const STATUS_VALUE_ELS = [progressStatusEl, tautulliStatusEl, cacheStatusEl].filter(Boolean);
 const healthStatusRowEl = document.getElementById("healthStatusRow");
 const statusRowEl = document.getElementById("statusRow");
-const statusCompleteNoteEl = document.getElementById("statusCompleteNote");
 const statusPillEl = document.getElementById("statusPill");
 const partialBannerEl = document.getElementById("partialBanner");
 const fastModeBannerEl = document.getElementById("fastModeBanner");
@@ -707,6 +706,9 @@ let scrollAnchorFrame = null;
 let tableLayoutFrame = null;
 let tableLayoutForce = false;
 let tableLayoutSkipIfUnchanged = false;
+let tableLayoutNeedsWidthLock = false;
+let tableLayoutNeedsTruncation = false;
+let tableLayoutNeedsChipDividers = false;
 let lastTableWrapSize = { width: 0, height: 0 };
 let chipGroupLayoutPending = false;
 let tableHasFocus = false;
@@ -743,6 +745,7 @@ const API_ORIGIN = window.location && window.location.host
   : "";
 
 let tableWrapLayoutPending = false;
+let tableWrapLayoutQueuedAgain = false;
 let lastTableWrapLayoutSignature = "";
 let lastAppliedTableWrapMaxHeight = "";
 let firstPaintSettled = false;
@@ -1388,7 +1391,7 @@ function buildDefaultViewState(app) {
     titleFilter: "",
     pathFilter: "",
     advancedFilter: "",
-    advancedEnabled: false,
+    advancedEnabled: true,
     chipQuery: "",
     sortKey: getDefaultSortKey(app),
     sortDir: "desc",
@@ -1460,11 +1463,11 @@ function applyViewState(app) {
   sortKey = normalizeSortKey(app, state.sortKey);
   sortDir = state.sortDir === "asc" ? "asc" : "desc";
   chipQuery = String(state.chipQuery || "").trim();
-  setAdvancedMode(Boolean(state.advancedEnabled));
+  setAdvancedMode(true);
   if (titleFilter) titleFilter.value = state.titleFilter || "";
   if (pathFilter) pathFilter.value = state.pathFilter || "";
   if (advancedFilter) {
-    advancedFilter.value = state.advancedEnabled ? (state.advancedFilter || "") : "";
+    advancedFilter.value = state.advancedFilter || "";
   }
   syncChipButtonsToQuery();
 }
@@ -1501,7 +1504,13 @@ function applyTableWrapLayoutMeasure(measure) {
     tableWrapEl.style.maxHeight = measure.maxHeight;
     lastAppliedTableWrapMaxHeight = measure.maxHeight;
   }
-  scheduleTableLayoutSync({ force: false, skipIfUnchanged: true });
+  scheduleTableLayoutSync({
+    force: false,
+    skipIfUnchanged: true,
+    widths: true,
+    truncation: true,
+    chips: true,
+  });
 }
 
 function updateTableWrapMaxHeight() {
@@ -1509,14 +1518,19 @@ function updateTableWrapMaxHeight() {
 }
 
 function scheduleTableWrapLayout() {
-  if (tableWrapLayoutPending) return;
+  if (tableWrapLayoutPending) {
+    tableWrapLayoutQueuedAgain = true;
+    return;
+  }
   tableWrapLayoutPending = true;
   window.requestAnimationFrame(() => {
-    const measure = measureTableWrapLayout();
-    window.requestAnimationFrame(() => {
-      tableWrapLayoutPending = false;
-      applyTableWrapLayoutMeasure(measure);
-    });
+    tableWrapLayoutPending = false;
+    const rerun = tableWrapLayoutQueuedAgain;
+    tableWrapLayoutQueuedAgain = false;
+    applyTableWrapLayoutMeasure(measureTableWrapLayout());
+    if (rerun) {
+      scheduleTableWrapLayout();
+    }
   });
 }
 
@@ -1933,8 +1947,8 @@ function lockTitlePathWidths() {
 
       // Clear inline styles on header to allow accurate measurement
       widthService.clearCellWidth(titleTh);
-      
-      
+
+
 
       const titleSignal = Math.round(titleTh.getBoundingClientRect().width);
       const titleWidth = clampTitleWidth(titleSignal);
@@ -1976,16 +1990,29 @@ function isTableWrapOffscreen(rect) {
 function scheduleTableLayoutSync(options = {}) {
   const force = options.force ?? true;
   const skipIfUnchanged = Boolean(options.skipIfUnchanged);
+  const needsWidthLock = options.widths === true;
+  const needsTruncation = options.truncation === true;
+  const needsChipDividers = options.chips === true;
   if (force) tableLayoutForce = true;
   if (skipIfUnchanged) tableLayoutSkipIfUnchanged = true;
+  tableLayoutNeedsWidthLock = tableLayoutNeedsWidthLock || needsWidthLock;
+  tableLayoutNeedsTruncation = tableLayoutNeedsTruncation || needsTruncation;
+  tableLayoutNeedsChipDividers = tableLayoutNeedsChipDividers || needsChipDividers;
   if (tableLayoutFrame) return;
   tableLayoutFrame = window.requestAnimationFrame(() => {
     tableLayoutFrame = null;
     const shouldForce = tableLayoutForce;
     const shouldSkipIfUnchanged = tableLayoutSkipIfUnchanged && !shouldForce;
+    const shouldRunWidthLock = tableLayoutNeedsWidthLock;
+    const shouldRunTruncation = tableLayoutNeedsTruncation;
+    const shouldRunChipDividers = tableLayoutNeedsChipDividers;
     tableLayoutForce = false;
     tableLayoutSkipIfUnchanged = false;
+    tableLayoutNeedsWidthLock = false;
+    tableLayoutNeedsTruncation = false;
+    tableLayoutNeedsChipDividers = false;
     if (!tableWrapEl) return;
+    if (!shouldRunWidthLock && !shouldRunTruncation && !shouldRunChipDividers) return;
     const rect = tableWrapEl.getBoundingClientRect();
     if (!rect || isTableWrapOffscreen(rect)) return;
     if (shouldSkipIfUnchanged) {
@@ -1995,18 +2022,24 @@ function scheduleTableLayoutSync(options = {}) {
       if (sizeUnchanged) return;
     }
     lastTableWrapSize = { width: rect.width, height: rect.height };
-    lockTitlePathWidths();
-    updateTruncationTooltips();
-    updateChipGroupDividers();
+    if (shouldRunWidthLock) {
+      lockTitlePathWidths();
+    }
+    if (shouldRunTruncation) {
+      updateTruncationTooltips();
+    }
+    if (shouldRunChipDividers) {
+      updateChipGroupDividers();
+    }
   });
 }
 
 function scheduleTitlePathWidthLock(options = {}) {
-  scheduleTableLayoutSync(options);
+  scheduleTableLayoutSync({ ...options, widths: true });
 }
 
 function scheduleTruncationTooltipUpdate(options = {}) {
-  scheduleTableLayoutSync(options);
+  scheduleTableLayoutSync({ ...options, truncation: true });
 }
 
 function updateChipGroupDividers() {
@@ -2192,9 +2225,13 @@ let sortDir = "desc";
 let isLoading = false;
 let statusMessage = "";
 let statusNotice = "";
+let statusReadableUntil = 0;
+let statusReadableTimer = null;
+let pendingPassiveStatusMessage = null;
 let advancedEnabled = false;
 let chipQuery = "";
 let tautulliEnabled = false;
+let tautulliMatched = false;
 const PLAYBACK_PROVIDER_STORAGE_KEY = "Sortarr-playback-provider";
 const cachedPlaybackProvider = (() => {
   try {
@@ -2220,13 +2257,10 @@ const columnWidthLock = { active: false, widths: new Map(), token: 0 };
 const columnWidthCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const columnWidthCacheVersionByApp = { sonarr: -1, radarr: -1 };
 let statusPollTimer = null;
-let statusCountdownTimer = null;
-let statusCountdownRemaining = 0;
 
 if (tableEl) {
   tableEl.dataset.app = activeApp;
 }
-const STATUS_COUNTDOWN_SECONDS = 5;
 let statusFlashTimer = null;
 let statusCompletionFlashed = false;
 let statusTickTimer = null;
@@ -2234,9 +2268,6 @@ let statusFetchTimer = null;
 let lastStatusFetchAt = null;
 let statusFetchInFlight = false;
 let statusFetchQueuedOptions = null;
-let statusHoverBindingsReady = false;
-let statusCollapsed = false;
-let statusPillTimer = null;
 let statusPillLoadedTimer = null;
 let statusReadyAfterFirstData = false;
 let statusPillLoadedUntil = 0;
@@ -2247,6 +2278,7 @@ let copyToastTimer = null;
 const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null };
 const healthState = { sonarr: null, radarr: null, lastFetchedAt: { sonarr: 0, radarr: 0 }, dismissed: { sonarr: {}, radarr: {} } };
 const HEALTH_DISMISS_KEY = "Sortarr-health-dismissed";
+let columnVisibilityVersion = 0;
 
 function loadHealthDismissed() {
   try {
@@ -2305,6 +2337,7 @@ const rowRefreshTimers = new WeakMap();
 const ROW_REFRESH_FLASH_MS = 2200;
 const ROW_REFRESH_NOTICE_MS = 6000;
 const ROW_REFRESH_FOLLOWUP_MS = 15000;
+const STATUS_NOTICE_READABLE_MS = 2200;
 let rowRefreshStatusTimer = null;
 let rowRefreshFollowupTimer = null;
 let rowRefreshNoticeStartedAt = 0;
@@ -2349,6 +2382,11 @@ const SKIPPED_REASON_SORT_ORDER = {
 
 function getPlaybackLabel() {
   return playbackLabel || "Playback";
+}
+
+function shouldShowDeepRefreshButton(enabled, provider = playbackProvider) {
+  if (!enabled) return false;
+  return String(provider || "").toLowerCase() !== "jellystat";
 }
 
 function getPlaybackMatchingNotice() {
@@ -2524,6 +2562,7 @@ function getCanonicalTitleWidth() {
 
 const titleWidthByApp = { sonarr: null, radarr: null };
 const pathWidthByApp = { sonarr: null, radarr: null };
+const lastAppliedTitleWidthPxByApp = { sonarr: "", radarr: "" };
 const titlePathWidthVersionByApp = { sonarr: -1, radarr: -1 };
 const titlePathWidthFilterDirtyByApp = { sonarr: false, radarr: false };
 const titlePathMeasurePassByApp = {
@@ -3110,6 +3149,9 @@ const configState = {
   plexConfigured: false,
   historySourcesAvailable: [],
   plexLibraries: { sonarr: [], radarr: [] },
+  optionSet: {},
+  optionCapabilities: {},
+  optionSelected: {},
 };
 const plexLibraryState = {
   available: { sonarr: [], radarr: [] },
@@ -3117,6 +3159,16 @@ const plexLibraryState = {
 };
 const instanceConfig = { sonarr: [], radarr: [] };
 const instanceBaseById = { sonarr: {}, radarr: {} };
+const FRONTEND_BOOTSTRAP_CONFIG = (() => {
+  try {
+    const el = document.getElementById("bootstrap-config-json");
+    if (!el) return null;
+    const raw = JSON.parse(el.textContent || "{}");
+    return raw && typeof raw === "object" ? raw : null;
+  } catch {
+    return null;
+  }
+})();
 
 // Prevent stale fetches from rendering after you switch tabs
 const loadTokens = { sonarr: 0, radarr: 0 };
@@ -3260,6 +3312,7 @@ let renderToken = 0;
 let sonarrHeaderNormalized = false;
 const rowCacheByApp = { sonarr: new Map(), radarr: new Map() };
 const pendingStabilizeByApp = { sonarr: false, radarr: false };
+const pendingStabilizeModeByApp = { sonarr: "", radarr: "" };
 
 let radarrPosterTooltipEl = null;
 let radarrPosterTooltipImg = null;
@@ -3551,18 +3604,21 @@ function updateStatusText() {
 function syncChipWrapVisibility() {
   if (!chipWrapEl) return;
   const show = chipsVisible && chipsEnabled;
-  chipWrapEl.classList.toggle("chip-wrap--hidden", !show);
+  const nextHidden = !show;
+  const wasHidden = chipWrapEl.classList.contains("chip-wrap--hidden");
+  chipWrapEl.classList.toggle("chip-wrap--hidden", nextHidden);
   scheduleChipGroupLayout();
-  scheduleTableWrapLayout();
+  if (wasHidden !== nextHidden) {
+    scheduleTableWrapLayout();
+  }
 }
 
 function updateFilterUiMode() {
   const builderMode = !chipsEnabled;
   if (filterBuilder) filterBuilder.classList.toggle("hidden", !builderMode);
   if (filterInputs) filterInputs.classList.remove("hidden");
-  if (advancedToggle) advancedToggle.classList.remove("hidden");
   if (advancedHelpBtn) {
-    advancedHelpBtn.classList.toggle("hidden", !advancedEnabled);
+    advancedHelpBtn.classList.remove("hidden");
   }
   if (builderMode) {
     updateFilterBuilderOptions();
@@ -3599,8 +3655,48 @@ function setStatus(msg) {
   updateStatusText();
 }
 
+function clearStatusReadableHold() {
+  statusReadableUntil = 0;
+  if (statusReadableTimer) {
+    clearTimeout(statusReadableTimer);
+    statusReadableTimer = null;
+  }
+}
+
+function setPassiveStatus(msg) {
+  const text = msg || "";
+  if (statusReadableUntil > Date.now() && statusMessage) {
+    pendingPassiveStatusMessage = text;
+    return;
+  }
+  pendingPassiveStatusMessage = null;
+  setStatus(text);
+}
+
+function setStatusTransient(msg, minDurationMs = STATUS_NOTICE_READABLE_MS) {
+  const text = msg || "";
+  pendingPassiveStatusMessage = null;
+  clearStatusReadableHold();
+  setStatus(text);
+  if (!text || !minDurationMs) return;
+  statusReadableUntil = Date.now() + minDurationMs;
+  statusReadableTimer = setTimeout(() => {
+    statusReadableTimer = null;
+    statusReadableUntil = 0;
+    if (pendingPassiveStatusMessage !== null && pendingPassiveStatusMessage !== statusMessage) {
+      const next = pendingPassiveStatusMessage;
+      pendingPassiveStatusMessage = null;
+      setStatus(next);
+      return;
+    }
+    pendingPassiveStatusMessage = null;
+  }, minDurationMs);
+}
+
 function setStatusFor(msg, durationMs) {
   const text = msg || "";
+  pendingPassiveStatusMessage = null;
+  clearStatusReadableHold();
   statusMessage = text;
   updateStatusText();
   if (rowRefreshStatusTimer) {
@@ -3737,9 +3833,16 @@ function markStartupReady() {
     plexInsightsBtn.disabled = !configState.plexConfigured;
   }
   updateMismatchCenterButtonVisibility();
-  const playbackReady = Boolean(statusState.tautulli?.configured);
+  const playbackReady = Boolean(statusState.tautulli?.configured || configState.playbackConfigured);
+  const playbackProviderKey = statusState.tautulli?.provider || configState.playbackProvider;
+  const showDeepRefresh = shouldShowDeepRefreshButton(playbackReady, playbackProviderKey);
+  setElementVisible(refreshTautulliBtn, playbackReady);
+  if (refreshTautulliBtn) {
+    refreshTautulliBtn.disabled = !playbackReady;
+  }
+  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
   if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.disabled = !playbackReady;
+    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
   }
 }
 
@@ -3768,7 +3871,7 @@ function setLoading(loading, label) {
   updateLoadingIndicator();
   if (loadBtn) loadBtn.disabled = loading;
   updatePrimaryRefreshButton();
-  if (label) setStatus(label);
+  if (label) setPassiveStatus(label);
   if (!loading) {
     clearLoadingUiPlaceholders();
     if (deferredUiBindingsReady || firstPaintSettled) {
@@ -3994,7 +4097,7 @@ function applyProgressStatusFilter(token) {
   syncChipButtonsToQuery();
 
   if (tableReadyByApp[activeApp]) {
-    pendingStabilizeByApp[activeApp] = true;
+    queuePendingStabilize(activeApp, "render");
   }
   const scrollAnchor = captureTableScrollAnchor();
   scheduleChipRender(scrollAnchor);
@@ -4050,9 +4153,7 @@ function updateStatusPill(appState, tautulli, displayProcessed = null) {
   statusPillEl.textContent = formatStatusPillText(appState, tautulli, displayProcessed);
 
   const progress = appState?.progress;
-  let title = t("hoverToExpandDataStatus", "Hover to expand data status");
-
-  const showLoaded = isStatusPillLoadedActive(appState, tautulli);
+  let title = t("dataStatus", "Data status");
 
   if (tautulli?.configured && tautulli.refresh_in_progress) {
     if (progress?.total) {
@@ -4061,89 +4162,24 @@ function updateStatusPill(appState, tautulli, displayProcessed = null) {
         : (progress.processed || 0);
 
       title = tp(
-        "matchingInProgressHoverProcessed",
+        "matchingInProgressProcessed",
         { label: getPlaybackLabel(), processed, total: progress.total },
-        `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed). Hover to expand status.`
+        `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed).`
       );
     } else {
       title = tp(
-        "receivingPlaybackDataHover",
+        "receivingPlaybackData",
         { label: getPlaybackLabel() },
-        "Receiving %(label)s data... Hover to expand status."
+        "Receiving %(label)s data..."
       );
     }
-  } else if (showLoaded) {
-    title = t("dataLoadedHover", "Data loaded. Hover to expand status.");
+  } else {
+    title = t("dataLoaded", "Data loaded.");
   }
 
   statusPillEl.title = title;
 
   statusPillEl.classList.toggle("status-pill--pending", Boolean(tautulli?.refresh_in_progress));
-  statusPillEl.classList.toggle("status-pill--loaded", showLoaded);
-}
-
-function pauseStatusCountdown() {
-  clearStatusCountdown();
-  statusCountdownRemaining = STATUS_COUNTDOWN_SECONDS;
-  muteStatusCompleteNote(true);
-}
-
-function shouldAutoHideStatus(appState, tautulli) {
-  if (!appState?.configured) return false;
-  const counts = appState?.counts;
-  const hasCountTotal = Number.isFinite(counts?.total);
-  const tableReady = tableReadyByApp[activeApp] === true;
-  const playbackRefreshDone = !tautulli?.configured || !tautulli.refresh_in_progress;
-  const progressComplete = playbackRefreshDone && (hasCountTotal || tableReady);
-  const cacheAge = appState?.cache?.memory_age_seconds ?? appState?.cache?.disk_age_seconds;
-  const cacheReady = Boolean(appState?.configured && cacheAge != null);
-  return progressComplete && cacheReady;
-}
-function clearStatusCountdown() {
-  if (statusCountdownTimer) {
-    clearInterval(statusCountdownTimer);
-    statusCountdownTimer = null;
-  }
-  statusCountdownRemaining = 0;
-}
-
-function clearStatusPillTimer() {
-  if (statusPillTimer) {
-    clearTimeout(statusPillTimer);
-    statusPillTimer = null;
-  }
-}
-
-function isStatusHovering() {
-  if (!statusRowEl) return false;
-  return statusRowEl.matches(":hover") ||
-    (statusPillEl && statusPillEl.matches(":hover"));
-}
-
-function clearStatusPillLoaded() {
-  if (statusPillLoadedTimer) {
-    clearTimeout(statusPillLoadedTimer);
-    statusPillLoadedTimer = null;
-  }
-  statusPillLoadedUntil = 0;
-}
-
-function startStatusPillLoaded() {
-  clearStatusPillLoaded();
-  statusPillLoadedUntil = Date.now() + STATUS_PILL_LOADED_MS;
-  statusPillLoadedTimer = setTimeout(() => {
-    statusPillLoadedTimer = null;
-    statusPillLoadedUntil = 0;
-    updateStatusPanel();
-  }, STATUS_PILL_LOADED_MS);
-  updateStatusPanel();
-}
-
-function isStatusPillLoadedActive(appState, tautulli) {
-  if (!appState?.configured) return false;
-  if (!tautulli?.configured || tautulli.refresh_in_progress) return false;
-  if (!statusPillLoadedUntil) return false;
-  return Date.now() < statusPillLoadedUntil;
 }
 
 function shouldShowStatusPill() {
@@ -4268,131 +4304,6 @@ function markStatusReadyFromRows(rowCount) {
   updateStatusPanel();
 }
 
-function showStatusRow() {
-  if (!statusRowEl) return;
-  clearStatusPillTimer();
-  statusRowEl.classList.remove("status-row--hidden");
-  statusCollapsed = false;
-  syncStatusPillVisibility();
-}
-
-function hideStatusRow() {
-  if (!statusRowEl) return;
-  // Keep the row visible during startup; only allow collapse after first data is rendered.
-  if (!statusReadyAfterFirstData) {
-    showStatusRow();
-    return;
-  }
-  clearStatusPillTimer();
-  statusRowEl.classList.add("status-row--hidden");
-  statusCollapsed = true;
-  syncStatusPillVisibility();
-}
-
-function updateStatusCompleteNote(text, show) {
-  if (!statusCompleteNoteEl) return;
-  statusCompleteNoteEl.textContent = text || "";
-  statusCompleteNoteEl.classList.toggle("hidden", !show);
-  statusCompleteNoteEl.classList.remove("status-complete--muted");
-}
-
-function muteStatusCompleteNote(muted) {
-  if (!statusCompleteNoteEl || statusCompleteNoteEl.classList.contains("hidden")) return;
-  statusCompleteNoteEl.classList.toggle("status-complete--muted", muted);
-}
-
-function startStatusCountdown() {
-  if (!statusRowEl || !statusCompleteNoteEl) return;
-  if (statusRowEl.classList.contains("status-row--hidden") || statusCountdownTimer) return;
-
-  const renderCountdownText = () =>
-    t(
-      "dataLoadedHidingIn",
-      "Data loaded. Hiding in %(seconds)s…",
-      { seconds: statusCountdownRemaining }
-    );
-
-  statusCountdownRemaining = STATUS_COUNTDOWN_SECONDS;
-  updateStatusCompleteNote(renderCountdownText(), true);
-
-  if (statusFlashTimer) {
-    clearTimeout(statusFlashTimer);
-    statusFlashTimer = null;
-  }
-
-  statusRowEl.classList.remove("status-row--complete-flash");
-  if (!statusCompletionFlashed) {
-    void statusRowEl.offsetWidth;
-    statusRowEl.classList.add("status-row--complete-flash");
-    statusCompletionFlashed = true;
-    statusFlashTimer = setTimeout(() => {
-      statusRowEl.classList.remove("status-row--complete-flash");
-      statusFlashTimer = null;
-    }, 2600);
-  }
-
-  statusCountdownTimer = setInterval(() => {
-    if (isStatusHovering()) return;
-
-    statusCountdownRemaining -= 1;
-    if (statusCountdownRemaining <= 0) {
-      clearStatusCountdown();
-      updateStatusCompleteNote("", false);
-      hideStatusRow();
-      return;
-    }
-
-    updateStatusCompleteNote(renderCountdownText(), true);
-  }, 1000);
-}
-
-function updateStatusRowVisibility(appState, tautulli) {
-  if (!statusRowEl) return;
-  const loadingPhase = document.body.classList.contains("sortarr-loading");
-  if (!statusReadyAfterFirstData) {
-    clearStatusCountdown();
-    statusCompletionFlashed = false;
-    updateStatusCompleteNote("", false);
-    showStatusRow();
-    return;
-  }
-  if (loadingPhase) {
-    clearStatusCountdown();
-    statusCompletionFlashed = false;
-    updateStatusCompleteNote("", false);
-    showStatusRow();
-    return;
-  }
-  const shouldAutoHide = shouldAutoHideStatus(appState, tautulli);
-  const hovering = isStatusHovering();
-  if (shouldAutoHide) {
-    if (hovering) {
-      pauseStatusCountdown();
-    } else {
-      startStatusCountdown();
-    }
-  } else {
-    clearStatusCountdown();
-    statusCompletionFlashed = false;
-    updateStatusCompleteNote("", false);
-    showStatusRow();
-  }
-}
-
-// Mobile: no hover, so allow tap to expand (only when collapsed).
-statusEl.addEventListener(
-  "touchstart",
-  () => {
-    if (statusCollapsed) showStatusRow();
-  },
-  { passive: true }
-);
-
-if (statusPillEl) {
-  statusPillEl.addEventListener("touchstart", showStatusRow, { passive: true });
-}
-
-
 function syncStatusPillVisibility() {
   if (!statusPillEl) return;
   statusPillEl.classList.toggle("status-pill--hidden", !shouldShowStatusPill());
@@ -4495,10 +4406,10 @@ async function refreshActiveAppData() {
     setStatus(t("appNotConfigured", "%(app)s is not configured.", { app: appLabel }));
     return;
   }
-  setStatus(t("refreshingAppData", "Refreshing %(app)s data...", { app: appLabel }));
+  setStatusTransient(t("refreshingAppData", "Refreshing %(app)s data...", { app: appLabel }));
   try {
     await requestArrRefresh(app);
-    setStatus(t("appMetadataRefreshQueued", "%(app)s metadata refresh queued.", { app: appLabel }));
+    setStatusTransient(t("appMetadataRefreshQueued", "%(app)s metadata refresh queued.", { app: appLabel }));
   } catch (e) {
     setStatus(t("errorPrefix", "Error: ") + e.message);
   }
@@ -4548,10 +4459,10 @@ function updateArrRefreshButtons() {
       if (busySet.has(instanceId)) return;
       busySet.add(instanceId);
       updateArrRefreshButtons();
-      setStatus(t("refreshingAppData", "Refreshing %(app)s data...", { app: statusLabel }));
+      setStatusTransient(t("refreshingAppData", "Refreshing %(app)s data...", { app: statusLabel }));
       try {
         await requestArrRefresh(app, instanceId ? { instanceId } : {});
-        setStatus(t("appRefreshQueued", "%(app)s refresh queued.", { app: statusLabel }));
+        setStatusTransient(t("appRefreshQueued", "%(app)s refresh queued.", { app: statusLabel }));
       } catch (e) {
         setStatus(t("errorPrefix", "Error: ") + e.message);
       } finally {
@@ -4591,16 +4502,16 @@ function updateStatusPanel() {
         tautulliStatusEl.dataset.hasValue = "0";
       }
     } else {
-    const holdConfiguredPlaybackValue = Boolean(
-      configState.playbackConfigured &&
-      !(tautulli && tautulli.configured) &&
-      tautulliStatusEl.dataset.hasValue === "1"
-    );
-    if (!holdConfiguredPlaybackValue) {
-      const next = formatTautulliStatus(tautulli, appState?.progress);
-      tautulliStatusEl.textContent = next;
-      tautulliStatusEl.dataset.hasValue = (next && next !== "--") ? "1" : "0";
-    }
+      const holdConfiguredPlaybackValue = Boolean(
+        configState.playbackConfigured &&
+        !(tautulli && tautulli.configured) &&
+        tautulliStatusEl.dataset.hasValue === "1"
+      );
+      if (!holdConfiguredPlaybackValue) {
+        const next = formatTautulliStatus(tautulli, appState?.progress);
+        tautulliStatusEl.textContent = next;
+        tautulliStatusEl.dataset.hasValue = (next && next !== "--") ? "1" : "0";
+      }
     }
   }
   if (cacheStatusEl) {
@@ -4628,11 +4539,18 @@ function updateStatusPanel() {
     }
   }
   setPartialBanner(Boolean(tautulli?.partial));
+  const playbackReady = Boolean((tautulli && tautulli.configured) || configState.playbackConfigured);
+  const playbackProviderKey = tautulli?.provider || configState.playbackProvider;
+  const showDeepRefresh = shouldShowDeepRefreshButton(playbackReady, playbackProviderKey);
+  setElementVisible(refreshTautulliBtn, playbackReady);
+  if (refreshTautulliBtn) {
+    refreshTautulliBtn.disabled = !playbackReady;
+  }
+  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
   if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.disabled = !(tautulli && tautulli.configured);
+    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
   }
   updatePrimaryRefreshButton();
-  updateStatusRowVisibility(appState, tautulli);
 }
 
 function syncTautulliPendingFromStatus(prevTautulli, nextTautulli) {
@@ -5348,6 +5266,7 @@ async function fetchStatusNow({ silent = false, lite = false } = {}) {
     const prevTautulli = statusState.tautulli;
     statusState.apps = mergeStatusApps(statusState.apps, data.apps) || statusState.apps;
     statusState.tautulli = data.tautulli || statusState.tautulli;
+    tautulliMatched = Boolean(statusState.tautulli?.configured || tautulliEnabled);
     applyPlexScopeFromStatus(data.scope || {});
     lastStatusFetchAt = Date.now();
     syncTautulliPendingFromStatus(prevTautulli, statusState.tautulli);
@@ -5592,7 +5511,7 @@ function resetUiState() {
   viewStateByApp.sonarr = buildDefaultViewState("sonarr");
   viewStateByApp.radarr = buildDefaultViewState("radarr");
   clearActiveFilters({ persist: false, forceUi: true });
-  setAdvancedMode(false);
+  setAdvancedMode(true);
   chipQuery = "";
   syncChipButtonsToQuery();
 }
@@ -5751,7 +5670,7 @@ function bindChipButtons(rootEl = document) {
       chipQuery = Array.from(tokens).join(" ");
       renderActiveFilterChips();
       if (tableReadyByApp[activeApp]) {
-        pendingStabilizeByApp[activeApp] = true;
+        queuePendingStabilize(activeApp, "render");
       }
       const scrollAnchor = captureTableScrollAnchor();
       scheduleChipRender(scrollAnchor);
@@ -9951,7 +9870,6 @@ const DISPLAY_CACHE_COLUMNS = {
   Path: { key: "path", compute: row => escapeHtml(row.Path ?? "") },
 };
 const DISPLAY_CACHE_COLUMN_LIST = Object.keys(DISPLAY_CACHE_COLUMNS);
-let columnVisibilityVersion = 0;
 const lastVisibleDisplayColumns = { sonarr: null, radarr: null };
 
 function loadCsvColumnsState() {
@@ -10522,14 +10440,30 @@ function getCellContentWidth(el) {
   return Math.max(0, Math.ceil(width));
 }
 
+function queuePendingStabilize(app, mode = "render") {
+  if (!app) return;
+  pendingStabilizeByApp[app] = true;
+  if (mode === "render" || !pendingStabilizeModeByApp[app]) {
+    pendingStabilizeModeByApp[app] = mode;
+  }
+}
+
+function clearPendingStabilize(app) {
+  if (!app) return;
+  pendingStabilizeByApp[app] = false;
+  pendingStabilizeModeByApp[app] = "";
+}
+
 function maybeStabilizeRender(app, options = {}) {
   if (!resolveRenderFlag("stabilize", app)) {
-    pendingStabilizeByApp[app] = false;
+    clearPendingStabilize(app);
     return;
   }
   if (options.stabilize) return;
   if (!pendingStabilizeByApp[app]) return;
-  pendingStabilizeByApp[app] = false;
+  const mode = pendingStabilizeModeByApp[app] || "render";
+  clearPendingStabilize(app);
+  if (mode !== "render") return;
   requestAnimationFrame(() => {
     if (app !== activeApp) return;
     render(dataByApp[app] || [], { allowBatch: true, stabilize: true });
@@ -10673,16 +10607,16 @@ function unlockColumnWidths(token) {
     const col = th.getAttribute("data-col");
     if (!col || !columnWidthLock.widths.has(col)) return;
     widthService.clearCellWidth(th);
-    
-    
+
+
   });
   if (tbody && columnWidthLock.widths.size) {
     columnWidthLock.widths.forEach((_width, col) => {
       if (!col || col === "Title") return;
       tbody.querySelectorAll(`td[data-col="${col}"]`).forEach(td => {
         widthService.clearCellWidth(td);
-        
-        
+
+
       });
     });
   }
@@ -10756,8 +10690,8 @@ function applyColumnHeaderCaps() {
     HEADER_WIDTH_CAP_COLUMNS.forEach(col => {
       tableEl.querySelectorAll(`th[data-col="${col}"], td[data-col="${col}"]`).forEach(el => {
         widthService.clearCellWidth(el);
-        
-        
+
+
       });
     });
     headerCapCleanupDone = true;
@@ -10798,6 +10732,7 @@ function applyColumnHeaderCaps() {
 
 function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
   if (!tableEl || app !== activeApp) return;
+  const skipIfUnchanged = Boolean(_options && _options.skipIfUnchanged);
 
   if (targetWidth > 0) {
     const clamped = clampTitleWidth(targetWidth);
@@ -10811,11 +10746,12 @@ function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
 
   if (sharedTitleWidth <= 0) {
     widthService.clearCellWidth(header);
-    
-    
+
+
     if (root) {
       root.style.removeProperty("--title-col-width");
     }
+    lastAppliedTitleWidthPxByApp[app] = "";
     if (tbody) {
       tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
         widthService.clearCellWidth(td);
@@ -10825,20 +10761,29 @@ function applyTitleWidth(app, _rows = null, _options = {}, targetWidth = 0) {
   }
 
   // Set the CSS variable on root so all rows (including those in fragment/batch) inherit it.
+  const widthPx = `${sharedTitleWidth}px`;
+  const currentAppliedWidth = root
+    ? root.style.getPropertyValue("--title-col-width").trim()
+    : widthPx;
+  if (skipIfUnchanged &&
+    lastAppliedTitleWidthPxByApp[app] === widthPx &&
+    currentAppliedWidth === widthPx) {
+    return;
+  }
   if (root) {
-    root.style.setProperty("--title-col-width", `${sharedTitleWidth}px`);
+    root.style.setProperty("--title-col-width", widthPx);
   }
 
   // Force the header to match exactly to prevent any layout shifts.
-  const widthPx = `${sharedTitleWidth}px`;
   widthService.setCellWidth(header, widthPx);
   if (tbody) {
     tbody.querySelectorAll('td[data-col="Title"]').forEach(td => {
       widthService.setCellWidth(td, widthPx);
     });
   }
-  
-  
+  lastAppliedTitleWidthPxByApp[app] = widthPx;
+
+
 }
 
 
@@ -10878,7 +10823,7 @@ function setActiveTab(app) {
   updatePlexLibraryScopeControl();
   updateEffectiveSourcesLine();
   setLoading(false);
-  setStatus("");
+  setPassiveStatus("");
   setStatusNotice(noticeByApp[activeApp] || "");
   updateFastModeBanner();
   updateBackgroundLoading();
@@ -10915,7 +10860,7 @@ function setActiveTab(app) {
 
   const activeData = dataByApp[activeApp] || [];
   if (activeData.length) {
-    pendingStabilizeByApp[activeApp] = true;
+    queuePendingStabilize(activeApp, tableReadyByApp[activeApp] ? "render" : "layout");
     render(activeData);
     if (chipsChanged) render(activeData);
     return;
@@ -11547,8 +11492,8 @@ function buildRow(row, app, options = {}) {
       if (!cell) return;
       const widthPx = `${width}px`;
       widthService.setCellWidth(cell, widthPx);
-      
-      
+
+
     });
   }
 
@@ -11707,16 +11652,16 @@ function syncRowWidthLock(tr) {
       if (!cell) return;
       const widthPx = `${width}px`;
       widthService.setCellWidth(cell, widthPx);
-      
-      
+
+
     });
   } else if (prevToken) {
     // No lock active anymore, clear stale inline widths from prior locks.
     try {
       tr.querySelectorAll("td").forEach(td => {
         widthService.clearCellWidth(td);
-        
-        
+
+
       });
     } catch { }
   }
@@ -12136,7 +12081,7 @@ function renderBatch(rows, token, start, totalRows, totalAll, app, batchSize, op
     visibleColumns.forEach(col => hydrateLazyDisplayCells(col, tbody));
   }
   normalizeSonarrRuntimeOrder(tbody);
-  setStatus(t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: totalRows, total: totalAll }));
+  setPassiveStatus(t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: totalRows, total: totalAll }));
 
   tableReadyByApp[app] = true;
   setChipsVisible(true);
@@ -12328,7 +12273,7 @@ function render(data, options = {}) {
     const ok = enableVirtualRows(sorted, app, rowOptions, token, perf);
     if (ok) {
       markStatusReadyFromRows(sorted.length);
-      setStatus(
+      setPassiveStatus(
         t(
           "statusLoadedCounts",
           "Loaded %(rows)s / %(total)s",
@@ -12346,7 +12291,7 @@ function render(data, options = {}) {
   if (!sorted.length) {
     renderZeroResultsState(data.length);
     setBatching(false);
-    setStatus(
+    setPassiveStatus(
       t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: 0, total: data.length })
     );
     updateColumnVisibility();
@@ -12386,7 +12331,7 @@ function render(data, options = {}) {
     updateColumnVisibility(tbody);
     normalizeSonarrRuntimeOrder(tbody);
     setBatching(false);
-    setStatus(
+    setPassiveStatus(
       t("statusLoadedCounts", "Loaded %(rows)s / %(total)s", { rows: sorted.length, total: data.length })
     );
     tableReadyByApp[app] = true;
@@ -12479,7 +12424,9 @@ async function load(refresh, options = {}) {
     if (app === activeApp && !background) {
       setLoading(true, label);
       if (!hasData) {
-        setChipsVisible(false);
+        if (!chipsEnabled) {
+          setChipsVisible(false);
+        }
       }
       if (!refresh && !hasData && isPageFresh()) {
         noticeByApp[app] = COLD_CACHE_NOTICE;
@@ -12488,7 +12435,7 @@ async function load(refresh, options = {}) {
       }
     }
     if (app === activeApp && !background && !tableReadyByApp[app]) {
-      pendingStabilizeByApp[app] = true;
+      queuePendingStabilize(app, "layout");
     }
 
 
@@ -12669,10 +12616,10 @@ if (refreshSonarrBtn) {
   refreshSonarrBtn.addEventListener("click", async () => {
     refreshSonarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshSonarrBtn, configState.sonarrConfigured);
-    setStatus(t("refreshingShows", "Refreshing Shows..."));
+    setStatusTransient(t("refreshingShows", "Refreshing Shows..."));
     try {
       await requestArrRefresh("sonarr");
-      setStatus(t("showsRefreshQueued", "Shows refresh queued."));
+      setStatusTransient(t("showsRefreshQueued", "Shows refresh queued."));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
@@ -12685,10 +12632,10 @@ if (refreshRadarrBtn) {
   refreshRadarrBtn.addEventListener("click", async () => {
     refreshRadarrBtn.setAttribute("data-busy", "1");
     updateArrRefreshButton(refreshRadarrBtn, configState.radarrConfigured);
-    setStatus(t("refreshingMovies", "Refreshing Movies..."));
+    setStatusTransient(t("refreshingMovies", "Refreshing Movies..."));
     try {
       await requestArrRefresh("radarr");
-      setStatus(t("moviesRefreshQueued", "Movies refresh queued."));
+      setStatusTransient(t("moviesRefreshQueued", "Movies refresh queued."));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     } finally {
@@ -12700,7 +12647,7 @@ if (refreshRadarrBtn) {
 if (refreshTautulliBtn) {
   refreshTautulliBtn.addEventListener("click", async () => {
     const label = getPlaybackLabel();
-    setStatus(t("refreshingPlayback", "Refreshing %(label)s…", { label }));
+    setStatusTransient(t("refreshingPlayback", "Refreshing %(label)s…", { label }));
     try {
       const res = await fetch(apiUrl("/api/tautulli/refresh"), {
         method: "POST",
@@ -12718,7 +12665,7 @@ if (refreshTautulliBtn) {
         updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus(t("playbackRefreshStarted", "%(label)s refresh started.", { label }));
+      setStatusTransient(t("playbackRefreshStarted", "%(label)s refresh started.", { label }));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     }
@@ -12727,7 +12674,7 @@ if (refreshTautulliBtn) {
 if (deepRefreshTautulliBtn) {
   deepRefreshTautulliBtn.addEventListener("click", async () => {
     const label = getPlaybackLabel();
-    setStatus(t("refreshingPlaybackData", "Refreshing %(label)s data...", { label }));
+    setStatusTransient(t("refreshingPlaybackData", "Refreshing %(label)s data...", { label }));
     try {
       const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
         method: "POST",
@@ -12745,7 +12692,7 @@ if (deepRefreshTautulliBtn) {
         updateBackgroundLoading();
       }
       fetchStatus({ silent: true });
-      setStatus(t("playbackDeepRefreshStarted", "%(label)s refresh started. This can take a while.", { label }));
+      setStatusTransient(t("playbackDeepRefreshStarted", "%(label)s refresh started. This can take a while.", { label }));
     } catch (e) {
       setStatus(t("errorPrefix", "Error: ") + e.message);
     }
@@ -12810,18 +12757,15 @@ if (settingsBtn) {
 }
 
 function setAdvancedMode(enabled) {
-  advancedEnabled = enabled;
+  advancedEnabled = true;
   if (advancedToggle) {
-    advancedToggle.setAttribute("aria-pressed", enabled ? "true" : "false");
+    advancedToggle.setAttribute("aria-pressed", "true");
   }
-  if (filterInputs) filterInputs.classList.toggle("advanced-on", enabled);
-  if (advancedHelpBtn) advancedHelpBtn.classList.toggle("hidden", !enabled);
-  if (titleFilter) titleFilter.disabled = enabled;
-  if (pathFilter) pathFilter.disabled = enabled;
-  if (advancedFilter) advancedFilter.disabled = !enabled;
-  if (!enabled && advancedFilter) advancedFilter.value = "";
-  if (!enabled && advancedHelp) advancedHelp.classList.add("hidden");
-  if (!enabled && advancedWarnings) updateAdvancedWarnings([]);
+  if (filterInputs) filterInputs.classList.add("advanced-on");
+  if (advancedHelpBtn) advancedHelpBtn.classList.remove("hidden");
+  if (titleFilter) titleFilter.disabled = true;
+  if (pathFilter) pathFilter.disabled = true;
+  if (advancedFilter) advancedFilter.disabled = false;
   updateFilterUiMode();
 }
 
@@ -12948,35 +12892,35 @@ function updatePlaybackLabels() {
 
   if (refreshTautulliBtn) {
     refreshTautulliBtn.textContent = playbackProvider
-      ? t("refreshPlaybackProvider", "Refresh %(label)s", { label })
-      : t("refreshPlayback", "Refresh playback");
+      ? t("refreshPlaybackProvider", "Re-match from %(label)s", { label })
+      : t("refreshPlayback", "Re-match from playback");
 
     refreshTautulliBtn.title = playbackProvider
       ? t(
-        "refreshPlaybackProviderTitle",
-        "Refresh %(label)s library data and rebuild matches",
+        "refreshPlaybackProviderMatchTitle",
+        "Re-match using current %(label)s data",
         { label }
       )
       : t(
-        "refreshPlaybackTitle",
-        "Refresh playback library data and rebuild matches"
+        "refreshPlaybackMatchTitle",
+        "Re-match using current playback data"
       );
   }
 
   if (deepRefreshTautulliBtn) {
     deepRefreshTautulliBtn.textContent = playbackProvider
-      ? t("deepRefreshPlaybackProvider", "Refresh %(label)s data", { label })
-      : t("deepRefreshPlayback", "Refresh playback data");
+      ? t("deepRefreshPlaybackProvider", "Rebuild %(label)s data", { label })
+      : t("deepRefreshPlayback", "Rebuild playback data");
 
     deepRefreshTautulliBtn.title = playbackProvider
       ? t(
         "refreshPlaybackProviderTitle",
-        "Refresh %(label)s library data and rebuild matches",
+        "Refresh %(label)s library data, then rebuild matches",
         { label }
       )
       : t(
         "refreshPlaybackTitle",
-        "Refresh playback library data and rebuild matches"
+        "Refresh playback library data, then rebuild matches"
       );
   }
 }
@@ -12986,7 +12930,7 @@ function setPlaybackProvider(provider) {
   playbackProvider = provider || "";
   playbackLabel = playbackProvider === "jellystat"
     ? "Jellystat"
-    : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
+    : (playbackProvider === "tautulli" ? "Tautulli" : (playbackProvider === "plex" ? "Plex" : "Playback"));
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
   playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
   try {
@@ -12998,6 +12942,17 @@ function setPlaybackProvider(provider) {
 
 function setTautulliEnabled(enabled, provider = "") {
   tautulliEnabled = Boolean(enabled);
+  tautulliMatched = tautulliEnabled;
+  const playbackProviderKey = provider || playbackProvider;
+  const showDeepRefresh = shouldShowDeepRefreshButton(tautulliEnabled, playbackProviderKey);
+  setElementVisible(refreshTautulliBtn, tautulliEnabled);
+  if (refreshTautulliBtn) {
+    refreshTautulliBtn.disabled = !tautulliEnabled;
+  }
+  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
+  if (deepRefreshTautulliBtn) {
+    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
+  }
   setPlaybackProvider(provider);
   updateAdvancedHelpText();
   updateFilterBuilderOptions();
@@ -13442,54 +13397,112 @@ setChipsEnabled(savedChipsEnabled);
 
 
 /* config load for link bases */
+let lastFrontendConfigUiSignature = "";
+
+function buildFrontendConfigUiSignature(payload, normalizedState) {
+  const state = normalizedState || {};
+  return JSON.stringify({
+    sonarrConfigured: Boolean(state.sonarrConfigured),
+    radarrConfigured: Boolean(state.radarrConfigured),
+    playbackProvider: state.playbackProvider || "",
+    playbackConfigured: Boolean(state.playbackConfigured),
+    plexConfigured: Boolean(state.plexConfigured),
+    historySourcesAvailable: Array.isArray(state.historySourcesAvailable) ? state.historySourcesAvailable : [],
+    optionSet: state.optionSet || {},
+    plexLibraries: state.plexLibraries || { sonarr: [], radarr: [] },
+    sonarrBase: state.sonarrBase || "",
+    radarrBase: state.radarrBase || "",
+    sonarrInstances: Array.isArray(payload?.sonarr_instances) ? payload.sonarr_instances : [],
+    radarrInstances: Array.isArray(payload?.radarr_instances) ? payload.radarr_instances : [],
+  });
+}
+
+function applyFrontendConfig(cfg, { updateUi = true } = {}) {
+  const payload = (cfg && typeof cfg === "object") ? cfg : {};
+  const sonarrInstances = Array.isArray(payload.sonarr_instances) ? payload.sonarr_instances : [];
+  const radarrInstances = Array.isArray(payload.radarr_instances) ? payload.radarr_instances : [];
+
+  instanceConfig.sonarr = sonarrInstances;
+  instanceConfig.radarr = radarrInstances;
+
+  instanceBaseById.sonarr = {};
+  instanceBaseById.radarr = {};
+  sonarrInstances.forEach(inst => {
+    if (inst?.id) instanceBaseById.sonarr[inst.id] = inst.url || "";
+  });
+  radarrInstances.forEach(inst => {
+    if (inst?.id) instanceBaseById.radarr[inst.id] = inst.url || "";
+  });
+
+  sonarrBase = payload.sonarr_url || sonarrInstances[0]?.url || "";
+  radarrBase = payload.radarr_url || radarrInstances[0]?.url || "";
+  configState.sonarrConfigured = payload.sonarr_configured == null
+    ? sonarrInstances.length > 0
+    : Boolean(payload.sonarr_configured);
+  configState.radarrConfigured = payload.radarr_configured == null
+    ? radarrInstances.length > 0
+    : Boolean(payload.radarr_configured);
+  configState.playbackProvider = payload.playback_provider || "";
+  configState.playbackConfigured = Boolean(
+    payload.playback_configured ?? payload.tautulli_configured
+  );
+  configState.plexConfigured = Boolean(payload.plex_configured);
+  configState.historySourcesAvailable = Array.isArray(payload.history_sources_available)
+    ? payload.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  configState.optionSet = (payload.option_set && typeof payload.option_set === "object")
+    ? payload.option_set
+    : {};
+  configState.optionCapabilities = configState.optionSet.capabilities || {};
+  configState.optionSelected = configState.optionSet.selected || {};
+  const plexLibraries = (payload.plex_libraries && typeof payload.plex_libraries === "object")
+    ? payload.plex_libraries
+    : {};
+  configState.plexLibraries = {
+    sonarr: Array.isArray(plexLibraries.sonarr) ? plexLibraries.sonarr : [],
+    radarr: Array.isArray(plexLibraries.radarr) ? plexLibraries.radarr : [],
+  };
+  setPlexAvailableForApp("sonarr", configState.plexLibraries.sonarr);
+  setPlexAvailableForApp("radarr", configState.plexLibraries.radarr);
+
+  if (!updateUi) return;
+  const nextUiSignature = buildFrontendConfigUiSignature(payload, {
+    sonarrConfigured: configState.sonarrConfigured,
+    radarrConfigured: configState.radarrConfigured,
+    playbackProvider: configState.playbackProvider,
+    playbackConfigured: configState.playbackConfigured,
+    plexConfigured: configState.plexConfigured,
+    historySourcesAvailable: configState.historySourcesAvailable,
+    optionSet: configState.optionSet,
+    plexLibraries: configState.plexLibraries,
+    sonarrBase,
+    radarrBase,
+  });
+  if (nextUiSignature === lastFrontendConfigUiSignature) {
+    return;
+  }
+  lastFrontendConfigUiSignature = nextUiSignature;
+  applyOptionSetCapabilities();
+  if (plexInsightsBtn) {
+    plexInsightsBtn.disabled = !configState.plexConfigured;
+  }
+  updateMismatchCenterButtonVisibility();
+  buildInstanceChips();
+  updateFilterBuilderOptions();
+  setTautulliEnabled(configState.playbackConfigured, configState.playbackProvider);
+  updatePlexLibraryScopeControl();
+  updateEffectiveSourcesLine();
+  updatePrimaryRefreshButton();
+}
+
+applyFrontendConfig(FRONTEND_BOOTSTRAP_CONFIG, { updateUi: true });
+
 async function loadConfig() {
   try {
     const res = await fetch(apiUrl("/api/config"));
     if (!res.ok) return;
     const cfg = await res.json();
-    const sonarrInstances = Array.isArray(cfg.sonarr_instances) ? cfg.sonarr_instances : [];
-    const radarrInstances = Array.isArray(cfg.radarr_instances) ? cfg.radarr_instances : [];
-
-    instanceConfig.sonarr = sonarrInstances;
-    instanceConfig.radarr = radarrInstances;
-
-    instanceBaseById.sonarr = {};
-    instanceBaseById.radarr = {};
-    sonarrInstances.forEach(inst => {
-      if (inst?.id) instanceBaseById.sonarr[inst.id] = inst.url || "";
-    });
-    radarrInstances.forEach(inst => {
-      if (inst?.id) instanceBaseById.radarr[inst.id] = inst.url || "";
-    });
-
-    sonarrBase = cfg.sonarr_url || sonarrInstances[0]?.url || "";
-    radarrBase = cfg.radarr_url || radarrInstances[0]?.url || "";
-    configState.sonarrConfigured = sonarrInstances.length > 0;
-    configState.radarrConfigured = radarrInstances.length > 0;
-    configState.playbackProvider = cfg.playback_provider || "";
-    configState.playbackConfigured = Boolean(
-      cfg.playback_configured ?? cfg.tautulli_configured
-    );
-    configState.plexConfigured = Boolean(cfg.plex_configured);
-    configState.historySourcesAvailable = Array.isArray(cfg.history_sources_available)
-      ? cfg.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
-      : [];
-    const plexLibraries = (cfg.plex_libraries && typeof cfg.plex_libraries === "object")
-      ? cfg.plex_libraries
-      : {};
-    setPlexAvailableForApp("sonarr", plexLibraries.sonarr || []);
-    setPlexAvailableForApp("radarr", plexLibraries.radarr || []);
-    if (plexInsightsBtn) {
-      plexInsightsBtn.disabled = !configState.plexConfigured;
-    }
-    updateMismatchCenterButtonVisibility();
-
-    buildInstanceChips();
-    updateFilterBuilderOptions();
-    setTautulliEnabled(configState.playbackConfigured, configState.playbackProvider);
-    updatePlexLibraryScopeControl();
-    updateEffectiveSourcesLine();
-    updatePrimaryRefreshButton();
+    applyFrontendConfig(cfg, { updateUi: true });
   } catch (e) {
     console.warn("config load failed", e);
   }
@@ -14804,83 +14817,10 @@ document.addEventListener("keydown", event => {
   }
 });
 
-async function syncOptionSetFromApi() {
-  try {
-    const res = await fetch(apiUrl("/api/config"));
-    if (!res.ok) return;
-    const cfg = await res.json();
-    configState.optionSet = cfg.option_set || {};
-    configState.optionCapabilities = configState.optionSet.capabilities || {};
-    configState.optionSelected = configState.optionSet.selected || {};
-    if (typeof cfg.sonarr_configured !== "undefined") configState.sonarrConfigured = !!cfg.sonarr_configured;
-    if (typeof cfg.radarr_configured !== "undefined") configState.radarrConfigured = !!cfg.radarr_configured;
-    if (typeof cfg.plex_configured !== "undefined") configState.plexConfigured = !!cfg.plex_configured;
-    configState.historySourcesAvailable = Array.isArray(cfg.history_sources_available)
-      ? cfg.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
-      : configState.historySourcesAvailable;
-    const plexLibraries = (cfg.plex_libraries && typeof cfg.plex_libraries === "object")
-      ? cfg.plex_libraries
-      : {};
-    setPlexAvailableForApp("sonarr", plexLibraries.sonarr || []);
-    setPlexAvailableForApp("radarr", plexLibraries.radarr || []);
-    applyOptionSetCapabilities();
-  } catch {
-    // Best-effort only; retain existing behavior when config API is unavailable.
-  }
-}
-
-function initStatusHoverBindings() {
-  if (statusHoverBindingsReady) return;
-  statusHoverBindingsReady = true;
-  if (!statusPillEl || !statusRowEl) return;
-  if (statusEl) {
-    statusEl.addEventListener("mouseenter", () => {
-      if (!statusCollapsed) return;
-      showStatusRow();
-      pauseStatusCountdown();
-    });
-  }
-
-  statusPillEl.addEventListener("mouseenter", () => {
-    statusPillEl.classList.add("status-pill--active");
-    if (!statusReadyAfterFirstData) return;
-    if (statusCollapsed) {
-      pauseStatusCountdown();
-      showStatusRow();
-    }
-  });
-  statusPillEl.addEventListener("mouseleave", () => {
-    statusPillEl.classList.remove("status-pill--active");
-    if (!statusCollapsed) return;
-    setTimeout(() => {
-      if (!statusRowEl.matches(":hover") && !statusPillEl.matches(":hover")) {
-        if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
-          startStatusCountdown();
-        } else {
-          showStatusRow();
-        }
-      }
-    }, 50);
-  });
-  statusRowEl.addEventListener("mouseenter", () => {
-    pauseStatusCountdown();
-  });
-  statusRowEl.addEventListener("mouseleave", () => {
-    if (!statusRowEl.matches(":hover") && !(statusPillEl && statusPillEl.matches(":hover"))) {
-      if (shouldAutoHideStatus(statusState.apps?.[activeApp], statusState.tautulli)) {
-        startStatusCountdown();
-      } else {
-        showStatusRow();
-      }
-    }
-  });
-}
-
 function initDeferredUiBindings() {
   if (deferredUiBindingsReady) return;
   deferredUiBindingsReady = true;
   bindChipButtons();
-  initStatusHoverBindings();
 }
 
 function scheduleDeferredUiBindings() {
@@ -14888,15 +14828,13 @@ function scheduleDeferredUiBindings() {
   deferredUiBindingsScheduled = true;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      window.setTimeout(() => {
-        deferredUiBindingsScheduled = false;
-        firstPaintSettled = true;
-        initDeferredUiBindings();
-        fetchStatus({ silent: true, lite: true });
-        startStatusTick();
-        startStatusFetchPoll();
-        scheduleStartupReadyFlip();
-      }, 60);
+      deferredUiBindingsScheduled = false;
+      firstPaintSettled = true;
+      initDeferredUiBindings();
+      fetchStatus({ silent: true, lite: true });
+      startStatusTick();
+      startStatusFetchPoll();
+      scheduleStartupReadyFlip();
     });
   });
 }
@@ -14934,8 +14872,9 @@ function scheduleDeferredUiBindings() {
   if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
   scheduleTitlePathWidthLock();
   await loadConfig();
-  await syncOptionSetFromApi();
-  setChipsVisible(false);
+  if (!chipsEnabled) {
+    setChipsVisible(false);
+  }
   const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
   if (isAppConfigured(otherApp)) {
     queuePrefetch(otherApp, false);

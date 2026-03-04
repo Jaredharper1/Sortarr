@@ -10,11 +10,24 @@
   <link rel="stylesheet"
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=optional">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Sortarr provides Sonarr and Radarr media library insights with filters, playback context, and sortable metrics.">
+  <meta name="description"
+    content="Sortarr provides Sonarr and Radarr media library insights with filters, playback context, and sortable metrics.">
 
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>{{ app_name }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <script>
+    try {
+      const root = document.documentElement;
+      if (localStorage.getItem("Sortarr-filters-collapsed") === "1") {
+        root.setAttribute("data-filters-collapsed", "1");
+      }
+      if (localStorage.getItem("Sortarr-chips-enabled") === "1") {
+        root.setAttribute("data-chips-enabled", "1");
+      }
+    } catch {
+    }
+  </script>
   <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}-startupfix4" />
 </head>
 
@@ -154,7 +167,10 @@
             <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> {{ _('Video Quality') }}</label>
             <label class="column-row"><input type="checkbox" data-col="Resolution" /> {{ _('Resolution') }}</label>
             <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> {{ _('Video Codec') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR') }}</label>
+            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
+              }}</label>
+            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
+              }}</label>
           </div>
 
 
@@ -223,21 +239,56 @@
 
     <div class="filters" id="filtersPanel">
       <div class="filters-body">
-        <div class="filter-row">
-          <div class="filter-inputs hidden" id="filterInputs">
-            <div class="simple-filters" id="simpleFilters">
-              <input id="titleFilter" placeholder="{{ _('Filter title (supports * and ?)') }}" />
-              <input id="pathFilter" placeholder="{{ _('Filter path (supports * and ?)') }}" />
+        {% set initial_playback_provider = (bootstrap_config.playback_provider or '')|lower %}
+        {% set initial_playback_enabled = bootstrap_config.playback_configured or bootstrap_config.tautulli_configured %}
+        {% set initial_playback_label = 'Jellystat' if initial_playback_provider == 'jellystat' else ('Tautulli' if initial_playback_provider == 'tautulli' else ('Plex' if initial_playback_provider == 'plex' else 'Playback')) %}
+        {% set initial_show_deep_refresh = initial_playback_enabled and initial_playback_provider != 'jellystat' %}
+        <div class="status-row" id="statusRow">
+          <div class="status-block">
+            <div class="status-label">{{ _('Progress') }}</div>
+            <div class="status-value status-value--skeleton" id="progressStatus">--</div>
+          </div>
+          <div class="status-block">
+            <div class="status-label" data-playback-label>{{ initial_playback_label if initial_playback_enabled else _('Playback') }}</div>
+            <div class="status-value status-value--skeleton" id="tautulliStatus">--</div>
+          </div>
+          <div class="status-block">
+            <div class="status-label">{{ _('Cache') }}</div>
+            <div class="status-value status-value--skeleton" id="cacheStatus">--</div>
+          </div>
+          <div class="status-actions">
+            <div class="status-actions-group">
+              <button id="refreshTabBtn"
+                title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
+                Shows data') }}</button>
+              <button id="refreshTautulliBtn"{% if not initial_playback_enabled %} class="hidden"{% endif %} disabled
+                title="Re-match using current {{ initial_playback_label }} data">Re-match from {{ initial_playback_label }}</button>
+              <button id="deepRefreshTautulliBtn"{% if not initial_show_deep_refresh %} class="hidden"{% endif %} disabled
+                title="Refresh {{ initial_playback_label }} library data, then rebuild matches">Rebuild {{ initial_playback_label }} data</button>
+              <button id="plexInsightsBtn" disabled title="{{ _('Open Plex insights') }}">{{ _('Plex Insights')
+                }}</button>
+              <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center')
+                }}</button>
+              <button id="clearCachesBtn"
+                title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
+                caches & rebuild') }}</button>
             </div>
+          </div>
+          <div class="status-complete hidden" id="statusCompleteNote">{{ _('All data is up to date.') }}</div>
+        </div>
+        <div class="filter-row">
+          <div class="filter-inputs advanced-on" id="filterInputs">
             <input id="advancedFilter" class="advanced-filter"
-              placeholder="{{ _('Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | missing:true | cutoff:true | airing:true | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | instance:sonarr-2') }}" />
+              placeholder="{{ _('Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | year:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | duplicate:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | any:aac | instance:sonarr-2') if initial_playback_enabled else _('Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | year:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | duplicate:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | any:aac | instance:sonarr-2') }}" />
           </div>
           <div class="filter-controls">
-            <button class="chip-advanced hidden" id="advancedToggle" type="button" aria-pressed="false">{{ _('Advanced')
-              }}</button>
-            <button class="advanced-help-btn hidden" id="advancedHelpBtn" type="button">{{ _('?') }}</button>
+            <button class="advanced-help-btn" id="advancedHelpBtn" type="button">{{ _('?') }}</button>
           </div>
         </div>
+        <div id="advancedHelp" class="advanced-help hidden">
+          {{ _('Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Bare tokens (like aac) search across row text; use any:value for explicit global search. Examples: dateadded:2024 year:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama duplicate:true missing:true cutoff:true airing:true playcount>=5 neverwatched:true mismatch:true dayssincewatched>=365 watchtime>=10 contenthours>=10 any:aac Fields: title, year, titleslug, tmdbid, dateadded, path, rootfolder, instance, duplicate, any, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, matchstatus, mismatch, playcount, lastwatched, dayssincewatched, watchtime, contenthours, watchratio, users, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour') if initial_playback_enabled else _('Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact). gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Bare tokens (like aac) search across row text; use any:value for explicit global search. Examples: dateadded:2024 year:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb studio:pixar seriestype:anime originallanguage:eng genres:drama duplicate:true missing:true cutoff:true airing:true any:aac Fields: title, year, titleslug, tmdbid, dateadded, path, rootfolder, instance, duplicate, any, status, monitored, qualityprofile, tags, releasegroup, studio, seriestype, originallanguage, genres, lastaired, hasfile, isavailable, incinemas, lastsearchtime, edition, customformats, customformatscore, qualitycutoffnotmet, languages, videoquality, videocodec, videohdr, resolution, audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang, subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes, seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours') }}
+        </div>
+        <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="filter-builder" id="filterBuilder">
           <div class="filter-builder-row">
             <div class="filter-builder-field">
@@ -257,18 +308,6 @@
           </div>
           <div class="active-filters hidden" id="activeFilters" aria-live="polite"></div>
         </div>
-        <div id="advancedHelp" class="advanced-help hidden">
-          {{ _('Use field:value for wildcards and comparisons. Numeric fields treat field:value as >= (use = for exact).
-          gbperhour/totalsize with integer values use a whole-number bucket (e.g., gbperhour:1 = 1.0-1.99). Examples:
-          dateadded:2024 status:continuing monitored:true qualityprofile:HD-1080p tags:kids releasegroup:ntb
-          seriestype:anime originallanguage:eng genres:drama missing:true cutoff:true airing:true Fields: title,
-          titleslug, tmdbid, dateadded, path, rootfolder, instance, status, monitored, qualityprofile, tags,
-          releasegroup, seriestype, originallanguage, genres, lastaired, videoquality, videocodec, videohdr, resolution,
-          audio, audiocodec, audiocodecmixed, audiolanguages, audiolang, audiolanguagesmixed, sublang,
-          subtitlelanguagesmixed, audiochannels, nosubs, missing, cutoff, recentlygrabbed, scene, airing, episodes,
-          seasons, totalsize, avgepisode, runtime, filesize, gbperhour, contenthours') }}
-        </div>
-        <div id="advancedWarnings" class="advanced-warnings hidden"></div>
         <div class="chip-wrap chip-wrap--hidden">
           <div class="chip-groups">
             <div class="chip-group">
@@ -399,10 +438,21 @@
             </div>
           </div>
         </div>
+
       </div>
       <div class="filters-footer">
         <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide filters and chips') }}"
           aria-expanded="true" aria-controls="filtersPanel">▴</button>
+        <script>
+          (() => {
+            if (document.documentElement.getAttribute("data-filters-collapsed") !== "1") return;
+            const btn = document.getElementById("filtersToggleBtn");
+            if (!btn) return;
+            btn.setAttribute("aria-expanded", "false");
+            btn.title = "{{ _('Show filters and chips') }}";
+            btn.textContent = "▾";
+          })();
+        </script>
         <div class="plex-library-scope hidden" id="plexLibraryScope" data-app="sonarr">
           <label for="plexLibrarySelect">{{ _('Plex Libraries') }}</label>
           <select id="plexLibrarySelect" class="plex-library-select" multiple size="4"
@@ -416,78 +466,17 @@
           <button id="exportCsvBtn">{{ _('Export CSV') }}</button>
         </div>
         <div class="filters-footer-chips">
-          <div class="status-pill status-pill--hidden" id="statusPill" title="{{ _('Hover to expand data status') }}">
-            {{ _('Data status') }}
-          </div>
-          <div class="health-badges-slot health-badges-slot--loading" id="healthBadges" aria-label="{{ _('Health badges') }}"></div>
+          <div class="health-badges-slot health-badges-slot--loading" id="healthBadges"
+            aria-label="{{ _('Health badges') }}"></div>
         </div>
         <button class="chip-advanced" id="chipsToggle" type="button" aria-pressed="false">{{ _('Chips') }}</button>
       </div>
-    </div>
-
-    <div class="status-row status-row--hidden" id="statusRow">
-      <div class="status-block">
-        <div class="status-label">{{ _('Progress') }}</div>
-        <div class="status-value status-value--skeleton" id="progressStatus">--</div>
-      </div>
-      <div class="status-block">
-        <div class="status-label" data-playback-label>{{ _('Playback') }}</div>
-        <div class="status-value status-value--skeleton" id="tautulliStatus">--</div>
-      </div>
-      <div class="status-block">
-        <div class="status-label">{{ _('Cache') }}</div>
-        <div class="status-value status-value--skeleton" id="cacheStatus">--</div>
-      </div>
-      <div class="status-actions">
-        <div class="status-actions-group">
-          <button id="refreshTabBtn"
-            title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
-            Shows data') }}</button>
-          <button id="deepRefreshTautulliBtn" disabled title="{{ _('Refresh playback library data and rebuild matches') }}">{{
-            _('Refresh playback
-            data') }}</button>
-          <button id="plexInsightsBtn" disabled title="{{ _('Open Plex insights') }}">{{ _('Plex Insights') }}</button>
-          <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center') }}</button>
-          <button id="clearCachesBtn"
-            title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
-            caches & rebuild') }}</button>
-        </div>
-      </div>
-      <div class="status-complete hidden" id="statusCompleteNote">{{ _('All data is up to date. Hiding in 5s…') }}</div>
     </div>
 
     <div class="status-banner hidden" id="partialBanner">
       {{ _('Partial playback data loaded. Matching will continue in the background.') }}</div>
     <div class="status-banner hidden" id="fastModeBanner">
       {{ _('Sonarr fast mode enabled. Codec and language details may be missing.') }}</div>
-
-    <script>
-      (() => {
-        try {
-          const provider = (localStorage.getItem("Sortarr-playback-provider") || "").toLowerCase();
-          if (!provider) return;
-          const label = provider === "jellystat"
-            ? "Jellystat"
-            : (provider === "tautulli" ? "Tautulli" : "Playback");
-          const refreshBtn = document.getElementById("refreshTautulliBtn");
-          const deepRefreshBtn = document.getElementById("deepRefreshTautulliBtn");
-          const playbackLabelEl = document.querySelector("[data-playback-label]");
-          const title = `Refresh ${label} library data and rebuild matches`;
-          if (playbackLabelEl) {
-            playbackLabelEl.textContent = label;
-          }
-          if (refreshBtn) {
-            refreshBtn.textContent = `Refresh ${label}`;
-            refreshBtn.title = title;
-          }
-          if (deepRefreshBtn) {
-            deepRefreshBtn.textContent = `Refresh ${label} data`;
-            deepRefreshBtn.title = title;
-          }
-        } catch {
-        }
-      })();
-    </script>
 
     <div class="table-wrap table-wrap-y" id="tableWrap">
       <div class="table-wrap-x" id="tableWrapX">
@@ -669,32 +658,32 @@
     </div>
   </main>
 
-    <template id="sonarrSeriesExpansionTemplate">
-      <div class="series-expansion">
-        <div class="series-expansion-header">
-          <div class="series-expansion-poster">
-            <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
-              decoding="async" />
-          </div>
-          <button class="series-expansion-toggle hidden" type="button" data-role="series-expand-all-seasons"
-            aria-pressed="false">{{ _("Expand all seasons") }}</button>
-          <div class="series-expansion-title">{{ _("Seasons") }}</div>
-          <div class="series-expansion-actions">
-            <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
-          </div>
+  <template id="sonarrSeriesExpansionTemplate">
+    <div class="series-expansion">
+      <div class="series-expansion-header">
+        <div class="series-expansion-poster">
+          <img class="series-expansion-poster-img" data-role="series-expansion-poster" alt="" loading="lazy"
+            decoding="async" />
         </div>
-        <div class="series-expansion-body" data-role="series-expansion-body"></div>
+        <button class="series-expansion-toggle hidden" type="button" data-role="series-expand-all-seasons"
+          aria-pressed="false">{{ _("Expand all seasons") }}</button>
+        <div class="series-expansion-title">{{ _("Seasons") }}</div>
+        <div class="series-expansion-actions">
+          <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
+        </div>
       </div>
-    </template>
+      <div class="series-expansion-body" data-role="series-expansion-body"></div>
+    </div>
+  </template>
 
 
 
 
-    <script id="i18n-json" type="application/json">
+  <script id="i18n-json" type="application/json">
   {{ {
     "ariaRemoveFilter": "Remove filter %(label)s",
     "statusLoadedCounts": _("Loaded %(rows)s / %(total)s", rows="%(rows)s", total="%(total)s"),
-    "dataLoadedHidingIn": _("Data loaded. Hiding in %(seconds)s…", seconds="%(seconds)s"),
+    "dataLoadedHidingIn": _("Data loaded."),
     "label_extras": _("Extras"),
     "sonarr_failed_load_episodes": _("Failed to load episodes."),
     "sonarr_no_episodes_available": _("No episodes available."),
@@ -714,14 +703,16 @@
     "matchTitle": _("Match"),
     "matchTitleWithLabel": _("Match (%(label)s)", label="%(label)s"),
 
-    "refreshPlayback": _("Refresh playback"),
-    "deepRefreshPlayback": _("Refresh playback data"),
+    "refreshPlayback": _("Re-match from playback"),
+    "deepRefreshPlayback": _("Rebuild playback data"),
 
-    "refreshPlaybackProvider": _("Refresh %(label)s", label="%(label)s"),
-    "deepRefreshPlaybackProvider": _("Refresh %(label)s data", label="%(label)s"),
+    "refreshPlaybackProvider": _("Re-match from %(label)s", label="%(label)s"),
+    "deepRefreshPlaybackProvider": _("Rebuild %(label)s data", label="%(label)s"),
 
-    "refreshPlaybackTitle": _("Refresh playback library data and rebuild matches"),
-    "refreshPlaybackProviderTitle": _("Refresh %(label)s library data and rebuild matches", label="%(label)s"),
+    "refreshPlaybackMatchTitle": _("Re-match using current playback data"),
+    "refreshPlaybackProviderMatchTitle": _("Re-match using current %(label)s data", label="%(label)s"),
+    "refreshPlaybackTitle": _("Refresh playback library data, then rebuild matches"),
+    "refreshPlaybackProviderTitle": _("Refresh %(label)s library data, then rebuild matches", label="%(label)s"),
 
     "refreshArrData": _("Refresh %(appLabel)s data", appLabel="%(appLabel)s"),
     "refreshArrDataTitle": _("Refresh %(appLabel)s metadata, reload %(appLabel)s data, and update the cache.", appLabel="%(appLabel)s"),
@@ -997,20 +988,51 @@
 
 
 
-    <script id="bootstrap-config-json" type="application/json">
+  <script id="bootstrap-config-json" type="application/json">
 {{ bootstrap_config|tojson }}
 </script>
 
-    <script>
-      window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
-    </script>
+  <script>
+    window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
+  </script>
 
-    <script src="/static/column_widths.js?v={{ app_version }}-startupfix4"></script>
-    <script src="/static/app.min.js?v={{ app_version }}-startupfix4"></script>
+  <script src="/static/column_widths.js?v={{ app_version }}-startupfix4"></script>
+  <script src="/static/app.min.js?v={{ app_version }}-startupfix4"></script>
+  <script>
+    (() => {
+      try {
+        const bootstrapEl = document.getElementById("bootstrap-config-json");
+        if (!bootstrapEl) return;
+        const cfg = JSON.parse(bootstrapEl.textContent || "{}");
+        const provider = String(cfg.playback_provider || "").toLowerCase();
+        const playbackEnabled = Boolean(cfg.playback_configured ?? cfg.tautulli_configured);
+        const label = provider === "jellystat"
+          ? "Jellystat"
+          : (provider === "tautulli" ? "Tautulli" : (provider === "plex" ? "Plex" : "Playback"));
+        const refreshBtn = document.getElementById("refreshTautulliBtn");
+        const deepRefreshBtn = document.getElementById("deepRefreshTautulliBtn");
+        const playbackLabelEl = document.querySelector("[data-playback-label]");
+        const showDeepRefresh = playbackEnabled && provider !== "jellystat";
+
+        if (playbackLabelEl) {
+          playbackLabelEl.textContent = label;
+        }
+        if (refreshBtn) {
+          refreshBtn.textContent = `Re-match from ${label}`;
+          refreshBtn.title = `Re-match using current ${label} data`;
+          refreshBtn.classList.toggle("hidden", !playbackEnabled);
+          refreshBtn.disabled = !playbackEnabled;
+        }
+        if (deepRefreshBtn) {
+          deepRefreshBtn.textContent = `Rebuild ${label} data`;
+          deepRefreshBtn.title = `Refresh ${label} library data, then rebuild matches`;
+          deepRefreshBtn.classList.toggle("hidden", !showDeepRefresh);
+          deepRefreshBtn.disabled = !showDeepRefresh;
+        }
+      } catch {
+      }
+    })();
+  </script>
 </body>
 
 </html>
-
-
-
-

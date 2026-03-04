@@ -96,24 +96,30 @@ def get_locale():
 babel = Babel(app, locale_selector=get_locale, default_locale="en")
 # --- SPRACHSTEUERUNG (i18n) ENDE ---
 
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
-
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)).strip())
     except Exception:
         return default
 
+def _proxy_hops_env(name: str, default: int) -> int:
+    return max(_int_env(name, default), 0)
+
 # ProxyFix (reverse proxy support)
-proxy_hops = _int_env("SORTARR_PROXY_HOPS", 0)
-if proxy_hops > 0:
+proxy_hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
+proxy_fix_kwargs = {
+    "x_for": _proxy_hops_env("SORTARR_PROXY_HOPS_FOR", proxy_hops),
+    # Most proxy chains append X-Forwarded-For per hop, but host/proto/port/prefix
+    # are typically set once by the outermost proxy and forwarded unchanged.
+    "x_proto": _proxy_hops_env("SORTARR_PROXY_HOPS_PROTO", 1 if proxy_hops > 0 else 0),
+    "x_host": _proxy_hops_env("SORTARR_PROXY_HOPS_HOST", 1 if proxy_hops > 0 else 0),
+    "x_port": _proxy_hops_env("SORTARR_PROXY_HOPS_PORT", 1 if proxy_hops > 0 else 0),
+    "x_prefix": _proxy_hops_env("SORTARR_PROXY_HOPS_PREFIX", 1 if proxy_hops > 0 else 0),
+}
+if any(proxy_fix_kwargs.values()):
     app.wsgi_app = ProxyFix(
         app.wsgi_app,
-        x_for=proxy_hops,
-        x_proto=proxy_hops,
-        x_host=proxy_hops,
-        x_port=proxy_hops,
-        x_prefix=proxy_hops,
+        **proxy_fix_kwargs,
     )
 
 
@@ -4425,8 +4431,9 @@ def _plex_fetch_sections(
     token: str,
     client_id: str,
     timeout: int | float | None = None,
+    session: requests.Session | None = None,
 ) -> list[dict]:
-    payload = _plex_request(base_url, token, client_id, "/library/sections", timeout=timeout)
+    payload = _plex_request(base_url, token, client_id, "/library/sections", timeout=timeout, session=session)
     container = payload.get("MediaContainer") if isinstance(payload, dict) else None
     sections = container.get("Directory") if isinstance(container, dict) else None
     return sections if isinstance(sections, list) else []
@@ -5013,6 +5020,7 @@ def _plex_fetch_section_items(
     section_id: str,
     page_size: int,
     timeout: int | float | None = None,
+    session: requests.Session | None = None,
 ) -> list[dict]:
     items: list[dict] = []
     start = 0
@@ -5046,6 +5054,7 @@ def _plex_fetch_section_items(
             params=params,
             headers=headers,
             timeout=timeout,
+            session=session,
         )
         container = payload.get("MediaContainer") if isinstance(payload, dict) else None
         chunk = container.get("Metadata") if isinstance(container, dict) else None
@@ -5332,56 +5341,65 @@ def _get_plex_index(
     request_timeout = 45
     page_size = max(50, min(1000, _safe_int(cfg.get("plex_history_page_size") or 200)))
 
-    identity_id = ""
-    try:
-        identity_payload = _plex_request(base_url, token, client_id, "/identity", timeout=10)
-        identity_container = (
-            identity_payload.get("MediaContainer") if isinstance(identity_payload, dict) else None
-        )
-        if isinstance(identity_container, dict):
-            identity_id = str(identity_container.get("machineIdentifier") or "").strip()
-    except Exception:
-        identity_id = ""
+    with requests.Session() as session:
+        try:
+            identity_payload = _plex_request(base_url, token, client_id, "/identity", timeout=10, session=session)
+            identity_container = (
+                identity_payload.get("MediaContainer") if isinstance(identity_payload, dict) else None
+            )
+            if isinstance(identity_container, dict):
+                identity_id = str(identity_container.get("machineIdentifier") or "").strip()
+        except Exception:
+            identity_id = ""
 
-    sections = _plex_fetch_sections(base_url, token, client_id, timeout=request_timeout)
-    section_filters = _plex_section_filter_ids(cfg.get("plex_section_filters") or "")
-    show_items: list[dict] = []
-    movie_items: list[dict] = []
-    section_meta: list[dict] = []
+        try:
+            sections = _plex_fetch_sections(base_url, token, client_id, timeout=request_timeout, session=session)
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            logger.error("Plex sections fetch failed (unreachable): %s", type(exc).__name__)
+            return None
+        except Exception as exc:
+            logger.error("Plex sections fetch failed (unexpected): %s", type(exc).__name__)
+            return None
 
-    for section in sections or []:
-        if not isinstance(section, dict):
-            continue
-        section_type = str(section.get("type") or section.get("Type") or "").strip().lower()
-        if section_type not in ("show", "movie"):
-            continue
-        section_id = _plex_section_id(section)
-        if not section_id:
-            continue
-        if section_filters and section_id not in section_filters:
-            continue
-        section_meta.append(
-            {
-                "id": section_id,
-                "title": section.get("title") or section.get("Title") or "",
-                "type": section_type,
-            }
-        )
-        items = _plex_fetch_section_items(
-            base_url,
-            token,
-            client_id,
-            section_id,
-            page_size=page_size,
-            timeout=request_timeout,
-        )
-        for item in items:
-            if isinstance(item, dict):
-                item["_plex_section_id"] = section_id
-        if section_type == "show":
-            show_items.extend(items)
-        else:
-            movie_items.extend(items)
+        section_filters = _plex_section_filter_ids(cfg.get("plex_section_filters") or "")
+        show_items: list[dict] = []
+        movie_items: list[dict] = []
+        section_meta: list[dict] = []
+
+        for section in sections or []:
+            if not isinstance(section, dict):
+                continue
+            section_type = str(section.get("type") or section.get("Type") or "").strip().lower()
+            if section_type not in ("show", "movie"):
+                continue
+            section_id = _plex_section_id(section)
+            if not section_id:
+                continue
+            if section_filters and section_id not in section_filters:
+                continue
+            section_meta.append(
+                {
+                    "id": section_id,
+                    "title": section.get("title") or section.get("Title") or "",
+                    "type": section_type,
+                }
+            )
+            items = _plex_fetch_section_items(
+                base_url,
+                token,
+                client_id,
+                section_id,
+                page_size=page_size,
+                timeout=request_timeout,
+                session=session,
+            )
+            for item in items:
+                if isinstance(item, dict):
+                    item["_plex_section_id"] = section_id
+            if section_type == "show":
+                show_items.extend(items)
+            else:
+                movie_items.extend(items)
 
     shows_index = _plex_build_index(show_items, "show")
     movies_index = _plex_build_index(movie_items, "movie")
@@ -7560,7 +7578,9 @@ def _find_tautulli_stats_with_bucket(
         if isinstance(plex_meta, dict):
             match_year_raw = str(plex_meta.get("year") or "").strip()
         if not match_year_raw:
-            return True
+            # If the *arr row has a year, do not allow title-only fallback
+            # when the matched playback entry has no year metadata.
+            return False
         try:
             match_year = int(match_year_raw)
         except ValueError:
@@ -7843,10 +7863,12 @@ def _apply_tautulli_stats(
     media_type: str,
     progress_media_type: str | None = None,
     provider_label: str = "Tautulli",
+    treat_empty_index_as_available: bool = False,
 ):
     now_ts = time.time()
     data = index.get(media_type) if index else None
-    has_index_data = bool(data) and any(bucket for bucket in data.values() if bucket)
+    has_index_source = isinstance(data, dict)
+    has_index_data = has_index_source and any(bucket for bucket in data.values() if bucket)
     provider_label = provider_label or "Tautulli"
     for row in rows:
         row["TautulliMatched"] = False
@@ -7856,7 +7878,7 @@ def _apply_tautulli_stats(
         row["TautulliRatingKey"] = ""
         row["TautulliSectionId"] = ""
         status = "unavailable"
-        if not has_index_data:
+        if not has_index_data and not (treat_empty_index_as_available and has_index_source):
             _advance_tautulli_match_progress(progress_media_type, status)
             continue
         eligible, skip_reason = _tautulli_row_eligible(row, media_type)
@@ -11666,7 +11688,7 @@ def api_mismatches():
             else:
                 provider_error = "Unsupported provider"
         except Exception as exc:
-            logger.warning("Mismatch center index load failed for %s: %s", provider, type(exc).__name__)
+            logger.exception("Mismatch center index load failed for %s", provider)
             provider_error = f"Index load failed ({type(exc).__name__})"
             index = None
             index_ts = 0
@@ -11677,6 +11699,7 @@ def api_mismatches():
             index or {},
             media_type,
             provider_label=provider_label,
+            treat_empty_index_as_available=not provider_error and isinstance(index, dict),
         )
         provider_rows[provider] = rows_for_provider
         provider_states.append(
