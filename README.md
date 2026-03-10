@@ -8,45 +8,39 @@
 
 ---
 
-## Security Migration Notice
+# 0.8.3 Security Upgrade Flow
 
-Secret-file/Credential-Manager resolution is now the secure default.
-
-Session-secret resolution now follows the same file/Credential-Manager rules as other secrets, including
-`*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
+Starting in `0.8.3`, Sortarr applies a security-focused setup gate so upgrades remain safe and predictable.
 
 Existing installs with plaintext secrets are auto-migrated toward external secret references on startup.
 
 If you have an existing installation from prior to 0.8.3, you will be required to undergo a forced migration where you will need to re-enter your various API keys and set a basic auth Username and Password. This is a one time action, and will not happen again in the future.
 
+## Security Migration Guide
+
+1. Existing installs upgraded from `0.8.2.1` and earlier are guided through a one-time Setup save. (note: connection-test buttons stay disabled until Basic Auth has been configured and saved once.)
+2. Enter your previously configured service details, select a username and password, and generate a secret key.
+3. If no Session secret key is entered, Setup auto-generates one before save.
+4. After save, the gate is cleared and normal app access resumes.
+
+Secret-file/Credential-Manager resolution is now the secure default. Session-secret resolution now follows the same file/Credential-Manager rules as other secrets, including
+`*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
+
 If a plaintext Session secret cannot be migrated, startup fails with a
 clear error so you can fix `ENV_FILE_PATH` permissions or preconfigure `SORTARR_SECRET_KEY_FILE` /
 `SORTARR_SECRET_KEY_CRED_TARGET`.
 
----
 
-## 0.8.3 Security Upgrade Flow
-
-Starting in `0.8.3`, Sortarr applies a security-focused setup gate so upgrades remain safe and predictable:
-
-1. Existing installs upgraded from `0.8.2.1` and earlier are guided through a one-time Setup save.
-2. Persistent session-secret posture is enforced by runtime security invariants.
-3. If no Session secret key is entered, Setup auto-generates one before save.
-4. After save, the gate is cleared and normal app access resumes.
-
-Bootstrap vs remediation behavior:
-
-- First-time bootstrap still starts at Setup. Sortarr temporarily allows a bootstrap-only ephemeral Session secret before the first successful Setup save, and that first save persists a real Session-secret reference before normal access begins.
-- Interactive connection-test buttons stay disabled until Basic Auth has been configured and saved once. The final Setup save still validates configured connections.
+### Migration notes:
 - If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_persistent_secret`, or `upgrade_resave_required`), only Setup, static assets, and language switching remain available until Setup is saved again.
 - If Basic Auth is partially configured (username without password, or password without username), Sortarr allows Setup access so the credentials can be repaired instead of returning a hard server error.
 - In that remediation state, HTML routes redirect to `/setup?force=1` and non-setup API routes return `409` with `{"error":"setup_required","setup_required":true,"setup_reasons":[...]}`.
-
-Recovery mode:
-
+### Recovery mode:
 - `SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` allows temporary unsafe startup/recovery paths (advanced use only).
 
 ---
+
+# What is Sortarr?
 
 Sortarr is a read-only analytics and organisation tool for Sonarr and Radarr libraries. It helps you identify missing media, mismatches, and optimisation opportunities using real playback data from providers like Tautulli, Jellystat, or Plex.
 
