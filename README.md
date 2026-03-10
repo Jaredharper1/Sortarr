@@ -18,10 +18,10 @@ If you have an existing installation from prior to 0.8.3, you will be required t
 
 ## Security Migration Guide
 
-1. Existing installs upgraded from `0.8.2.1` and earlier are guided through a one-time Setup save. (note: connection-test buttons stay disabled until Basic Auth has been configured and saved once.)
-2. Enter your previously configured service details, select a username and password, and generate a secret key.
-3. If no Session secret key is entered, Setup auto-generates one before save.
-4. After save, the gate is cleared and normal app access resumes.
+1. Update to to the latest version (![GitHub release](https://img.shields.io/github/v/release/Jaredharper1/Sortarr)) and you will be forced to the Setup screen.
+3. Enter your previously configured service details (URLs, API keys, Basic Auth username and password), and finally generate a secret key.
+4. If no Session secret key is entered, Setup auto-generates one before save.
+5. After save, the gate is cleared and normal app access resumes.
 
 Secret-file/Credential-Manager resolution is now the secure default. Session-secret resolution now follows the same file/Credential-Manager rules as other secrets, including
 `*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
