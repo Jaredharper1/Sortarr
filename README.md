@@ -10,33 +10,55 @@
 
 # Important 0.8.3 Security Upgrade Notice
 
-Starting in `0.8.3`, Sortarr applies a security-focused setup gate so upgrades remain safe and predictable.
+Starting in **0.8.3**, Sortarr introduces a security-focused setup gate to ensure upgrades remain safe and predictable.
 
-Existing installs with plaintext secrets are auto-migrated toward external secret references on startup.
+Existing installations with plaintext secrets will be automatically migrated toward external secret references during startup.
 
-If you have an existing installation from prior to 0.8.3, you will be required to undergo a forced migration where you will need to re-enter your various API keys and set a basic auth Username and Password. This is a one time action, and will not happen again in the future.
+If you are upgrading an installation from a version prior to **0.8.3**, you will be required to complete a one-time migration step. During this process, you will need to re-enter your API keys and configure a **Basic Auth username and password**. This action only occurs once and will not be required again in future upgrades.
+
+### Why is this necessary?
+
+Early versions of Sortarr handled the storage and retrieval of API keys and other secrets in a way that does not meet current security expectations. As more users adopt Sortarr, I have observed that many deployments are being exposed to the public internet via reverse proxies.
+
+Because of this, the project’s approach has shifted from treating security as a consideration to treating it as a priority. This required rebuilding the secret management system from the ground up. The result should be a significantly safer and more secure application, particularly for users who expose Sortarr to the wider internet.
+
+---
 
 ## Security Migration Guide
 
-1. Update to to the latest version (![GitHub release](https://img.shields.io/github/v/release/Jaredharper1/Sortarr)) and you will be forced to the Setup screen.
-3. Enter your previously configured service details (URLs, API keys, Basic Auth username and password), and finally generate a secret key.
-4. If no Session secret key is entered, Setup auto-generates one before save.
-5. After save, the gate is cleared and normal app access resumes.
+1. Update to the latest version  
+   ![GitHub release](https://img.shields.io/github/v/release/Jaredharper1/Sortarr)
 
-Secret-file/Credential-Manager resolution is now the secure default. Session-secret resolution now follows the same file/Credential-Manager rules as other secrets, including
+2. After upgrading, you will be redirected to the **Setup screen**.
+
+3. Enter your previously configured service details (URLs, API keys, Basic Auth username and password), and generate a **secret key**.
+
+4. If no session secret key is entered, Setup automatically generates one before saving.
+
+5. After saving, the setup gate is cleared and normal application access resumes.
+
+Secret-file / Credential-Manager resolution is now the secure default. Session secret resolution now follows the same file / Credential-Manager rules as other secrets, including:
+
 `*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
 
-If a plaintext Session secret cannot be migrated, startup fails with a
-clear error so you can fix `ENV_FILE_PATH` permissions or preconfigure `SORTARR_SECRET_KEY_FILE` /
-`SORTARR_SECRET_KEY_CRED_TARGET`.
+If a plaintext session secret cannot be migrated, startup fails with a clear error so you can correct `ENV_FILE_PATH` permissions or preconfigure:
 
+`SORTARR_SECRET_KEY_FILE`  
+or  
+`SORTARR_SECRET_KEY_CRED_TARGET`
 
-### Migration notes:
-- If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_persistent_secret`, or `upgrade_resave_required`), only Setup, static assets, and language switching remain available until Setup is saved again.
-- If Basic Auth is partially configured (username without password, or password without username), Sortarr allows Setup access so the credentials can be repaired instead of returning a hard server error.
-- In that remediation state, HTML routes redirect to `/setup?force=1` and non-setup API routes return `409` with `{"error":"setup_required","setup_required":true,"setup_reasons":[...]}`.
-### Recovery mode:
-- `SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` allows temporary unsafe startup/recovery paths (advanced use only).
+### Migration notes
+
+- If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_persistent_secret`, or `upgrade_resave_required`), only **Setup**, static assets, and language switching remain available until Setup is saved again.
+- If Basic Auth is partially configured (username without password or password without username), Sortarr allows Setup access so credentials can be repaired instead of returning a hard server error.
+- In this remediation state:
+  - HTML routes redirect to `/setup?force=1`
+  - Non-setup API routes return `409` with  
+    `{"error":"setup_required","setup_required":true,"setup_reasons":[...]}`
+
+### Recovery mode
+
+`SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` allows temporary unsafe startup or recovery paths. **Advanced use only.**
 
 ---
 
