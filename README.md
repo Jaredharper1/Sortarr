@@ -8,16 +8,6 @@
 
 ---
 
-## 0.8.3.1 Patch Notes
-
-`0.8.3.1` is a narrow follow-up patch to the `0.8.3` security release.
-
-- Fixes a Docker/bootstrap regression where a partially populated Basic Auth config could block `/` with `Basic auth misconfigured: password is required` instead of reaching Setup remediation.
-- Moves the remaining forced per-item playback refresh path onto CSRF-protected `POST` endpoints so item `GET` routes are read-only again.
-- Normalizes setup connection-test failures and trims secret-related startup logging detail.
-
----
-
 ## Security Migration Notice
 
 Secret-file/Credential-Manager resolution is now the secure default.
@@ -26,6 +16,9 @@ Session-secret resolution now follows the same file/Credential-Manager rules as 
 `*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
 
 Existing installs with plaintext secrets are auto-migrated toward external secret references on startup.
+
+If you have an existing version from before 0.8.3, you will be required to undergo a forced migration where you will need to re-enter your various API keys, and set a basic auth Username and Password. This is a one time action, and will not happen again in the future.
+
 If a plaintext Session secret cannot be migrated, startup fails with a
 clear error so you can fix `ENV_FILE_PATH` permissions or preconfigure `SORTARR_SECRET_KEY_FILE` /
 `SORTARR_SECRET_KEY_CRED_TARGET`.
