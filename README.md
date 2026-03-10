@@ -8,7 +8,7 @@
 
 ---
 
-# 0.8.3 Security Upgrade Flow
+# Important 0.8.3 Security Upgrade Notice
 
 Starting in `0.8.3`, Sortarr applies a security-focused setup gate so upgrades remain safe and predictable.
 
