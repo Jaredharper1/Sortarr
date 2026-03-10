@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.8.3.1] - 2026-03-10
+
+### Security
+- Fixed bootstrap/remediation routing so a partially populated Basic Auth config no longer blocks `/` with `Basic auth misconfigured`; bootstrap and setup helper requests now reach Setup instead of failing before the redirect/remediation flow runs.
+- Setup connection-test failures now return normalized connection errors instead of helper-specific exception text, and secret-related startup/migration warnings now use count-based summaries instead of enumerating secret-setting identifiers.
+- Removed the remaining state-changing item refresh from `GET` item endpoints; forced playback refresh now uses CSRF-protected `POST /api/sonarr/item/playback_refresh` and `POST /api/radarr/item/playback_refresh` before the follow-up item fetch.
+
 ## [0.8.3] - 2026-03-10
 
 ### Security
@@ -11,11 +18,10 @@
 - Added bounded unsafe recovery mode via `SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` for lockout repair only; recovery windows now auto-expire and cannot be combined with trusted origins unless explicitly forced.
 - Configured installs now remain in setup-required state until both Basic Auth and persistent-secret requirements are satisfied. Partial Basic Auth config routes into Setup remediation instead of returning a hard `503`.
 - Disabled interactive setup connection testing until Basic Auth is configured and security remediation is complete, removing the remaining pre-auth outbound test path while preserving final save-time validation.
-- Setup connection-test failures now return normalized connection errors instead of helper-specific exception text, and secret-related startup/migration warnings now use count-based summaries instead of enumerating secret-setting identifiers.
 - Hardened CSRF policy around exact trusted origins: trusted-origin fallback is token-gated, same-host by default, cross-host only with `ALLOW_CROSS_HOST_TRUSTED_ORIGINS=1`, and setup/startup now reject mismatched trusted-origin/public-host combinations.
 - Added proxy/CSRF diagnostics (`GET /api/diagnostics/csrf`) and security self-check diagnostics (`GET /api/diagnostics/security-self-check`) so operators can validate proxy forwarding, cookie policy, persistent-secret posture, unsafe recovery state, and trusted-origin policy.
 - Tightened the default CSP `connect-src` policy to same-origin only, and made session/CSRF cookie `Secure` defaults follow deployment mode: direct HTTP remains usable by default, while proxied modes stay `Secure` unless explicitly overridden.
-- Removed state-changing `GET ?refresh=1`; refresh actions now use CSRF-protected POST endpoints, including Plex insights refresh and per-item playback refresh flows.
+- Removed state-changing `GET ?refresh=1`; refresh actions now use CSRF-protected POST endpoints, including Plex insights refresh flows.
 
 ### Features
 - Sonarr series expansion now includes Season and Episode sort controls (Ascending/Descending) with persisted UI preferences.

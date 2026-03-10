@@ -36,7 +36,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.3"
+APP_VERSION = "0.8.3.1"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -4563,13 +4563,23 @@ def _get_basic_auth():
 def _auth_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
-        user, passwd = _get_basic_auth()
+        cfg = _get_config()
+        user = str(cfg.get("basic_auth_user") or "").strip()
+        passwd = str(cfg.get("basic_auth_pass") or "").strip()
         if not user and not passwd:
             return fn(*args, **kwargs)
         if user and not passwd:
+            endpoint = str(request.endpoint or "").strip()
+            if endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(cfg):
+                # Allow bootstrap/remediation flows to reach Setup helpers instead of
+                # failing early with a hard 503 when only one Basic Auth field exists.
+                return fn(*args, **kwargs)
             logger.warning("Basic auth is misconfigured: BASIC_AUTH_USER is set but password is empty.")
             return Response("Basic auth misconfigured: password is required.", 503)
         if passwd and not user:
+            endpoint = str(request.endpoint or "").strip()
+            if endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(cfg):
+                return fn(*args, **kwargs)
             logger.warning("Basic auth is misconfigured: BASIC_AUTH_PASS is set but username is empty.")
             return Response("Basic auth misconfigured: username is required.", 503)
 

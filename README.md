@@ -8,6 +8,16 @@
 
 ---
 
+## 0.8.3.1 Patch Notes
+
+`0.8.3.1` is a narrow follow-up patch to the `0.8.3` security release.
+
+- Fixes a Docker/bootstrap regression where a partially populated Basic Auth config could block `/` with `Basic auth misconfigured: password is required` instead of reaching Setup remediation.
+- Moves the remaining forced per-item playback refresh path onto CSRF-protected `POST` endpoints so item `GET` routes are read-only again.
+- Normalizes setup connection-test failures and trims secret-related startup logging detail.
+
+---
+
 ## Security Migration Notice
 
 Secret-file/Credential-Manager resolution is now the secure default.
