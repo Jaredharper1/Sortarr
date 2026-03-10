@@ -30,6 +30,32 @@ body {
   background: var(--setup-bg);
 }
 
+.lang-switch {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 0.8em;
+}
+
+.lang-switch form {
+  display: inline;
+  margin-left: 10px;
+}
+
+.lang-switch button {
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.lang-switch button:hover {
+  color: var(--text-main);
+}
+
 .setup-wrap {
   min-height: 100vh;
   display: flex;
@@ -292,7 +318,8 @@ html[data-theme="dark"] .setup-hint--warn {
   }
 }
 
-.setup-test {
+.setup-test,
+.setup-action-btn {
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 0.85rem;
@@ -302,6 +329,10 @@ html[data-theme="dark"] .setup-hint--warn {
 
 .setup-test.is-testing {
   cursor: progress;
+}
+
+.setup-secret-actions {
+  gap: 8px;
 }
 
 .setup-inline-message {
@@ -326,4 +357,21 @@ html[data-theme="dark"] .setup-inline-message.is-error {
 
 html[data-theme="dark"] .setup-inline-message.is-ok {
   color: #86efac;
+}
+
+.setup-diagnostics {
+  margin: 4px 0 0 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.03);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+html[data-theme="dark"] .setup-diagnostics {
+  background: rgba(255, 255, 255, 0.04);
 }

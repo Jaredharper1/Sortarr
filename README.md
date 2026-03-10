@@ -8,13 +8,40 @@
 
 ---
 
-## Important Migration Notice
+## Security Migration Notice
 
-Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
+Secret-file/Credential-Manager resolution is now the secure default.
 
-This is a transition period, not a permanent default.
+Session-secret resolution now follows the same file/Credential-Manager rules as other secrets, including
+`*_FILE`, `*_CRED_TARGET`, and `wincred:` references.
 
-In releases approaching `1.0`, this behavior will be flipped to `opt-out` (secure secret resolution enabled by default).
+Existing installs with plaintext secrets are auto-migrated toward external secret references on startup.
+If a plaintext Session secret cannot be migrated, startup fails with a
+clear error so you can fix `ENV_FILE_PATH` permissions or preconfigure `SORTARR_SECRET_KEY_FILE` /
+`SORTARR_SECRET_KEY_CRED_TARGET`.
+
+---
+
+## 0.8.3 Security Upgrade Flow
+
+Starting in `0.8.3`, Sortarr applies a security-focused setup gate so upgrades remain safe and predictable:
+
+1. Existing installs upgraded from `0.8.2.1` and earlier are guided through a one-time Setup save.
+2. Persistent session-secret posture is enforced by runtime security invariants.
+3. If no Session secret key is entered, Setup auto-generates one before save.
+4. After save, the gate is cleared and normal app access resumes.
+
+Bootstrap vs remediation behavior:
+
+- First-time bootstrap still starts at Setup. Sortarr temporarily allows a bootstrap-only ephemeral Session secret before the first successful Setup save, and that first save persists a real Session-secret reference before normal access begins.
+- Interactive connection-test buttons stay disabled until Basic Auth has been configured and saved once. The final Setup save still validates configured connections.
+- If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_persistent_secret`, or `upgrade_resave_required`), only Setup, static assets, and language switching remain available until Setup is saved again.
+- If Basic Auth is partially configured (username without password, or password without username), Sortarr allows Setup access so the credentials can be repaired instead of returning a hard server error.
+- In that remediation state, HTML routes redirect to `/setup?force=1` and non-setup API routes return `409` with `{"error":"setup_required","setup_required":true,"setup_reasons":[...]}`.
+
+Recovery mode:
+
+- `SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` allows temporary unsafe startup/recovery paths (advanced use only).
 
 ---
 
@@ -60,6 +87,22 @@ Sortarr is designed for users who:
 ## Quick start
 
 Supports Docker, Unraid, Linux, Windows, and NAS environments.
+
+### Supported Surface (Minimal)
+
+If you want the least confusing setup, use only this supported surface:
+
+- `SORTARR_SECRET_KEY_FILE` or `SORTARR_SECRET_KEY_CRED_TARGET`
+- One media path (choose one):
+- Arr path: `SONARR_URL` + `SONARR_API_KEY*` and/or `RADARR_URL` + `RADARR_API_KEY*`
+- Plex path: `PLEX_URL` + `PLEX_TOKEN*`
+- `SORTARR_PROXY_MODE` (`direct|single|double|custom`)
+- Required auth: `BASIC_AUTH_USER` + (`BASIC_AUTH_PASS_FILE` or `BASIC_AUTH_PASS_CRED_TARGET`)
+- Optional CSRF escape hatch: `SORTARR_CSRF_TRUSTED_ORIGINS` (exact origins only)
+
+Copy and adapt: `Sortarr.minimal.env.example`
+
+Everything else is advanced/compatibility and should stay at defaults unless you have a specific need.
 
 ### Docker
 
@@ -176,24 +219,45 @@ Open the Wiki:
 
 ---
 
-## NOTE
+## Reverse Proxy and Security Notes
 
 ### Reverse proxy / HTTPS (Traefik, Nginx, Cloudflare, etc.)
 
-Sortarr can be run behind a reverse proxy. In that case it may need to trust X-Forwarded-* headers so Flask correctly detects the external scheme/host (for example https://sortarr.mydomain.com). 
+When Sortarr runs behind a reverse proxy, it must trust `X-Forwarded-*` headers so Flask can resolve the correct external scheme/host (for example `https://sortarr.mydomain.com`).
+If trust is misconfigured, setup actions may fail with `CSRF origin mismatch`.
 
-If this is not set correctly, you may see errors like "CSRF origin mismatch" during setup when accessing Sortarr via HTTPS through a proxy.
+Setup includes:
+- **Proxy mode** preset (`Direct`, `Single proxy`, `Two proxies`, `Custom`) under **Advanced settings -> Network & CSRF**
+- **Run proxy/CSRF diagnostics**, which reports current forwarded headers, current vs suggested proxy mode, and latest CSRF mismatch reason from `GET /api/diagnostics/csrf` after the required security setup save completes
+- **Run security self-check diagnostics** from `GET /api/diagnostics/security-self-check` after security setup is complete to get pass/fail signals for persistent secret status, unsafe recovery mode, trusted-origin policy validity, and cookie/CSP guardrails
+  - Direct HTTP installs in `Proxy mode = direct` are treated as healthy when cookies are intentionally non-`Secure` on plain HTTP.
+  - The default CSP now keeps `connect-src` same-origin only, so browser API calls remain limited to Sortarr itself unless you intentionally broaden policy in code later.
+
+While Setup is security-locked, the remediation path is intentionally narrow: finish the required Setup save first, then run diagnostics if you still need them.
+
+Cookie policy:
+- `Proxy mode = direct` keeps session/CSRF cookies usable on plain HTTP LAN installs by default.
+- Proxied modes keep `Secure` cookies by default.
+- `SORTARR_SESSION_COOKIE_SECURE=1|0` can still override that behavior explicitly if needed.
+
+If diagnostics show `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-For` as blank:
+1. Confirm Sortarr traffic actually passes through your proxy/router chain.
+2. Verify proxy middleware is forwarding (not stripping) `X-Forwarded-*` headers.
+3. Retest diagnostics, then set `SORTARR_PROXY_MODE` (and only if needed, `SORTARR_PROXY_HOPS*`) to match observed header values.
 
 ```
-SORTARR_PROXY_HOPS (optional)
+SORTARR_PROXY_MODE=direct|single|double|custom
 ```
 Typical values:
 ```
-0 Disabled
-1 Single proxy (default)
-2 Double proxy (e.g., Cloudflare Tunnel → Traefik → Sortarr)
+direct No proxy trust
+single Single proxy
+double Two proxy hops (e.g., Cloudflare Tunnel → Traefik → Sortarr)
+custom Advanced per-header override mode
 ```
-By default, `SORTARR_PROXY_HOPS` trusts that many `X-Forwarded-For` entries, while `X-Forwarded-Host`, `X-Forwarded-Proto`, `X-Forwarded-Port`, and `X-Forwarded-Prefix` default to trusting a single forwarded value when proxy mode is enabled. This matches common proxy chains where only `X-Forwarded-For` grows per hop.
+For most setups, `SORTARR_PROXY_MODE` is sufficient.
+Advanced overrides (`SORTARR_PROXY_HOPS`, `SORTARR_PROXY_HOPS_FOR/HOST/PROTO/PORT/PREFIX`) should be used only with `SORTARR_PROXY_MODE=custom`.
+Sortarr now emits startup lint warnings if custom hop overrides are set while mode is not `custom`.
 
 As of `0.8.2.1`, these settings are loaded from the config file before `ProxyFix` initializes, so values defined in `.env` / your mounted config are honored on startup.
 
@@ -208,7 +272,42 @@ SORTARR_PROXY_HOPS_PREFIX=0
 
 For example, for `Cloudflare -> Caddy -> Sortarr`, `SORTARR_PROXY_HOPS=2` is usually correct, and the default per-header behavior already maps to `x_for=2`, `x_host=1`, `x_proto=1`.
 
-If a proxied POST still fails with a CSRF mismatch, Sortarr now logs a sanitized warning with the effective request URL plus forwarded header context so you can confirm what Flask actually received.
+If a proxied POST still fails CSRF checks, Sortarr logs a sanitized warning with effective request URL and forwarded-header context so you can confirm what Flask received.
+
+Optional escape hatch (exact-match only, no wildcards):
+```
+SORTARR_CSRF_TRUSTED_ORIGINS=https://sortarr.example.com,https://sortarr.internal.example.com
+```
+When configured, exact trusted origins are the only CSRF origin/referer escape hatch and are allowed only if token validation succeeds. By default they must match the configured public host (or current request host when no public host is set); cross-host trusted origins require `ALLOW_CROSS_HOST_TRUSTED_ORIGINS=1`. Accepted trusted-origin fallbacks are logged as warnings (`origin-trusted-fallback-accepted` / `referer-trusted-fallback-accepted`).
+
+Optional token TTL:
+```
+SORTARR_CSRF_TOKEN_TTL_SECONDS=7200
+```
+CSRF tokens are session-bound and expire after this TTL (minimum `60` seconds).
+
+To reduce stale-tab setup failures, the setup form now syncs its hidden `csrf_token` from the current CSRF cookie right before submit (and when returning to the tab).
+
+State-changing refresh actions are POST-only (CSRF-protected). `GET ?refresh=1` trigger behavior has been removed.
+
+### Session consistency (single instance and replicas)
+
+Use external secret sources for the session secret:
+```
+SORTARR_SECRET_KEY_FILE=/run/secrets/sortarr_secret_key
+```
+or on Windows:
+```
+SORTARR_SECRET_KEY_CRED_TARGET=Sortarr/SORTARR_SECRET_KEY
+```
+
+If this is not set, configured startup aborts. The only supported exceptions are true first-time bootstrap before the first Setup save, or explicit temporary unsafe recovery mode. Persistent session-secret references are required for steady-state operation because ephemeral keys can invalidate sessions/CSRF after restart and break consistency across replicas.
+
+If a plaintext `SORTARR_SECRET_KEY` or legacy `SECRET_KEY` is still present,
+Sortarr migrates it to `SORTARR_SECRET_KEY_FILE` or `SORTARR_SECRET_KEY_CRED_TARGET` during startup before the
+Flask session key is resolved.
+
+For multi-replica deployments, use the same secret key on every replica. Sticky sessions are not required when the secret is shared.
 
 Security note: If SORTARR_PROXY_HOPS is enabled, make sure Sortarr is only reachable through your reverse proxy. (Do not publish the Sortarr container port directly to the internet).
 
@@ -216,7 +315,7 @@ Security note: If SORTARR_PROXY_HOPS is enabled, make sure Sortarr is only reach
 
 ### Secret storage options
 
-Sortarr still supports plain `.env` secrets for backward compatibility, but you can now avoid storing raw API keys/tokens directly in `.env`.
+Sortarr prefers external secret sources by default and does not support raw `.env` secret usage as a steady-state runtime mode. Plaintext values are treated as migration-only input.
 
 For Docker/Linux/macOS, prefer secret files:
 ```
@@ -232,12 +331,25 @@ On Windows, Sortarr can resolve Credential Manager references:
 ```
 SONARR_API_KEY=wincred:Sortarr/SONARR_API_KEY
 ```
+Inline `wincred:` remains supported for compatibility, but is deprecated in docs/UI.
+Prefer explicit `*_CRED_TARGET` keys (for example `SONARR_API_KEY_CRED_TARGET=Sortarr/SONARR_API_KEY`).
 This mode is enabled by default for Windows EXE builds and can be overridden with:
 ```
 SORTARR_WINDOWS_CREDSTORE=0|1
 ```
 
-Resolution order is: `*_FILE` -> Windows credential reference (`*_CRED_TARGET` / `wincred:`) -> plain env value.
+Resolution order is: `*_FILE` -> Windows credential reference (`*_CRED_TARGET` / `wincred:`).
+Use one secret source per variable to avoid precedence confusion.
+
+Plaintext values are treated as migration inputs only; they are not a supported steady-state runtime secret source.
+
+For the Session secret specifically, if Sortarr cannot persist the migrated
+reference, startup aborts with:
+`Plaintext SORTARR_SECRET_KEY/SECRET_KEY detected, but Sortarr now requires external session-secret references and could not persist a migrated session-secret reference.`
+
+### Minimal config profile
+
+Use `Sortarr.minimal.env.example` as the base profile for the supported surface above.
 
 ---
 
@@ -254,12 +366,6 @@ All operations are read-only and safe.
 
 ---
 
-## Security and safety
-
-Sortarr is strictly read-only. It does not modify media files or change Sonarr/Radarr configuration.
-
----
-
 ## Supporting the project
 
 Enjoying the project? Looking for a way to contribute?
@@ -271,7 +377,6 @@ Sortarr is a free project and I will never require donations to support or maint
 That said, if you would like to support me directly, in the interest of transparency I should mention that any donations will most likely be spent on beer and beer-related activities. If you're still willing to contribute, I appreciate it greatly.
 
 [![Support me](https://i.imgur.com/9LLuB8H.png)](https://buymeacoffee.com/jaredharper1)
-
 ## License
 
 [MIT License](https://github.com/Jaredharper1/Sortarr/blob/main/LICENSE)

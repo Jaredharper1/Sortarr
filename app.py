@@ -12,6 +12,8 @@ import io
 import json
 import logging
 import secrets
+import hashlib
+import tempfile
 import threading
 import zlib
 from urllib.parse import urlsplit, urlunsplit
@@ -21,9 +23,10 @@ from ctypes import wintypes
 
 import requests
 # Session hinzugefügt für die dauerhafte Sprachwahl
-from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g, session, stream_with_context
+from flask import Flask, jsonify, render_template, request, Response, redirect, url_for, g, session, stream_with_context, has_request_context
 from flask_babel import Babel, _, get_locale
 from flask_compress import Compress
+from flask.sessions import SecureCookieSessionInterface
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
@@ -33,10 +36,13 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.2.1"
+APP_VERSION = "0.8.3"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
+UNSAFE_RECOVERY_ENABLED_AT_ENV = "SORTARR_UNSAFE_RECOVERY_ENABLED_AT"
+UNSAFE_RECOVERY_MAX_MINUTES_ENV = "SORTARR_UNSAFE_RECOVERY_MAX_MINUTES"
+UNSAFE_RECOVERY_DEFAULT_MAX_MINUTES = 120
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
 SAFE_TAUTULLI_REFRESH_BUCKETS = {
@@ -47,13 +53,24 @@ SAFE_TAUTULLI_REFRESH_BUCKETS = {
 }
 
 app = Flask(__name__)
+
+
+class _SortarrSessionInterface(SecureCookieSessionInterface):
+    def get_cookie_secure(self, app):
+        return _session_cookie_secure_for_request()
+
+
+app.session_interface = _SortarrSessionInterface()
 app.config["COMPRESS_EXCLUDE_MIMETYPES"] = {
     "text/css",
     "application/javascript",
     "text/javascript",
     "application/json",  # optional
 }
-# Secret Key ermöglicht das Speichern der Sprachwahl im Browser-Cookie
+CSRF_TRUSTED_ORIGINS_MAX = 5
+# Secret Key enables session + CSRF signing.
+# Final value is resolved after env preload so config-file values are honored.
+_EPHEMERAL_APP_SECRET_KEY = False
 app.secret_key = secrets.token_hex(16)
 app.config["BABEL_TRANSLATION_DIRECTORIES"] = os.path.join(app.root_path, "translations")
 # Make get_locale() available in Jinja templates
@@ -63,26 +80,37 @@ from babel import Locale
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from flask_babel import gettext as _
 
-@app.route("/set-lang/<lang>")
+@app.route("/set-lang/<lang>", methods=["POST"])
 def set_lang(lang):
-    if lang in ("en", "de"):
+    # Only POST mutates the session language to avoid state-changing GET requests.
+    if request.method == "POST" and lang in ("en", "de"):
         session["language"] = lang
 
     ref = request.referrer
     if not ref:
         return redirect(url_for("setup"))  # or whatever your setup endpoint is
 
-    parts = urlsplit(ref)
+    try:
+        parts = urlsplit(ref)
+    except Exception:
+        return redirect(url_for("setup"))
+    # Only allow same-origin redirects from referrer data.
+    if parts.netloc and parts.netloc != request.host:
+        return redirect(url_for("setup"))
+    if parts.scheme and parts.scheme.lower() not in {"http", "https"}:
+        return redirect(url_for("setup"))
     qs = [(k, v) for (k, v) in parse_qsl(parts.query, keep_blank_values=True) if k.lower() != "lang"]
-    clean = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(qs), parts.fragment))
+    path = parts.path or url_for("setup")
+    if not path.startswith("/"):
+        path = "/" + path.lstrip("/")
+    clean = urlunsplit(("", "", path, urlencode(qs), parts.fragment))
     return redirect(clean)
 
 # --- SPRACHSTEUERUNG (i18n) START ---
 def get_locale():
-    # 1. Priorität: Sprache über URL-Parameter setzen (?lang=de)
+    # 1. Priorität: Sprache über URL-Parameter für diese Anfrage (ohne Session-Mutation)
     lang = request.args.get('lang')
     if lang in ['en', 'de']:
-        session['language'] = lang
         return lang
     
     # 2. Priorität: Bereits gewählte Sprache aus der Session laden
@@ -103,7 +131,7 @@ def _default_env_file_path() -> str:
         if getattr(sys, "frozen", False):
             return os.path.join(os.path.dirname(sys.executable), ".env")
     except Exception:
-        pass
+        return os.path.join(os.path.dirname(__file__), ".env")
     return os.path.join(os.path.dirname(__file__), ".env")
 
 
@@ -140,6 +168,344 @@ def _preload_env_file(path: str):
 
 _preload_env_file(ENV_FILE_PATH)
 
+
+def _resolve_secret_reference(
+    key: str,
+    default: str = "",
+    *,
+    fail_on_unreadable_ref: bool = False,
+) -> str:
+    raw = str(os.environ.get(key, default) or "").strip()
+    file_var = f"{key}_FILE"
+    file_path = os.environ.get(file_var, "")
+    if not file_path:
+        suffix_match = re.match(r"^(.*)_(\d+)$", key)
+        if suffix_match:
+            file_path = os.environ.get(f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}", "")
+    file_path = str(file_path or "").strip()
+    if file_path:
+        value = _read_secret_from_file(file_path)
+        if value:
+            return value
+        if fail_on_unreadable_ref:
+            raise RuntimeError(
+                f"{file_var} is set but no secret could be read. Check the file path and permissions."
+            )
+        return ""
+    target = str(os.environ.get(f"{key}_CRED_TARGET", "") or "").strip()
+    if not target and raw.lower().startswith("wincred:"):
+        target = raw.split(":", 1)[1].strip()
+    if target:
+        value = _wincred_read_secret(target)
+        if value:
+            return value
+        if fail_on_unreadable_ref:
+            raise RuntimeError(
+                f"{key}_CRED_TARGET is set but no secret could be read. Check the credential reference."
+            )
+        return ""
+    if not raw:
+        return ""
+    with _PLAINTEXT_SECRET_WARNED_LOCK:
+        if key not in _PLAINTEXT_SECRET_WARNED:
+            logging.getLogger("sortarr").warning(
+                "Ignoring plaintext value for %s. Migrate this secret to %s_FILE or %s_CRED_TARGET.",
+                key,
+                key,
+                key,
+            )
+            _PLAINTEXT_SECRET_WARNED.add(key)
+    return ""
+
+
+def _quote_env_value_early(value: str) -> str:
+    value = str(value or "")
+    if value == "":
+        return value
+    if value.strip() != value or any(ch in value for ch in [" ", "#", "\t", '"', "'"]):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+_SESSION_SECRET_REFERENCE_TARGETS = "SORTARR_SECRET_KEY_FILE or SORTARR_SECRET_KEY_CRED_TARGET"
+_SESSION_SECRET_REFERENCE_TARGETS_PAIR = "SORTARR_SECRET_KEY_FILE / SORTARR_SECRET_KEY_CRED_TARGET"
+
+
+def _session_secret_reference_targets(*, pair: bool = False) -> str:
+    return _SESSION_SECRET_REFERENCE_TARGETS_PAIR if pair else _SESSION_SECRET_REFERENCE_TARGETS
+
+
+def _secret_source_present_early(key: str) -> bool:
+    raw = str(os.environ.get(key, "") or "").strip()
+    if raw:
+        return True
+    file_var = f"{key}_FILE"
+    file_path = str(os.environ.get(file_var, "") or "").strip()
+    if not file_path:
+        suffix_match = re.match(r"^(.*)_(\d+)$", key)
+        if suffix_match:
+            file_path = str(
+                os.environ.get(f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}", "") or ""
+            ).strip()
+    if file_path:
+        return True
+    target = str(os.environ.get(f"{key}_CRED_TARGET", "") or "").strip()
+    return bool(target)
+
+
+def _config_complete_early() -> bool:
+    for prefix in ("SONARR", "RADARR"):
+        for suffix in ("", "_2", "_3"):
+            url = str(
+                os.environ.get(f"{prefix}_URL_API{suffix}", "")
+                or os.environ.get(f"{prefix}_URL{suffix}", "")
+                or ""
+            ).strip()
+            if url and _secret_source_present_early(f"{prefix}_API_KEY{suffix}"):
+                return True
+    plex_url = str(os.environ.get("PLEX_URL", "") or "").strip()
+    if plex_url and _secret_source_present_early("PLEX_TOKEN"):
+        return True
+    return False
+
+
+def _bootstrap_setup_allowed_early() -> bool:
+    return not _config_complete_early()
+
+
+def _persist_env_updates_atomic(path: str, updates: dict[str, str]) -> None:
+    normalized_path = str(path or "").strip()
+    if not normalized_path:
+        raise OSError("ENV file path is not set.")
+    existing_lines: list[str] = []
+    if os.path.exists(normalized_path):
+        with open(normalized_path, "r", encoding="utf-8") as handle:
+            existing_lines = handle.readlines()
+
+    rendered: list[str] = []
+    remaining = dict(updates)
+    for line in existing_lines:
+        stripped = line.strip()
+        if "=" not in line or stripped.startswith("#"):
+            rendered.append(line.rstrip("\n"))
+            continue
+        key, _ = line.split("=", 1)
+        normalized_key = key.strip()
+        if normalized_key in remaining:
+            rendered.append(f"{normalized_key}={_quote_env_value_early(remaining.pop(normalized_key))}")
+        else:
+            rendered.append(line.rstrip("\n"))
+    for key, value in remaining.items():
+        rendered.append(f"{key}={_quote_env_value_early(value)}")
+
+    directory = os.path.dirname(normalized_path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".sortarr-env-", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write("\n".join(rendered).rstrip("\n"))
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, normalized_path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _migrate_plaintext_app_secret_key_if_needed() -> bool:
+    modern_file = str(os.environ.get("SORTARR_SECRET_KEY_FILE", "") or "").strip()
+    modern_target = str(os.environ.get("SORTARR_SECRET_KEY_CRED_TARGET", "") or "").strip()
+    modern_raw = str(os.environ.get("SORTARR_SECRET_KEY", "") or "").strip()
+    modern_has_ref = bool(modern_file or modern_target or modern_raw.lower().startswith("wincred:"))
+
+    legacy_file = str(os.environ.get("SECRET_KEY_FILE", "") or "").strip()
+    legacy_target = str(os.environ.get("SECRET_KEY_CRED_TARGET", "") or "").strip()
+    legacy_raw = str(os.environ.get("SECRET_KEY", "") or "").strip()
+    legacy_has_ref = bool(legacy_file or legacy_target or legacy_raw.lower().startswith("wincred:"))
+
+    source_key = ""
+    plaintext_value = ""
+    if modern_raw and not modern_has_ref:
+        source_key = "SORTARR_SECRET_KEY"
+        plaintext_value = modern_raw
+    elif legacy_raw and not legacy_has_ref and not modern_has_ref:
+        source_key = "SECRET_KEY"
+        plaintext_value = legacy_raw
+    if not plaintext_value:
+        return False
+
+    updates = {
+        "SORTARR_SECRET_KEY": "",
+        "SORTARR_SECRET_KEY_FILE": "",
+        "SORTARR_SECRET_KEY_CRED_TARGET": "",
+        "SECRET_KEY": "",
+        "SECRET_KEY_FILE": "",
+        "SECRET_KEY_CRED_TARGET": "",
+    }
+
+    try:
+        if _windows_credstore_enabled():
+            target = modern_target or "Sortarr/SORTARR_SECRET_KEY"
+            if not _wincred_write_secret(target, plaintext_value):
+                raise OSError("credential-write-failed")
+            updates["SORTARR_SECRET_KEY"] = f"wincred:{target}"
+            updates["SORTARR_SECRET_KEY_CRED_TARGET"] = target
+            storage_label = "Windows Credential Manager"
+        else:
+            secrets_dir = os.path.join(os.path.dirname(ENV_FILE_PATH) or os.getcwd(), "secrets")
+            os.makedirs(secrets_dir, exist_ok=True)
+            secret_path = os.path.join(secrets_dir, "sortarr_secret_key.secret")
+            fd, tmp_path = tempfile.mkstemp(prefix=".sortarr-secret-", dir=secrets_dir, text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(plaintext_value)
+                    handle.write("\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if os.name != "nt":
+                    try:
+                        os.chmod(tmp_path, 0o600)
+                    except OSError:
+                        pass
+                os.replace(tmp_path, secret_path)
+                if os.name != "nt":
+                    try:
+                        os.chmod(secret_path, 0o600)
+                    except OSError:
+                        pass
+            finally:
+                if os.path.exists(tmp_path):
+                    try:
+                        os.remove(tmp_path)
+                    except OSError:
+                        pass
+            updates["SORTARR_SECRET_KEY_FILE"] = secret_path
+            storage_label = "file-backed secret storage"
+        _persist_env_updates_atomic(ENV_FILE_PATH, updates)
+    except OSError as exc:
+        raise RuntimeError(
+            "Plaintext SORTARR_SECRET_KEY/SECRET_KEY detected, but Sortarr now requires external session-secret "
+            "references and could not persist a migrated session-secret reference. Fix ENV_FILE_PATH permissions "
+            "or set SORTARR_SECRET_KEY_FILE / SORTARR_SECRET_KEY_CRED_TARGET before startup."
+        ) from exc
+
+    for key, value in updates.items():
+        os.environ[key] = value
+    logging.getLogger("sortarr").warning(
+        "Migrated plaintext session secret from %s to %s during startup because plaintext runtime secret values are no longer supported.",
+        source_key,
+        storage_label,
+    )
+    return True
+
+
+def _persist_generated_app_secret_key(secret_value: str) -> str:
+    normalized = str(secret_value or "").strip()
+    if not normalized:
+        raise OSError("missing-secret-value")
+    updates = {
+        "SORTARR_SECRET_KEY": "",
+        "SORTARR_SECRET_KEY_FILE": "",
+        "SORTARR_SECRET_KEY_CRED_TARGET": "",
+        "SECRET_KEY": "",
+        "SECRET_KEY_FILE": "",
+        "SECRET_KEY_CRED_TARGET": "",
+    }
+    if _windows_credstore_enabled():
+        target = "Sortarr/SORTARR_SECRET_KEY"
+        if not _wincred_write_secret(target, normalized):
+            raise OSError("credential-write-failed")
+        updates["SORTARR_SECRET_KEY"] = f"wincred:{target}"
+        updates["SORTARR_SECRET_KEY_CRED_TARGET"] = target
+        storage_label = "Windows Credential Manager"
+    else:
+        secrets_dir = os.path.join(os.path.dirname(ENV_FILE_PATH) or os.getcwd(), "secrets")
+        os.makedirs(secrets_dir, exist_ok=True)
+        secret_path = os.path.join(secrets_dir, "sortarr_secret_key.secret")
+        fd, tmp_path = tempfile.mkstemp(prefix=".sortarr-secret-", dir=secrets_dir, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(normalized)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if os.name != "nt":
+                try:
+                    os.chmod(tmp_path, 0o600)
+                except OSError:
+                    pass
+            os.replace(tmp_path, secret_path)
+            if os.name != "nt":
+                try:
+                    os.chmod(secret_path, 0o600)
+                except OSError:
+                    pass
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+        updates["SORTARR_SECRET_KEY_FILE"] = secret_path
+        storage_label = "file-backed secret storage"
+    _persist_env_updates_atomic(ENV_FILE_PATH, updates)
+    for key, value in updates.items():
+        os.environ[key] = value
+    return storage_label
+
+
+def _auto_provision_app_secret_key_if_needed() -> bool:
+    if not _config_complete_early():
+        return False
+    if _resolve_secret_reference("SORTARR_SECRET_KEY") or _resolve_secret_reference("SECRET_KEY"):
+        return False
+    generated_secret = secrets.token_hex(32)
+    try:
+        storage_label = _persist_generated_app_secret_key(generated_secret)
+    except OSError as exc:
+        raise RuntimeError(
+            "No persistent session secret key was configured, and Sortarr could not auto-provision one. "
+            f"Fix ENV_FILE_PATH permissions or set {_session_secret_reference_targets()} before startup."
+        ) from exc
+    logging.getLogger("sortarr").warning(
+        "Auto-provisioned a persistent session secret in %s during startup because this configured install had no session-secret reference.",
+        storage_label,
+    )
+    return True
+
+
+def _resolve_app_secret_key() -> tuple[str, bool]:
+    _migrate_plaintext_app_secret_key_if_needed()
+    _auto_provision_app_secret_key_if_needed()
+    configured = _resolve_secret_reference(
+        "SORTARR_SECRET_KEY",
+        fail_on_unreadable_ref=True,
+    )
+    if not configured:
+        configured = _resolve_secret_reference(
+            "SECRET_KEY",
+            fail_on_unreadable_ref=True,
+        )
+    if configured:
+        return configured, False
+    return secrets.token_hex(32), True
+
+
+def _apply_runtime_secret_key(secret_key: str) -> None:
+    global _EPHEMERAL_APP_SECRET_KEY
+    normalized = str(secret_key or "").strip()
+    if not normalized:
+        return
+    app.secret_key = normalized
+    os.environ["SORTARR_SECRET_KEY"] = normalized
+    _EPHEMERAL_APP_SECRET_KEY = False
+
+
 def _int_env(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)).strip())
@@ -149,22 +515,329 @@ def _int_env(name: str, default: int) -> int:
 def _proxy_hops_env(name: str, default: int) -> int:
     return max(_int_env(name, default), 0)
 
-# ProxyFix (reverse proxy support)
-proxy_hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
-proxy_fix_kwargs = {
-    "x_for": _proxy_hops_env("SORTARR_PROXY_HOPS_FOR", proxy_hops),
-    # Most proxy chains append X-Forwarded-For per hop, but host/proto/port/prefix
-    # are typically set once by the outermost proxy and forwarded unchanged.
-    "x_proto": _proxy_hops_env("SORTARR_PROXY_HOPS_PROTO", 1 if proxy_hops > 0 else 0),
-    "x_host": _proxy_hops_env("SORTARR_PROXY_HOPS_HOST", 1 if proxy_hops > 0 else 0),
-    "x_port": _proxy_hops_env("SORTARR_PROXY_HOPS_PORT", 1 if proxy_hops > 0 else 0),
-    "x_prefix": _proxy_hops_env("SORTARR_PROXY_HOPS_PREFIX", 1 if proxy_hops > 0 else 0),
-}
-if any(proxy_fix_kwargs.values()):
-    app.wsgi_app = ProxyFix(
-        app.wsgi_app,
-        **proxy_fix_kwargs,
+def _read_bool_env_early(name: str, default: bool = False) -> bool:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _read_optional_bool_env_early(name: str) -> bool | None:
+    raw = str(os.environ.get(name, "")).strip().lower()
+    if not raw:
+        return None
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _require_persistent_secret_key() -> bool:
+    # Security invariant: persistent secret keys are always required.
+    return True
+
+
+def _fail_startup_on_missing_secret_key() -> bool:
+    # Security invariant: startup must fail when persistent secret resolution fails.
+    return True
+
+
+def _allow_recovery_with_trusted_origins_force() -> bool:
+    return _read_bool_env_early("SORTARR_ALLOW_RECOVERY_WITH_TRUSTED_ORIGINS", False)
+
+
+def _unsafe_recovery_max_minutes_early() -> int:
+    return max(_int_env(UNSAFE_RECOVERY_MAX_MINUTES_ENV, UNSAFE_RECOVERY_DEFAULT_MAX_MINUTES), 1)
+
+
+def _effective_unsafe_recovery_early() -> tuple[bool, str]:
+    if not _read_bool_env_early("SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY", False):
+        return False, "disabled"
+    enabled_at_raw = str(os.environ.get(UNSAFE_RECOVERY_ENABLED_AT_ENV, "") or "").strip()
+    now_ts = int(time.time())
+    if not enabled_at_raw:
+        os.environ[UNSAFE_RECOVERY_ENABLED_AT_ENV] = str(now_ts)
+        return True, "missing-timestamp"
+    try:
+        enabled_at = int(enabled_at_raw)
+    except ValueError:
+        return False, "invalid-timestamp"
+    max_age_seconds = _unsafe_recovery_max_minutes_early() * 60
+    if enabled_at <= 0 or now_ts - enabled_at >= max_age_seconds:
+        return False, "expired"
+    return True, "enabled"
+
+
+def _allow_cross_host_trusted_origins() -> bool:
+    return _read_bool_env_early("ALLOW_CROSS_HOST_TRUSTED_ORIGINS", False)
+
+
+def _extract_host_for_compare(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw if "://" in raw else f"//{raw}")
+    except Exception:
+        return ""
+    return str(parts.hostname or "").strip().lower()
+
+
+def _configured_public_host() -> str:
+    for key in ("SORTARR_PUBLIC_HOST", "SORTARR_PUBLIC_URL", "SORTARR_PUBLIC_ORIGIN"):
+        host = _extract_host_for_compare(os.environ.get(key, ""))
+        if host:
+            return host
+    host = _extract_host_for_compare(os.environ.get("HOST", ""))
+    if host and host not in {"0.0.0.0", "::"}:
+        return host
+    return ""
+
+
+def _effective_csrf_public_host() -> str:
+    public_host = _configured_public_host()
+    if public_host:
+        return public_host
+    if has_request_context():
+        return _extract_host_for_compare(request.host)
+    return ""
+
+
+def _trusted_origin_host_mismatches(trusted: set[str], public_host: str) -> list[str]:
+    expected = str(public_host or "").strip().lower()
+    if not expected:
+        return []
+    mismatches: list[str] = []
+    for origin in sorted(trusted):
+        host = _extract_host_for_compare(origin)
+        if host and host != expected:
+            mismatches.append(origin)
+    return mismatches
+
+
+def _csrf_trusted_origins_runtime_state(raw: str | None = None) -> dict:
+    source = os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "") if raw is None else str(raw or "")
+    normalized, errors = _validate_csrf_trusted_origins(source, max_count=CSRF_TRUSTED_ORIGINS_MAX)
+    public_host = _effective_csrf_public_host()
+    mismatches = _trusted_origin_host_mismatches(normalized, public_host)
+    return {
+        "raw": source,
+        "normalized": sorted(normalized),
+        "count": len(normalized),
+        "max_allowed": CSRF_TRUSTED_ORIGINS_MAX,
+        "errors": errors,
+        "valid": len(errors) == 0,
+        "allow_cross_host": _allow_cross_host_trusted_origins(),
+        "public_host": public_host,
+        "cross_host_mismatches": mismatches,
+    }
+
+
+def _normalize_proxy_mode(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"direct", "single", "double", "custom"}:
+        return normalized
+    return ""
+
+
+def _session_cookie_secure_override_early() -> bool | None:
+    return _read_optional_bool_env_early("SORTARR_SESSION_COOKIE_SECURE")
+
+
+def _session_cookie_secure_default() -> bool:
+    return _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", "")) != "direct"
+
+
+def _session_cookie_secure_for_request() -> bool:
+    override = _session_cookie_secure_override_early()
+    if override is not None:
+        return bool(override)
+    default_secure = _session_cookie_secure_default()
+    if has_request_context():
+        return bool(request.is_secure) or default_secure
+    return default_secure
+
+
+def _proxy_fix_kwargs_from_env() -> dict[str, int]:
+    mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
+    if mode == "direct":
+        return {"x_for": 0, "x_proto": 0, "x_host": 0, "x_port": 0, "x_prefix": 0}
+    elif mode == "single":
+        return {"x_for": 1, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 1}
+    elif mode == "double":
+        return {"x_for": 2, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 1}
+
+    # custom mode (or legacy envs without SORTARR_PROXY_MODE) uses explicit hops config
+    proxy_hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
+    return {
+        "x_for": _proxy_hops_env("SORTARR_PROXY_HOPS_FOR", proxy_hops),
+        # Most proxy chains append X-Forwarded-For per hop, but host/proto/port/prefix
+        # are typically set once by the outermost proxy and forwarded unchanged.
+        "x_proto": _proxy_hops_env("SORTARR_PROXY_HOPS_PROTO", 1 if proxy_hops > 0 else 0),
+        "x_host": _proxy_hops_env("SORTARR_PROXY_HOPS_HOST", 1 if proxy_hops > 0 else 0),
+        "x_port": _proxy_hops_env("SORTARR_PROXY_HOPS_PORT", 1 if proxy_hops > 0 else 0),
+        "x_prefix": _proxy_hops_env("SORTARR_PROXY_HOPS_PREFIX", 1 if proxy_hops > 0 else 0),
+    }
+
+
+def _validate_csrf_trusted_origins(raw: str, max_count: int = CSRF_TRUSTED_ORIGINS_MAX) -> tuple[set[str], list[str]]:
+    trusted: set[str] = set()
+    errors: list[str] = []
+    for chunk in str(raw or "").split(","):
+        candidate = str(chunk or "").strip()
+        if not candidate:
+            continue
+        if "*" in candidate:
+            errors.append(f"Invalid trusted origin {candidate!r}: wildcards are not allowed.")
+            continue
+        try:
+            parts = urlsplit(candidate)
+        except Exception:
+            errors.append(f"Invalid trusted origin {candidate!r}: malformed URL.")
+            continue
+        scheme = (parts.scheme or "").lower()
+        if scheme not in {"http", "https"}:
+            errors.append(f"Invalid trusted origin {candidate!r}: scheme must be http or https.")
+            continue
+        if not parts.netloc:
+            errors.append(f"Invalid trusted origin {candidate!r}: host is required.")
+            continue
+        if parts.path or parts.query or parts.fragment:
+            errors.append(
+                f"Invalid trusted origin {candidate!r}: do not include path, query, or fragment."
+            )
+            continue
+        if parts.username or parts.password:
+            errors.append(f"Invalid trusted origin {candidate!r}: credentials are not allowed.")
+            continue
+        trusted.add(f"{scheme}://{parts.netloc.lower()}")
+    if len(trusted) > max_count:
+        errors.append(
+            f"Too many trusted origins ({len(trusted)}). Maximum allowed is {max_count}."
+        )
+    return trusted, errors
+
+
+def _apply_startup_security_config() -> dict[str, int]:
+    global _EPHEMERAL_APP_SECRET_KEY
+    trusted_state = _csrf_trusted_origins_runtime_state()
+    trusted_origins = set(trusted_state.get("normalized") or [])
+    trusted_origin_errors = list(trusted_state.get("errors") or [])
+    if trusted_origin_errors:
+        raise RuntimeError(" ".join(trusted_origin_errors))
+    if trusted_origins:
+        logging.getLogger("sortarr").warning(
+            "CSRF trusted origins active at startup: count=%s.",
+            trusted_state.get("count", 0),
+        )
+    recovery_enabled, recovery_reason = _effective_unsafe_recovery_early()
+    if _read_bool_env_early("SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY", False) and not recovery_enabled:
+        os.environ["SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY"] = "0"
+        logging.getLogger("sortarr").warning(
+            "SECURITY_AUDIT recovery mode auto-disabled (%s). Re-enable manually in Setup to start a new recovery window.",
+            recovery_reason,
+        )
+    elif recovery_reason == "missing-timestamp":
+        logging.getLogger("sortarr").warning(
+            "SECURITY_AUDIT recovery mode had no enable timestamp; starting a new recovery window now. "
+            "It will auto-disable after %s minutes unless re-enabled manually.",
+            _unsafe_recovery_max_minutes_early(),
+        )
+    if trusted_origins and recovery_enabled and not _allow_recovery_with_trusted_origins_force():
+        raise RuntimeError(
+            "Refusing startup with risky config: SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1 "
+            "cannot be combined with SORTARR_CSRF_TRUSTED_ORIGINS unless "
+            "SORTARR_ALLOW_RECOVERY_WITH_TRUSTED_ORIGINS=1 is explicitly set."
+        )
+    if trusted_origins and not _allow_cross_host_trusted_origins():
+        configured_public_host = str(trusted_state.get("public_host") or "")
+        mismatches = list(trusted_state.get("cross_host_mismatches") or [])
+        if mismatches:
+            raise RuntimeError(
+                "Refusing startup with risky config: SORTARR_CSRF_TRUSTED_ORIGINS must match the configured "
+                f"public host ({configured_public_host}) unless ALLOW_CROSS_HOST_TRUSTED_ORIGINS=1 is set. "
+                f"Mismatched origins: {', '.join(mismatches)}."
+            )
+    startup_secret_key, _EPHEMERAL_APP_SECRET_KEY = _resolve_app_secret_key()
+    if (
+        _EPHEMERAL_APP_SECRET_KEY
+        and _require_persistent_secret_key()
+        and not recovery_enabled
+        and _fail_startup_on_missing_secret_key()
+    ):
+        if _bootstrap_setup_allowed_early():
+            logging.getLogger("sortarr").warning(
+                "Bootstrap mode active: allowing a temporary ephemeral session secret until Setup persists a configured secret reference.",
+            )
+        else:
+            raise RuntimeError(
+                "SORTARR_REQUIRE_PERSISTENT_SECRET_KEY=1 but no persistent secret key was resolved. "
+                f"Set {_session_secret_reference_targets()} before startup."
+            )
+    if _EPHEMERAL_APP_SECRET_KEY and recovery_enabled:
+        logging.getLogger("sortarr").warning(
+            "SECURITY_AUDIT recovery mode active: using an ephemeral session secret key. "
+            "Persist a configured secret reference, then disable SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY."
+        )
+    app.secret_key = startup_secret_key
+    samesite = str(os.environ.get("SORTARR_SESSION_COOKIE_SAMESITE", "Lax") or "Lax").strip() or "Lax"
+    normalized_samesite = samesite.capitalize()
+    if normalized_samesite not in {"Lax", "Strict", "None"}:
+        normalized_samesite = "Lax"
+    default_secure = _session_cookie_secure_default()
+    secure_override = _session_cookie_secure_override_early()
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE=normalized_samesite,
+        SESSION_COOKIE_SECURE=bool(default_secure if secure_override is None else secure_override),
     )
+    logging.getLogger("sortarr").info(
+        "Security mode active: persistent-secret enforcement on, startup-fail enforcement on, "
+        "unsafe-recovery=%s, csrf-trusted-origins=%s, session-cookie={secure-default:%s,secure-override:%s,samesite:%s,httponly:true}.",
+        "enabled" if recovery_enabled else "disabled",
+        trusted_state.get("count", 0),
+        "true" if default_secure else "false",
+        "auto" if secure_override is None else ("true" if secure_override else "false"),
+        normalized_samesite,
+    )
+    proxy_kwargs = _proxy_fix_kwargs_from_env()
+    if any(proxy_kwargs.values()):
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            **proxy_kwargs,
+        )
+    return proxy_kwargs
+
+
+proxy_fix_kwargs = {"x_for": 0, "x_proto": 0, "x_host": 0, "x_port": 0, "x_prefix": 0}
+
+
+def _proxy_preset_from_env() -> str:
+    mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
+    if mode and mode != "custom":
+        return mode
+    override_keys = (
+        "SORTARR_PROXY_HOPS_FOR",
+        "SORTARR_PROXY_HOPS_HOST",
+        "SORTARR_PROXY_HOPS_PROTO",
+        "SORTARR_PROXY_HOPS_PORT",
+        "SORTARR_PROXY_HOPS_PREFIX",
+    )
+    if any(str(os.environ.get(key) or "").strip() for key in override_keys):
+        return "custom"
+    hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
+    if hops == 0:
+        return "direct"
+    if hops == 1:
+        return "single"
+    if hops == 2:
+        return "double"
+    return "custom"
 
 
 
@@ -185,7 +858,14 @@ if not logging.getLogger().handlers:
 logger = logging.getLogger("sortarr")
 logger.setLevel(LOG_LEVEL)
 
-
+_csrf_event_lock = threading.RLock()
+_csrf_last_event = {
+    "ts": 0,
+    "reason": "",
+    "proxy_hint": "",
+    "details": {},
+    "notified_setup": False,
+}
 def _redact_url_for_log(value: str) -> str:
     value = str(value or "").strip()
     if not value:
@@ -210,7 +890,7 @@ def _redact_url_for_log(value: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
 
 
-def _log_csrf_mismatch(reason: str):
+def _log_csrf_mismatch(reason: str, extra: dict | None = None):
     details = {
         "reason": reason,
         "method": request.method,
@@ -233,7 +913,274 @@ def _log_csrf_mismatch(reason: str):
         },
         "proxy_fix": dict(proxy_fix_kwargs),
     }
-    logger.warning("CSRF request rejected: %s", json.dumps(details, sort_keys=True))
+    origin_header = details["headers"].get("Origin") or ""
+    if (
+        origin_header.lower().startswith("https://")
+        and str(details.get("scheme") or "").lower() == "http"
+        and not (details["headers"].get("X-Forwarded-Proto") or "").strip()
+    ):
+        details["proxy_hint"] = (
+            "Origin is https but request scheme is http with missing X-Forwarded-Proto. "
+            "Check reverse-proxy forwarded headers and SORTARR_PROXY_HOPS settings."
+        )
+    if isinstance(extra, dict) and extra:
+        details["extra"] = extra
+    detected_ts = int(time.time())
+    detected_at_utc = datetime.datetime.utcfromtimestamp(detected_ts).isoformat() + "Z"
+    with _csrf_event_lock:
+        _csrf_last_event["ts"] = detected_ts
+        _csrf_last_event["reason"] = str(reason or "").strip().lower()
+        _csrf_last_event["proxy_hint"] = str(details.get("proxy_hint") or "").strip()
+        _csrf_last_event["notified_setup"] = bool(str(reason or "").strip().lower().endswith("-accepted"))
+        _csrf_last_event["details"] = {
+            "method": str(details.get("method") or ""),
+            "path": str(details.get("path") or ""),
+            "scheme": str(details.get("scheme") or ""),
+            "host": str(details.get("host") or ""),
+            "host_url": str(details.get("host_url") or ""),
+            "headers": dict(details.get("headers") or {}),
+            "proxy_fix": dict(details.get("proxy_fix") or {}),
+            "proxy_hint": str(details.get("proxy_hint") or ""),
+        }
+    logger.warning(
+        "CSRF request rejected at %s: %s",
+        detected_at_utc,
+        json.dumps(details, sort_keys=True),
+    )
+
+
+def _csrf_status_payload() -> dict:
+    # CSRF mismatch messaging is surfaced once via setup; suppress persistent status banners.
+    return {"show": False}
+
+
+def _consume_setup_csrf_warning() -> str:
+    with _csrf_event_lock:
+        ts = int(_csrf_last_event.get("ts") or 0)
+        reason = str(_csrf_last_event.get("reason") or "").strip().lower()
+        proxy_hint = str(_csrf_last_event.get("proxy_hint") or "").strip()
+        notified_setup = bool(_csrf_last_event.get("notified_setup"))
+    if ts <= 0 or not reason or reason.endswith("-accepted") or notified_setup:
+        return ""
+    age = _age_seconds(ts)
+    if age is None or age > 900:
+        return ""
+    message = ""
+    if proxy_hint or reason in {"origin", "referer"}:
+        message = (
+            "CSRF checks are seeing HTTPS/HTTP proxy mismatch. "
+            "Open Settings > Advanced settings > Network & CSRF and set Proxy mode to match your proxy chain."
+        )
+    elif reason in {"token-session-mismatch"}:
+        if _EPHEMERAL_APP_SECRET_KEY:
+            message = (
+                "CSRF session consistency warning: persistent session-secret reference is not set. "
+                f"Set {_session_secret_reference_targets()} in Settings > Security."
+            )
+        else:
+            message = (
+                "CSRF session mismatch detected. If running multiple replicas, share "
+                f"{_session_secret_reference_targets(pair=True)} across replicas."
+            )
+    elif reason in {"token-mismatch", "token-missing-request", "token-missing-cookie"}:
+        message = "CSRF token mismatch detected. Refresh the page and retry."
+    else:
+        message = "Recent CSRF validation issue detected. Check reverse proxy and session settings."
+    detected_at = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    with _csrf_event_lock:
+        _csrf_last_event["notified_setup"] = True
+    return f"{message} Detected at {detected_at}."
+
+
+def _csrf_diagnostics_payload() -> dict:
+    with _csrf_event_lock:
+        ts = int(_csrf_last_event.get("ts") or 0)
+        reason = str(_csrf_last_event.get("reason") or "").strip().lower()
+        proxy_hint = str(_csrf_last_event.get("proxy_hint") or "").strip()
+        last_details = dict(_csrf_last_event.get("details") or {})
+    age = _age_seconds(ts) if ts > 0 else None
+    current_headers = {
+        "Host": request.headers.get("Host") or "",
+        "Origin": _redact_url_for_log(request.headers.get("Origin") or ""),
+        "Referer": _redact_url_for_log(request.headers.get("Referer") or ""),
+        "X-Forwarded-For": request.headers.get("X-Forwarded-For") or "",
+        "X-Forwarded-Host": request.headers.get("X-Forwarded-Host") or "",
+        "X-Forwarded-Proto": request.headers.get("X-Forwarded-Proto") or "",
+        "X-Forwarded-Port": request.headers.get("X-Forwarded-Port") or "",
+        "X-Forwarded-Prefix": request.headers.get("X-Forwarded-Prefix") or "",
+    }
+    has_forwarded = any(
+        str(current_headers.get(name) or "").strip()
+        for name in (
+            "X-Forwarded-For",
+            "X-Forwarded-Host",
+            "X-Forwarded-Proto",
+            "X-Forwarded-Port",
+            "X-Forwarded-Prefix",
+        )
+    )
+    if not has_forwarded:
+        suggested_proxy_mode = "direct"
+    else:
+        xff = [part.strip() for part in str(current_headers.get("X-Forwarded-For") or "").split(",") if part.strip()]
+        suggested_proxy_mode = "double" if len(xff) >= 2 else "single"
+    guidance_message = "No recent CSRF mismatch logged."
+    if reason in {"origin", "referer"} or proxy_hint:
+        guidance_message = (
+            "Recent CSRF origin/referer mismatch detected. Check reverse proxy forwarded headers and Proxy mode."
+        )
+    elif reason in {"token-mismatch", "token-missing-request", "token-missing-cookie"}:
+        guidance_message = "Recent CSRF token mismatch detected. Refresh the setup page and retry."
+    elif reason == "token-session-mismatch":
+        guidance_message = (
+            "Recent CSRF session mismatch detected. Verify all replicas use "
+            f"{_session_secret_reference_targets(pair=True)} across restarts."
+        )
+    trusted_state = _csrf_trusted_origins_runtime_state()
+    return {
+        "ok": True,
+        "current": {
+            "scheme": request.scheme,
+            "is_secure": bool(request.is_secure),
+            "host": request.host,
+            "host_url": _redact_url_for_log(request.host_url),
+            "proxy_fix": dict(proxy_fix_kwargs),
+            "headers": current_headers,
+            "proxy_mode_current": _proxy_preset_from_env(),
+            "proxy_mode_suggested": suggested_proxy_mode,
+            "trusted_origins": {
+                "raw": trusted_state.get("raw", ""),
+                "normalized": trusted_state.get("normalized", []),
+                "count": trusted_state.get("count", 0),
+                "max_allowed": trusted_state.get("max_allowed", CSRF_TRUSTED_ORIGINS_MAX),
+                "valid": trusted_state.get("valid", True),
+                "errors": trusted_state.get("errors", []),
+                "public_host": trusted_state.get("public_host", ""),
+                "allow_cross_host": trusted_state.get("allow_cross_host", False),
+                "cross_host_mismatches": trusted_state.get("cross_host_mismatches", []),
+            },
+        },
+        "last_csrf_event": {
+            "seen": bool(ts > 0 and reason),
+            "ts": ts,
+            "age_seconds": age,
+            "reason": reason,
+            "proxy_hint": proxy_hint,
+            "details": last_details,
+        },
+        "guidance": {
+            "message": guidance_message,
+            "recommended_next_step": (
+                "In Setup > Advanced settings > Network & CSRF, set Proxy mode to the detected chain and retry."
+            ),
+        },
+    }
+
+
+def _security_self_check_payload() -> dict:
+    trusted_state = _csrf_trusted_origins_runtime_state()
+    recovery_enabled, recovery_reason = _effective_unsafe_recovery_runtime()
+    persistent_secret_resolved = bool(
+        not _EPHEMERAL_APP_SECRET_KEY
+        and _persistent_secret_key_configured()
+        and str(app.secret_key or "").strip()
+    )
+    risky_recovery_combo = bool(
+        recovery_enabled
+        and trusted_state.get("count", 0) > 0
+        and not _allow_recovery_with_trusted_origins_force()
+    )
+    trusted_cross_host_allowed = bool(trusted_state.get("allow_cross_host", False))
+    trusted_cross_host_mismatches = list(trusted_state.get("cross_host_mismatches", []))
+    trusted_origins_policy_valid = bool(
+        trusted_state.get("valid", False)
+        and not risky_recovery_combo
+        and (trusted_cross_host_allowed or not trusted_cross_host_mismatches)
+    )
+
+    session_cookie_samesite = str(app.config.get("SESSION_COOKIE_SAMESITE", "") or "").strip().capitalize()
+    session_cookie_httponly = bool(app.config.get("SESSION_COOKIE_HTTPONLY", False))
+    session_cookie_secure = _session_cookie_secure_for_request()
+    session_cookie_secure_default = _session_cookie_secure_default()
+    session_cookie_secure_override = _session_cookie_secure_override_early()
+    request_is_secure = bool(request.is_secure)
+    secure_required_for_request = bool(session_cookie_secure_default or request_is_secure)
+    effective_headers = _security_response_headers(
+        csp_nonce=str(getattr(g, "csp_nonce", "") or ""),
+        request_is_secure=request_is_secure,
+    )
+    effective_csp = str(effective_headers.get("Content-Security-Policy", "") or "")
+    csp_expected = {
+        "default-src 'self'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        "style-src 'self'",
+        "script-src 'self'",
+    }
+    csp_effective_flags_ok = all(token in effective_csp for token in csp_expected)
+    cookie_secure_policy_ok = bool(session_cookie_secure) if secure_required_for_request else True
+    cookie_csp_flags_ok = bool(
+        session_cookie_httponly
+        and cookie_secure_policy_ok
+        and session_cookie_samesite in {"Lax", "Strict", "None"}
+        and csp_effective_flags_ok
+    )
+
+    checks = {
+        "persistent_secret_resolved": {
+            "pass": persistent_secret_resolved,
+            "details": {
+                "ephemeral_secret_key": bool(_EPHEMERAL_APP_SECRET_KEY),
+                "secret_key_present": bool(str(app.secret_key or "").strip()),
+            },
+        },
+        "unsafe_recovery_disabled": {
+            "pass": not recovery_enabled,
+            "details": {
+                "enabled": bool(recovery_enabled),
+                "reason": recovery_reason,
+                "max_minutes": _unsafe_recovery_max_minutes(),
+                "enabled_at": str(os.environ.get(UNSAFE_RECOVERY_ENABLED_AT_ENV, "") or "").strip(),
+            },
+        },
+        "trusted_origins_policy_valid": {
+            "pass": trusted_origins_policy_valid,
+            "details": {
+                "count": trusted_state.get("count", 0),
+                "max_allowed": trusted_state.get("max_allowed", CSRF_TRUSTED_ORIGINS_MAX),
+                "normalized": trusted_state.get("normalized", []),
+                "valid_format": trusted_state.get("valid", False),
+                "errors": trusted_state.get("errors", []),
+                "cross_host_allowed": trusted_cross_host_allowed,
+                "cross_host_mismatches": trusted_cross_host_mismatches,
+                "risky_recovery_combo": risky_recovery_combo,
+            },
+        },
+        "cookie_csp_effective_flags": {
+            "pass": cookie_csp_flags_ok,
+            "details": {
+                "session_cookie_httponly": session_cookie_httponly,
+                "session_cookie_secure": session_cookie_secure,
+                "session_cookie_secure_default": session_cookie_secure_default,
+                "session_cookie_secure_override": session_cookie_secure_override,
+                "session_cookie_samesite": session_cookie_samesite,
+                "request_is_secure": request_is_secure,
+                "secure_required_for_request": secure_required_for_request,
+                "direct_http_cookie_exception_applied": bool(
+                    not secure_required_for_request and not session_cookie_secure
+                ),
+                "hsts_expected_on_this_request": "Strict-Transport-Security" in effective_headers,
+                "csp_template_contains_required_directives": csp_effective_flags_ok,
+                "response_security_headers": dict(effective_headers),
+            },
+        },
+    }
+    overall_ok = all(bool(entry.get("pass")) for entry in checks.values())
+    return {
+        "ok": overall_ok,
+        "checks": checks,
+    }
 
 
 _http = requests.Session()
@@ -471,6 +1418,7 @@ _env_loaded = False
 _env_mtime = None
 _env_lock = threading.Lock()
 _startup_migrated = False
+_upgrade_setup_required = False
 _tautulli_refresh_seen = None
 _jellystat_refresh_seen = None
 _plex_refresh_seen = None
@@ -494,6 +1442,24 @@ _arr_instance_fetch_locks: dict[str, threading.Lock] = {}
 _arr_instance_fetch_locks_lock = threading.Lock()
 _perf_sink_module = None
 _perf_sink_checked = False
+_startup_lints_emitted = False
+_trusted_origins_runtime_warning_emitted = False
+
+_DEPRECATED_ENV_REPLACEMENTS = {
+    "SORTARR_PROXY_HOPS": "SORTARR_PROXY_MODE (or keep hops only for custom mode)",
+    "SORTARR_PROXY_HOPS_FOR": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "SORTARR_PROXY_HOPS_HOST": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "SORTARR_PROXY_HOPS_PROTO": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "SORTARR_PROXY_HOPS_PORT": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "SORTARR_PROXY_HOPS_PREFIX": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "PLEX_HISTORY_LAST_VIEWED_AT": "state-managed cursor (temporary env fallback remains supported)",
+    "TAUTULLI_METADATA_LOOKUP_LIMIT": "internal enforced default (remove user override)",
+    "TAUTULLI_METADATA_LOOKUP_SECONDS": "internal enforced default (remove user override)",
+}
+_ENFORCED_SECRET_POLICY_FLAGS = {
+    "SORTARR_REQUIRE_PERSISTENT_SECRET_KEY": "1",
+    "SORTARR_FAIL_STARTUP_ON_MISSING_SECRET_KEY": "1",
+}
 
 
 def _get_perf_sink():
@@ -593,36 +1559,130 @@ def _ensure_env_loaded():
 
 
 @app.before_request
+def _security_setup_gate():
+    endpoint = str(request.endpoint or "").strip()
+    if endpoint in {
+        "setup",
+        "set_lang",
+        "static",
+    }:
+        return None
+    cfg = _get_config()
+    reasons = _security_setup_reasons(cfg)
+    if not reasons or not _security_setup_lock_required(cfg):
+        return None
+    if request.path.startswith("/api/"):
+        return (
+            jsonify(
+                {
+                    "error": "setup_required",
+                    "setup_required": True,
+                    "setup_reasons": reasons,
+                }
+            ),
+            409,
+        )
+    return redirect(url_for("setup", force=1))
+
+
+@app.before_request
 def _csrf_protect():
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
+    cookie_token = request.cookies.get(CSRF_COOKIE_NAME) or ""
+    request_token = _read_csrf_token_from_request()
+    token_reason = ""  # nosec
+    if not cookie_token:
+        token_reason = "token-missing-cookie"  # nosec
+    elif not request_token:
+        token_reason = "token-missing-request"  # nosec
+    elif not secrets.compare_digest(str(request_token), str(cookie_token)):
+        token_reason = "token-mismatch"  # nosec
+    elif not _csrf_token_matches_session(cookie_token):
+        token_reason = "token-session-mismatch"  # nosec
+    token_valid = token_reason == ""  # nosec
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
     if origin and not _origin_matches_request(origin):
-        _log_csrf_mismatch("origin")
-        return jsonify({"error": "CSRF origin mismatch."}), 403
+        if _origin_trusted_fallback_allowed(origin, token_valid):
+            _log_csrf_mismatch(
+                "origin-trusted-fallback-accepted",
+                {"csrf_valid": True},
+            )
+        else:
+            _log_csrf_mismatch("origin", {"csrf_valid": token_valid})
+            return jsonify({"error": "CSRF origin mismatch."}), 403
     if referer and not _origin_matches_request(referer):
-        _log_csrf_mismatch("referer")
-        return jsonify({"error": "CSRF referer mismatch."}), 403
-    cookie_token = request.cookies.get(CSRF_COOKIE_NAME) or ""
-    request_token = _read_csrf_token_from_request()
-    if not cookie_token or not request_token or request_token != cookie_token:
+        if _origin_trusted_fallback_allowed(referer, token_valid):
+            _log_csrf_mismatch(
+                "referer-trusted-fallback-accepted",
+                {"csrf_valid": True},
+            )
+        else:
+            _log_csrf_mismatch("referer", {"csrf_valid": token_valid})
+            return jsonify({"error": "CSRF referer mismatch."}), 403
+    if not token_valid:
+        _log_csrf_mismatch(token_reason or "token-invalid", {"csrf_valid": False})
         return jsonify({"error": "CSRF validation failed."}), 403
     return None
+
+
+def _security_response_headers(
+    csp_nonce: str | None = None,
+    *,
+    request_is_secure: bool | None = None,
+) -> dict[str, str]:
+    nonce = str(csp_nonce or "").strip()
+    script_src = "script-src 'self'"
+    if nonce:
+        script_src += f" 'nonce-{nonce}'"
+    is_secure = bool(request_is_secure) if request_is_secure is not None else bool(
+        request.is_secure if has_request_context() else False
+    )
+    headers = {
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+        "Content-Security-Policy": (
+            "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; "
+            "img-src 'self' data: https: blob:; connect-src 'self'; "
+            f"style-src 'self'; {script_src}"
+        ),
+    }
+    if is_secure:
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return headers
 
 
 @app.after_request
 def _attach_csrf_cookie(resp: Response):
     token = getattr(g, "csrf_token", None)
+    # Keep CSRF cookie security aligned with the session cookie policy.
+    csrf_cookie_secure = _session_cookie_secure_for_request()
     if token and getattr(g, "csrf_set_cookie", False):
         resp.set_cookie(
             CSRF_COOKIE_NAME,
             token,
             httponly=False,
             samesite="Lax",
-            secure=request.is_secure,
+            secure=csrf_cookie_secure,
         )
+    for header_name, header_value in _security_response_headers(
+        csp_nonce=str(getattr(g, "csp_nonce", "") or "").strip(),
+        request_is_secure=bool(request.is_secure),
+    ).items():
+        resp.headers.setdefault(header_name, header_value)
     return resp
+
+
+def _get_csp_nonce() -> str:
+    nonce = str(getattr(g, "csp_nonce", "") or "").strip()
+    if nonce:
+        return nonce
+    nonce = secrets.token_urlsafe(24)
+    g.csp_nonce = nonce
+    return nonce
 
 
 def _parse_env_value(value: str) -> str:
@@ -695,18 +1755,10 @@ _SECRET_ENV_KEYS = [
     "TAUTULLI_API_KEY",
     "JELLYSTAT_API_KEY",
     "BASIC_AUTH_PASS",
+    "SORTARR_SECRET_KEY",
 ]
-
-
-def _secret_env_log_category(key: str) -> str:
-    key = str(key or "").strip().upper()
-    if key.startswith("SONARR_API_KEY") or key.startswith("RADARR_API_KEY"):
-        return "arr_api_key"
-    if key in {"PLEX_TOKEN", "TAUTULLI_API_KEY", "JELLYSTAT_API_KEY"}:
-        return "playback_credential"
-    if key == "BASIC_AUTH_PASS":
-        return "basic_auth"
-    return "secret"
+_PLAINTEXT_SECRET_WARNED: set[str] = set()
+_PLAINTEXT_SECRET_WARNED_LOCK = threading.Lock()
 
 
 if os.name == "nt":
@@ -757,6 +1809,10 @@ def _windows_credstore_enabled() -> bool:
     return bool(os.name == "nt" and getattr(sys, "frozen", False))
 
 
+def _default_store_secrets_as_files() -> bool:
+    return not _windows_credstore_enabled()
+
+
 def _wincred_write_secret(target: str, secret: str) -> bool:
     if not (_advapi32 and target):
         return False
@@ -795,7 +1851,7 @@ def _wincred_read_secret(target: str) -> str:
             if pcred:
                 _advapi32.CredFree(pcred)
         except Exception:
-            pass
+            logger.debug("CredFree failed during wincred cleanup.")
 
 
 def _wincred_delete_secret(target: str) -> bool:
@@ -819,25 +1875,102 @@ def _read_secret_from_file(secret_path: str) -> str:
 
 
 def _resolve_secret_env(key: str, default: str = "") -> str:
-    raw = str(os.environ.get(key, default) or "").strip()
+    return _resolve_secret_reference(
+        key,
+        default=default,
+        fail_on_unreadable_ref=False,
+    )
+
+
+proxy_fix_kwargs = _apply_startup_security_config()
+if _EPHEMERAL_APP_SECRET_KEY:
+    logger.warning(
+        "No persistent session-secret reference was resolved; using an ephemeral Flask secret key. "
+        "Sessions/CSRF can break across restarts or multi-replica deployments until %s is configured.",
+        _session_secret_reference_targets(),
+    )
+
+
+def _secret_has_external_ref(key: str, values: dict | None = None) -> bool:
+    source = values if isinstance(values, dict) else os.environ
     file_var = f"{key}_FILE"
-    file_path = os.environ.get(file_var, "")
-    if not file_path:
-        # Backward-compat alias: KEY_FILE_2 style.
-        suffix_match = re.match(r"^(.*)_(\d+)$", key)
-        if suffix_match:
-            file_path = os.environ.get(f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}", "")
-    file_value = _read_secret_from_file(file_path)
-    if file_value:
-        return file_value
-    target = str(os.environ.get(f"{key}_CRED_TARGET", "") or "").strip()
-    if not target and raw.lower().startswith("wincred:"):
-        target = raw.split(":", 1)[1].strip()
+    if str(source.get(file_var) or "").strip():
+        return True
+    suffix_match = re.match(r"^(.*)_(\d+)$", key)
+    if suffix_match:
+        legacy_file_var = f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}"
+        if str(source.get(legacy_file_var) or "").strip():
+            return True
+    target = str(source.get(f"{key}_CRED_TARGET") or "").strip()
     if target:
-        secret = _wincred_read_secret(target)
-        if secret:
-            return secret
-    return raw
+        return True
+    raw = str(source.get(key) or "").strip().lower()
+    return raw.startswith("wincred:")
+
+
+def _secret_uses_plaintext(key: str, values: dict | None = None) -> bool:
+    source = values if isinstance(values, dict) else os.environ
+    raw = str(source.get(key) or "").strip()
+    if not raw:
+        return False
+    return not _secret_has_external_ref(key, source)
+
+
+def _secret_source_count(key: str, values: dict | None = None) -> int:
+    source = values if isinstance(values, dict) else os.environ
+    file_ref = str(source.get(f"{key}_FILE") or "").strip()
+    target_ref = str(source.get(f"{key}_CRED_TARGET") or "").strip()
+    raw = str(source.get(key) or "").strip()
+    has_wincred_inline = raw.lower().startswith("wincred:")
+    has_plaintext = bool(raw) and not has_wincred_inline
+    return int(bool(file_ref)) + int(bool(target_ref or has_wincred_inline)) + int(has_plaintext)
+
+
+def _detect_plaintext_secret_keys(values: dict | None = None) -> list[str]:
+    source = values if isinstance(values, dict) else os.environ
+    plaintext_keys = []
+    for key in _SECRET_ENV_KEYS:
+        if _secret_uses_plaintext(key, source):
+            plaintext_keys.append(key)
+    return plaintext_keys
+
+
+def _set_plaintext_secret_policy(values: dict) -> bool:
+    plaintext_keys = _detect_plaintext_secret_keys(values)
+    values["SORTARR_ALLOW_PLAINTEXT_SECRETS"] = "0"
+    if plaintext_keys:
+        logger.warning(
+            "Plaintext secret inputs detected (count=%s); Sortarr enforces file/credential-backed secret references.",
+            len(plaintext_keys),
+        )
+    return bool(plaintext_keys)
+
+
+def _ensure_plaintext_secret_policy(path: str) -> bool:
+    current = str(os.environ.get("SORTARR_ALLOW_PLAINTEXT_SECRETS") or "").strip().lower()
+    if current in {"1", "true", "yes", "on"}:
+        logger.warning(
+            "SORTARR_ALLOW_PLAINTEXT_SECRETS is a legacy compatibility flag and no longer enables plaintext secret usage. "
+            "Persisting SORTARR_ALLOW_PLAINTEXT_SECRETS=0."
+        )
+        try:
+            _write_env_file(path, {"SORTARR_ALLOW_PLAINTEXT_SECRETS": "0"})
+            os.environ["SORTARR_ALLOW_PLAINTEXT_SECRETS"] = "0"
+            return True
+        except OSError:
+            logger.warning(
+                "Failed to persist SORTARR_ALLOW_PLAINTEXT_SECRETS=0 to %s.",
+                path,
+            )
+    if current in {"0", "1", "true", "false", "yes", "no", "on", "off"}:
+        return False
+    plaintext_keys = _detect_plaintext_secret_keys(os.environ)
+    if plaintext_keys:
+        logger.warning(
+            "Detected plaintext secret inputs (count=%s). Re-save setup to migrate them to secret files or credential store.",
+            len(plaintext_keys),
+        )
+    return False
 
 
 def _prepare_windows_secret_refs(values: dict) -> None:
@@ -846,7 +1979,23 @@ def _prepare_windows_secret_refs(values: dict) -> None:
     for key in _SECRET_ENV_KEYS:
         secret = str(values.get(key) or "").strip()
         target_key = f"{key}_CRED_TARGET"
-        current_target = str(os.environ.get(target_key) or "").strip()
+        file_var = f"{key}_FILE"
+        file_ref = str(values.get(file_var) or "").strip()
+        explicit_target = str(values.get(target_key) or "").strip()
+        if file_ref:
+            # Keep file-backed secret references intact.
+            continue
+        if secret.lower().startswith("wincred:"):
+            target = secret.split(":", 1)[1].strip()
+            if target:
+                values[key] = f"wincred:{target}"
+                values[target_key] = target
+                continue
+        if not secret and explicit_target:
+            # Preserve explicit credential references from setup payload.
+            values[target_key] = explicit_target
+            continue
+        current_target = explicit_target or str(os.environ.get(target_key) or "").strip()
         current_raw = str(os.environ.get(key) or "").strip()
         if not current_target and current_raw.lower().startswith("wincred:"):
             current_target = current_raw.split(":", 1)[1].strip()
@@ -862,11 +2011,197 @@ def _prepare_windows_secret_refs(values: dict) -> None:
             values[key] = f"wincred:{target}"
             values[target_key] = target
         else:
-            values[target_key] = current_target
-            logger.warning(
-                "Windows credential write failed for %s; keeping plaintext fallback.",
-                _secret_env_log_category(key),
+            raise RuntimeError(
+                f"Unable to store {key} in Windows Credential Manager. Check credential store permissions."
             )
+
+
+def _write_secret_file_atomic(path: str, secret: str) -> None:
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix=".sortarr-secret-", dir=directory, text=True)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(secret or "").strip())
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        if os.name != "nt":
+            try:
+                os.chmod(tmp_path, 0o600)
+            except OSError:
+                pass
+        os.replace(tmp_path, path)
+        if os.name != "nt":
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
+def _materialize_file_secret_refs(values: dict) -> None:
+    if _windows_credstore_enabled():
+        return
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    secrets_dir = os.path.join(base_dir, "secrets")
+    for key in _SECRET_ENV_KEYS:
+        raw = str(values.get(key) or "").strip()
+        if not raw or raw.lower().startswith("wincred:"):
+            continue
+        file_var = f"{key}_FILE"
+        existing_file = str(values.get(file_var) or "").strip()
+        if existing_file:
+            # Keep existing file references authoritative for this save.
+            values[key] = ""
+            values[f"{key}_CRED_TARGET"] = ""
+            continue
+        target_path = os.path.join(secrets_dir, f"{key.lower()}.secret")
+        try:
+            _write_secret_file_atomic(target_path, raw)
+            values[file_var] = target_path
+            values[key] = ""
+            values[f"{key}_CRED_TARGET"] = ""
+        except OSError:
+            raise RuntimeError(
+                f"Unable to store {key} in a secret file. Check permissions for the secrets directory."
+            )
+
+
+def _migrate_plaintext_secrets(path: str) -> bool:
+    values: dict[str, str] = {}
+    for key in _SECRET_ENV_KEYS:
+        values[key] = str(os.environ.get(key) or "").strip()
+        values[f"{key}_FILE"] = _secret_file_ref(key)
+        values[f"{key}_CRED_TARGET"] = str(os.environ.get(f"{key}_CRED_TARGET") or "").strip()
+    plaintext_keys = _detect_plaintext_secret_keys(values)
+    if not plaintext_keys:
+        return False
+    if _windows_credstore_enabled():
+        _prepare_windows_secret_refs(values)
+        values["SORTARR_STORE_SECRETS_AS_FILES"] = "0"
+        storage_label = "Windows Credential Manager refs"
+    else:
+        _materialize_file_secret_refs(values)
+        values["SORTARR_STORE_SECRETS_AS_FILES"] = "1"
+        storage_label = "file-backed refs"
+    values["SORTARR_ALLOW_PLAINTEXT_SECRETS"] = "0"
+    _write_env_file(path, values)
+    for key, value in values.items():
+        os.environ[key] = value
+    logger.warning(
+        "Migrated plaintext secret inputs to %s (count=%s).",
+        storage_label,
+        len(plaintext_keys),
+    )
+    return True
+
+
+def _session_secret_external_ref_present(values: dict | None = None) -> bool:
+    source = values if isinstance(values, dict) else os.environ
+    for key in (
+        "SORTARR_SECRET_KEY_FILE",
+        "SORTARR_SECRET_KEY_CRED_TARGET",
+        "SECRET_KEY_FILE",
+        "SECRET_KEY_CRED_TARGET",
+    ):
+        if str(source.get(key) or "").strip():
+            return True
+    for key in ("SORTARR_SECRET_KEY", "SECRET_KEY"):
+        raw = str(source.get(key) or "").strip().lower()
+        if raw.startswith("wincred:"):
+            return True
+    return False
+
+
+def _enforce_shadow_plaintext_secret_cleanup(path: str) -> bool:
+    if not path:
+        return False
+    updates: dict[str, str] = {}
+    keys = list(_SECRET_ENV_KEYS) + ["SECRET_KEY"]
+    for key in keys:
+        raw = str(os.environ.get(key) or "").strip()
+        if not raw or raw.lower().startswith("wincred:"):
+            continue
+        has_external_ref = _secret_has_external_ref(key)
+        if key in {"SORTARR_SECRET_KEY", "SECRET_KEY"}:
+            has_external_ref = has_external_ref or _session_secret_external_ref_present()
+        if not has_external_ref:
+            continue
+        updates[key] = ""
+    if not updates:
+        return False
+    for key in updates:
+        os.environ[key] = ""
+    try:
+        _write_env_file(path, updates)
+    except OSError:
+        logger.warning("Failed to persist shadow plaintext secret cleanup.")
+        return False
+    logger.warning(
+        "Cleared plaintext secret values shadowed by secret references (%s).",
+        ",".join(sorted(updates)),
+    )
+    return True
+
+
+def _secret_file_ref(key: str, values: dict | None = None) -> str:
+    source = values if isinstance(values, dict) else os.environ
+    file_ref = str(source.get(f"{key}_FILE") or "").strip()
+    if file_ref:
+        return file_ref
+    suffix_match = re.match(r"^(.*)_(\d+)$", key)
+    if not suffix_match:
+        return ""
+    return str(source.get(f"{suffix_match.group(1)}_FILE_{suffix_match.group(2)}") or "").strip()
+
+
+def _normalize_setup_secret_payload(values: dict) -> None:
+    for key in _SECRET_ENV_KEYS:
+        raw = str(values.get(key) or "").strip()
+        file_var = f"{key}_FILE"
+        target_var = f"{key}_CRED_TARGET"
+        explicit_file = str(values.get(file_var) or "").strip()
+        explicit_target = str(values.get(target_var) or "").strip()
+
+        existing_file = _secret_file_ref(key)
+        existing_target = str(os.environ.get(target_var) or "").strip()
+        existing_raw = str(os.environ.get(key) or "").strip()
+        if not existing_target and existing_raw.lower().startswith("wincred:"):
+            existing_target = existing_raw.split(":", 1)[1].strip()
+
+        if raw:
+            values[file_var] = ""
+            values[target_var] = ""
+            continue
+        if explicit_file:
+            values[key] = ""
+            values[file_var] = explicit_file
+            values[target_var] = ""
+            continue
+        if explicit_target:
+            values[key] = f"wincred:{explicit_target}"
+            values[file_var] = ""
+            values[target_var] = explicit_target
+            continue
+        if existing_file:
+            values[key] = ""
+            values[file_var] = existing_file
+            values[target_var] = ""
+            continue
+        if existing_target:
+            values[key] = f"wincred:{existing_target}"
+            values[file_var] = ""
+            values[target_var] = existing_target
+            continue
+        values[key] = existing_raw
+        values[file_var] = ""
+        values[target_var] = ""
 
 
 _HISTORY_CACHE_TTL_SECONDS = max(_read_int_env("ARR_HISTORY_CACHE_TTL_SECONDS", 180), 30)
@@ -1675,6 +3010,19 @@ def _safe_exception_message(exc: Exception | None) -> str:
     return safe_text or type(exc).__name__
 
 
+def _sanitize_connection_test_failure(
+    failure: str | None,
+    credential_label: str = "API key",
+) -> str:
+    text = str(failure or "").strip()
+    if not text:
+        return f"Connection failed. Check URL and {credential_label}."
+    match = re.search(r"HTTP\s+(\d{3})", text)
+    if match:
+        return f"Connection failed (HTTP {match.group(1)})."
+    return f"Connection failed. Check URL and {credential_label}."
+
+
 def _origin_matches_request(origin: str) -> bool:
     if not origin:
         return True
@@ -1689,15 +3037,104 @@ def _origin_matches_request(origin: str) -> bool:
     )
 
 
-def _get_csrf_token() -> str:
-    token = request.cookies.get(CSRF_COOKIE_NAME)
-    if token:
-        g.csrf_token = token
-        return token
+def _csrf_token_ttl_seconds() -> int:
+    return max(_int_env("SORTARR_CSRF_TOKEN_TTL_SECONDS", 7200), 60)
+
+
+def _normalize_origin(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except Exception:
+        return ""
+    scheme = (parts.scheme or "").lower()
+    netloc = (parts.netloc or "").lower()
+    if not scheme or not netloc:
+        return ""
+    return f"{scheme}://{netloc}"
+
+
+def _parse_trusted_origins(raw: str, strict: bool = False) -> set[str]:
+    trusted, errors = _validate_csrf_trusted_origins(raw, max_count=CSRF_TRUSTED_ORIGINS_MAX)
+    if errors and strict:
+        raise ValueError(" ".join(errors))
+    return trusted
+
+
+def _csrf_trusted_origins() -> set[str]:
+    global _trusted_origins_runtime_warning_emitted
+    raw = os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "")
+    try:
+        trusted = _parse_trusted_origins(raw, strict=True)
+        _trusted_origins_runtime_warning_emitted = False
+        return trusted
+    except ValueError as exc:
+        if not _trusted_origins_runtime_warning_emitted:
+            logger.warning("Ignoring invalid SORTARR_CSRF_TRUSTED_ORIGINS at runtime: %s", exc)
+            _trusted_origins_runtime_warning_emitted = True
+        return set()
+
+
+def _csrf_token_digest(token: str) -> str:
+    return hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()
+
+
+def _bind_csrf_token_to_session(token: str) -> None:
+    session["csrf_token_sha256"] = _csrf_token_digest(token)
+    session["csrf_token_issued_at"] = int(time.time())
+
+
+def _csrf_token_matches_session(token: str) -> bool:
+    token = str(token or "")
+    if not token:
+        return False
+    expected_digest = str(session.get("csrf_token_sha256") or "")
+    issued_at = _safe_int(session.get("csrf_token_issued_at"))
+    if not expected_digest or issued_at <= 0:
+        return False
+    age_seconds = int(time.time()) - issued_at
+    if age_seconds < 0 or age_seconds > _csrf_token_ttl_seconds():
+        return False
+    actual_digest = _csrf_token_digest(token)
+    return secrets.compare_digest(actual_digest, expected_digest)
+
+
+def _origin_trusted_fallback_allowed(origin: str, token_valid: bool) -> bool:
+    if not origin or not token_valid:
+        return False
+    normalized = _normalize_origin(origin)
+    if not normalized:
+        return False
+    if normalized not in _csrf_trusted_origins():
+        return False
+    if _allow_cross_host_trusted_origins():
+        return True
+    public_host = _effective_csrf_public_host()
+    if not public_host:
+        return False
+    return _extract_host_for_compare(normalized) == public_host
+
+
+def _issue_new_csrf_token() -> str:
     token = secrets.token_urlsafe(32)
     g.csrf_token = token
     g.csrf_set_cookie = True
+    _bind_csrf_token_to_session(token)
     return token
+
+
+def _rotate_csrf_token() -> str:
+    return _issue_new_csrf_token()
+
+
+def _get_csrf_token() -> str:
+    token = request.cookies.get(CSRF_COOKIE_NAME)
+    if token and _csrf_token_matches_session(token):
+        g.csrf_token = token
+        return token
+    return _issue_new_csrf_token()
 
 
 def _read_csrf_token_from_request() -> str:
@@ -1830,7 +3267,25 @@ def _write_env_file(path: str, values: dict):
         "BASIC_AUTH_PASS",
         "BASIC_AUTH_PASS_FILE",
         "BASIC_AUTH_PASS_CRED_TARGET",
+        "SORTARR_STORE_SECRETS_AS_FILES",
         "SORTARR_WINDOWS_CREDSTORE",
+        "SORTARR_ALLOW_PLAINTEXT_SECRETS",
+        "SORTARR_SECRET_KEY",
+        "SORTARR_SECRET_KEY_FILE",
+        "SORTARR_SECRET_KEY_CRED_TARGET",
+        "SORTARR_REQUIRE_PERSISTENT_SECRET_KEY",
+        "SORTARR_FAIL_STARTUP_ON_MISSING_SECRET_KEY",
+        "SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY",
+        "SORTARR_UNSAFE_RECOVERY_ENABLED_AT",
+        "SORTARR_UNSAFE_RECOVERY_MAX_MINUTES",
+        "SORTARR_PROXY_MODE",
+        "SORTARR_PROXY_HOPS",
+        "SORTARR_PROXY_HOPS_FOR",
+        "SORTARR_PROXY_HOPS_HOST",
+        "SORTARR_PROXY_HOPS_PROTO",
+        "SORTARR_PROXY_HOPS_PORT",
+        "SORTARR_PROXY_HOPS_PREFIX",
+        "SORTARR_CSRF_TRUSTED_ORIGINS",
         "CACHE_SECONDS",
     ]
 
@@ -1896,6 +3351,63 @@ def _save_startup_state(path: str, state: dict) -> None:
         os.replace(tmp_path, path)
     except OSError:
         logger.warning("Failed to write startup state (path redacted).")
+
+
+def _parse_version_tuple(value: str) -> tuple[int, ...]:
+    text = str(value or "").strip()
+    if not text:
+        return tuple()
+    parts = []
+    for token in re.split(r"[^0-9]+", text):
+        if not token:
+            continue
+        try:
+            parts.append(int(token))
+        except ValueError:
+            continue
+    return tuple(parts)
+
+
+def _version_lt(left: str, right: str) -> bool:
+    a = _parse_version_tuple(left)
+    b = _parse_version_tuple(right)
+    width = max(len(a), len(b))
+    if width == 0:
+        return False
+    a = a + (0,) * (width - len(a))
+    b = b + (0,) * (width - len(b))
+    return a < b
+
+
+def _persistent_secret_key_configured() -> bool:
+    _, ephemeral = _resolve_app_secret_key()
+    return not ephemeral
+
+
+def _unsafe_recovery_max_minutes() -> int:
+    return max(_read_int_env(UNSAFE_RECOVERY_MAX_MINUTES_ENV, UNSAFE_RECOVERY_DEFAULT_MAX_MINUTES), 1)
+
+
+def _effective_unsafe_recovery_runtime() -> tuple[bool, str]:
+    if not _read_bool_env("SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY", False):
+        return False, "disabled"
+    enabled_at_raw = str(os.environ.get(UNSAFE_RECOVERY_ENABLED_AT_ENV, "") or "").strip()
+    if not enabled_at_raw:
+        return False, "missing-timestamp"
+    try:
+        enabled_at = int(enabled_at_raw)
+    except ValueError:
+        return False, "invalid-timestamp"
+    max_age_seconds = _unsafe_recovery_max_minutes() * 60
+    now_ts = int(time.time())
+    if enabled_at <= 0 or now_ts - enabled_at >= max_age_seconds:
+        return False, "expired"
+    return True, "enabled"
+
+
+def _allow_unsafe_ephemeral_recovery() -> bool:
+    enabled, _ = _effective_unsafe_recovery_runtime()
+    return enabled
 
 
 def _maybe_migrate_env_defaults(path: str) -> set[str]:
@@ -2005,23 +3517,106 @@ def _wipe_cache_files() -> None:
             continue
 
 
+def _enforce_unsafe_recovery_window(path: str) -> bool:
+    if not path:
+        return False
+    raw_enabled = _read_bool_env("SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY", False)
+    enabled, reason = _effective_unsafe_recovery_runtime()
+    if not raw_enabled:
+        return False
+    updates: dict[str, str] = {}
+    if reason == "enabled":
+        return False
+    if reason == "missing-timestamp":
+        updates[UNSAFE_RECOVERY_ENABLED_AT_ENV] = str(int(time.time()))
+        logger.warning(
+            "Recovery mode enabled without timestamp; persisting %s and auto-expiry window (%s minutes).",
+            UNSAFE_RECOVERY_ENABLED_AT_ENV,
+            _unsafe_recovery_max_minutes(),
+        )
+    else:
+        updates["SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY"] = "0"
+        updates[UNSAFE_RECOVERY_ENABLED_AT_ENV] = ""
+        os.environ["SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY"] = "0"
+        logger.warning(
+            "SECURITY_AUDIT recovery mode auto-disabled during startup migration (%s). "
+            "Re-enable manually in Setup to start a new recovery window.",
+            reason,
+        )
+    for key, value in updates.items():
+        os.environ[key] = value
+    try:
+        _write_env_file(path, updates)
+    except OSError:
+        logger.warning("Failed to persist unsafe recovery window updates.")
+    return bool(updates)
+
+
+def _enforce_secret_policy_flags(path: str) -> bool:
+    updates: dict[str, str] = {}
+    for key, value in _ENFORCED_SECRET_POLICY_FLAGS.items():
+        current = str(os.environ.get(key) or "").strip()
+        if current != value:
+            updates[key] = value
+    if not updates:
+        return False
+    for key, value in updates.items():
+        os.environ[key] = value
+    try:
+        _write_env_file(path, updates)
+    except OSError:
+        logger.warning("Failed to persist enforced secret-policy compatibility flags.")
+    return True
+
+
 def _apply_startup_migrations() -> None:
-    global _startup_migrated, _env_mtime
+    global _startup_migrated, _env_mtime, _upgrade_setup_required
     if _startup_migrated:
         return
     _startup_migrated = True
 
     state_path = _startup_state_path()
     state = _load_startup_state(state_path)
-    version_changed = state.get("app_version") != APP_VERSION
+    previous_version = str(state.get("app_version") or "").strip()
+    version_changed = previous_version != APP_VERSION
+    upgrade_setup_required = bool(state.get("upgrade_setup_required", False))
     enforced = _enforce_tautulli_lookup_defaults(ENV_FILE_PATH)
     plex_enforced = _ensure_plex_client_id(ENV_FILE_PATH)
-    if enforced or plex_enforced:
+    migrated_plaintext = _migrate_plaintext_secrets(ENV_FILE_PATH)
+    shadow_plaintext_cleaned = _enforce_shadow_plaintext_secret_cleanup(ENV_FILE_PATH)
+    plaintext_policy_enforced = _ensure_plaintext_secret_policy(ENV_FILE_PATH)
+    recovery_window_enforced = _enforce_unsafe_recovery_window(ENV_FILE_PATH)
+    secret_policy_flags_enforced = _enforce_secret_policy_flags(ENV_FILE_PATH)
+    cfg = _get_config()
+    if version_changed and _version_lt(previous_version, "0.8.3"):
+        # Existing installs upgraded from <=0.8.2.x must re-save setup once so
+        # the new secure defaults are persisted in a controlled UI flow.
+        if _config_complete(cfg):
+            upgrade_setup_required = True
+    if (
+        enforced
+        or plex_enforced
+        or plaintext_policy_enforced
+        or migrated_plaintext
+        or shadow_plaintext_cleaned
+        or recovery_window_enforced
+        or secret_policy_flags_enforced
+    ):
         try:
             _env_mtime = os.path.getmtime(ENV_FILE_PATH)
         except OSError:
             _env_mtime = None
-    if not version_changed and not enforced and not plex_enforced:
+    if (
+        not version_changed
+        and not enforced
+        and not plex_enforced
+        and not plaintext_policy_enforced
+        and not migrated_plaintext
+        and not shadow_plaintext_cleaned
+        and not recovery_window_enforced
+        and not secret_policy_flags_enforced
+    ):
+        _upgrade_setup_required = bool(upgrade_setup_required)
         return
 
     if version_changed:
@@ -2036,8 +3631,15 @@ def _apply_startup_migrations() -> None:
 
     _cache.clear_all()
     _wipe_cache_files()
-    if version_changed:
-        _save_startup_state(state_path, {"app_version": APP_VERSION})
+    if version_changed or bool(state.get("upgrade_setup_required", False)) != bool(upgrade_setup_required):
+        _save_startup_state(
+            state_path,
+            {
+                "app_version": APP_VERSION,
+                "upgrade_setup_required": bool(upgrade_setup_required),
+            },
+        )
+    _upgrade_setup_required = bool(upgrade_setup_required)
 
 
 def _collect_instance_indexes(prefix: str) -> list[int]:
@@ -2188,16 +3790,21 @@ def _get_config():
         "sonarr_url_api": _normalize_url(os.environ.get("SONARR_URL_API", "")),
         "sonarr_url_external": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL", "")),
         "sonarr_api_key": sonarr_primary["api_key"] if sonarr_primary else _resolve_secret_env("SONARR_API_KEY", ""),
+        "sonarr_api_key_configured": bool(
+            sonarr_primary["api_key"] if sonarr_primary else _resolve_secret_env("SONARR_API_KEY", "")
+        ),
         "sonarr_name": os.environ.get("SONARR_NAME", ""),
         "sonarr_url_2": _normalize_url(os.environ.get("SONARR_URL_2", "")),
         "sonarr_url_api_2": _normalize_url(os.environ.get("SONARR_URL_API_2", "")),
         "sonarr_url_external_2": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_2", "")),
         "sonarr_api_key_2": _resolve_secret_env("SONARR_API_KEY_2", ""),
+        "sonarr_api_key_2_configured": bool(_resolve_secret_env("SONARR_API_KEY_2", "")),
         "sonarr_name_2": os.environ.get("SONARR_NAME_2", ""),
         "sonarr_url_3": _normalize_url(os.environ.get("SONARR_URL_3", "")),
         "sonarr_url_api_3": _normalize_url(os.environ.get("SONARR_URL_API_3", "")),
         "sonarr_url_external_3": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL_3", "")),
         "sonarr_api_key_3": _resolve_secret_env("SONARR_API_KEY_3", ""),
+        "sonarr_api_key_3_configured": bool(_resolve_secret_env("SONARR_API_KEY_3", "")),
         "sonarr_name_3": os.environ.get("SONARR_NAME_3", ""),
         "sonarr_path_map": sonarr_path_map,
         "sonarr_path_maps": _split_path_map_entries(sonarr_path_map),
@@ -2209,16 +3816,21 @@ def _get_config():
         "radarr_url_api": _normalize_url(os.environ.get("RADARR_URL_API", "")),
         "radarr_url_external": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL", "")),
         "radarr_api_key": radarr_primary["api_key"] if radarr_primary else _resolve_secret_env("RADARR_API_KEY", ""),
+        "radarr_api_key_configured": bool(
+            radarr_primary["api_key"] if radarr_primary else _resolve_secret_env("RADARR_API_KEY", "")
+        ),
         "radarr_name": os.environ.get("RADARR_NAME", ""),
         "radarr_url_2": _normalize_url(os.environ.get("RADARR_URL_2", "")),
         "radarr_url_api_2": _normalize_url(os.environ.get("RADARR_URL_API_2", "")),
         "radarr_url_external_2": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_2", "")),
         "radarr_api_key_2": _resolve_secret_env("RADARR_API_KEY_2", ""),
+        "radarr_api_key_2_configured": bool(_resolve_secret_env("RADARR_API_KEY_2", "")),
         "radarr_name_2": os.environ.get("RADARR_NAME_2", ""),
         "radarr_url_3": _normalize_url(os.environ.get("RADARR_URL_3", "")),
         "radarr_url_api_3": _normalize_url(os.environ.get("RADARR_URL_API_3", "")),
         "radarr_url_external_3": _normalize_url(os.environ.get("RADARR_URL_EXTERNAL_3", "")),
         "radarr_api_key_3": _resolve_secret_env("RADARR_API_KEY_3", ""),
+        "radarr_api_key_3_configured": bool(_resolve_secret_env("RADARR_API_KEY_3", "")),
         "radarr_name_3": os.environ.get("RADARR_NAME_3", ""),
         "radarr_path_map": radarr_path_map,
         "radarr_path_maps": _split_path_map_entries(radarr_path_map),
@@ -2230,6 +3842,7 @@ def _get_config():
         "radarr_instances": radarr_instances,
         "plex_url": _normalize_url(os.environ.get("PLEX_URL", "")),
         "plex_token": _resolve_secret_env("PLEX_TOKEN", ""),
+        "plex_token_configured": bool(_resolve_secret_env("PLEX_TOKEN", "")),
         "plex_client_id": os.environ.get("PLEX_CLIENT_ID", ""),
         "plex_section_filters": os.environ.get("PLEX_SECTION_FILTERS", "").strip(),
         "plex_history_page_size": plex_history_page_size,
@@ -2244,8 +3857,10 @@ def _get_config():
         ),
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
         "tautulli_api_key": _resolve_secret_env("TAUTULLI_API_KEY", ""),
+        "tautulli_api_key_configured": bool(_resolve_secret_env("TAUTULLI_API_KEY", "")),
         "jellystat_url": _normalize_url(os.environ.get("JELLYSTAT_URL", "")),
         "jellystat_api_key": _resolve_secret_env("JELLYSTAT_API_KEY", ""),
+        "jellystat_api_key_configured": bool(_resolve_secret_env("JELLYSTAT_API_KEY", "")),
         "jellystat_cache_path": os.environ.get(
             "JELLYSTAT_CACHE_PATH",
             _default_jellystat_cache_path(),
@@ -2289,12 +3904,146 @@ def _get_config():
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
         "basic_auth_user": os.environ.get("BASIC_AUTH_USER", ""),
         "basic_auth_pass": _resolve_secret_env("BASIC_AUTH_PASS", ""),
+        "sortarr_secret_key": _resolve_secret_env("SORTARR_SECRET_KEY", ""),
+        "sortarr_secret_key_ephemeral": bool(_EPHEMERAL_APP_SECRET_KEY),
+        "sortarr_require_persistent_secret_key": _require_persistent_secret_key(),
+        "sortarr_allow_unsafe_ephemeral_recovery": _allow_unsafe_ephemeral_recovery(),
+        "sortarr_windows_credstore_enabled": _windows_credstore_enabled(),
+        "sortarr_secrets_dir": os.path.join(os.path.dirname(ENV_FILE_PATH) or os.getcwd(), "secrets"),
+        "sortarr_secret_storage_mode": (
+            "windows_credential_manager"
+            if _windows_credstore_enabled()
+            else "file_backed"
+        ),
+        "sortarr_secret_storage_label": (
+            "Windows Credential Manager"
+            if _windows_credstore_enabled()
+            else "Secret files"
+        ),
+        "proxy_preset": _proxy_preset_from_env(),
+        "sortarr_proxy_mode": _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", "")) or _proxy_preset_from_env(),
+        "sortarr_proxy_hops": str(_proxy_hops_env("SORTARR_PROXY_HOPS", 0)),
+        "sortarr_proxy_hops_for": str(
+            _proxy_hops_env(
+                "SORTARR_PROXY_HOPS_FOR",
+                _proxy_hops_env("SORTARR_PROXY_HOPS", 0),
+            )
+        ),
+        "sortarr_proxy_hops_host": str(
+            _proxy_hops_env(
+                "SORTARR_PROXY_HOPS_HOST",
+                1 if _proxy_hops_env("SORTARR_PROXY_HOPS", 0) > 0 else 0,
+            )
+        ),
+        "sortarr_proxy_hops_proto": str(
+            _proxy_hops_env(
+                "SORTARR_PROXY_HOPS_PROTO",
+                1 if _proxy_hops_env("SORTARR_PROXY_HOPS", 0) > 0 else 0,
+            )
+        ),
+        "sortarr_proxy_hops_port": str(
+            _proxy_hops_env(
+                "SORTARR_PROXY_HOPS_PORT",
+                1 if _proxy_hops_env("SORTARR_PROXY_HOPS", 0) > 0 else 0,
+            )
+        ),
+        "sortarr_proxy_hops_prefix": str(
+            _proxy_hops_env(
+                "SORTARR_PROXY_HOPS_PREFIX",
+                1 if _proxy_hops_env("SORTARR_PROXY_HOPS", 0) > 0 else 0,
+            )
+        ),
+        "sortarr_csrf_trusted_origins": os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "").strip(),
     }
+    _emit_startup_config_lints(cfg)
+    return cfg
 
 
 
 def _config_complete(cfg: dict) -> bool:
     return bool(_effective_media_source(cfg))
+
+
+def _basic_auth_configured(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    user = str(source.get("basic_auth_user") or "").strip()
+    passwd = str(source.get("basic_auth_pass") or "").strip()
+    return bool(user and passwd)
+
+
+def _basic_auth_partially_configured(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    user = str(source.get("basic_auth_user") or "").strip()
+    passwd = str(source.get("basic_auth_pass") or "").strip()
+    return bool(user) != bool(passwd)
+
+
+def _security_setup_reasons(cfg: dict | None = None) -> list[str]:
+    if cfg is None:
+        cfg = _get_config()
+    if not _config_complete(cfg):
+        return []
+    reasons: list[str] = []
+    if not _basic_auth_configured(cfg):
+        reasons.append("missing_basic_auth")
+    if not _allow_unsafe_ephemeral_recovery() and _require_persistent_secret_key() and _EPHEMERAL_APP_SECRET_KEY:
+        reasons.append("missing_persistent_secret")
+    if _upgrade_setup_required:
+        reasons.append("upgrade_resave_required")
+    return reasons
+
+
+def _security_setup_lock_required(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    return bool(_security_setup_reasons(source))
+
+
+def _security_setup_required(cfg: dict | None = None) -> bool:
+    return bool(_security_setup_reasons(cfg))
+
+
+def _setup_connection_test_enabled(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    return _basic_auth_configured(source) and not _security_setup_required(source)
+
+
+def _setup_test_slot_secret(cfg: dict, slot: str) -> tuple[str, str, str]:
+    normalized_slot = str(slot or "").strip().lower()
+    slot_map = {
+        "sonarr_1": ("sonarr", str(cfg.get("sonarr_url") or "").strip(), str(cfg.get("sonarr_api_key") or "").strip()),
+        "sonarr_2": ("sonarr", str(cfg.get("sonarr_url_2") or "").strip(), str(cfg.get("sonarr_api_key_2") or "").strip()),
+        "sonarr_3": ("sonarr", str(cfg.get("sonarr_url_3") or "").strip(), str(cfg.get("sonarr_api_key_3") or "").strip()),
+        "radarr_1": ("radarr", str(cfg.get("radarr_url") or "").strip(), str(cfg.get("radarr_api_key") or "").strip()),
+        "radarr_2": ("radarr", str(cfg.get("radarr_url_2") or "").strip(), str(cfg.get("radarr_api_key_2") or "").strip()),
+        "radarr_3": ("radarr", str(cfg.get("radarr_url_3") or "").strip(), str(cfg.get("radarr_api_key_3") or "").strip()),
+        "tautulli": ("tautulli", str(cfg.get("tautulli_url") or "").strip(), str(cfg.get("tautulli_api_key") or "").strip()),
+        "jellystat": ("jellystat", str(cfg.get("jellystat_url") or "").strip(), str(cfg.get("jellystat_api_key") or "").strip()),
+        "plex": ("plex", str(cfg.get("plex_url") or "").strip(), str(cfg.get("plex_token") or "").strip()),
+    }
+    return slot_map.get(normalized_slot, ("", "", ""))
+
+
+def _resolve_setup_test_secret(
+    cfg: dict,
+    *,
+    kind: str,
+    slot: str,
+    url: str,
+    api_key: str,
+    use_stored_secret: bool,
+) -> str:
+    submitted = str(api_key or "").strip()
+    if submitted:
+        return submitted
+    if not use_stored_secret:
+        return ""
+    slot_kind, configured_url, stored_secret = _setup_test_slot_secret(cfg, slot)
+    if not slot_kind or slot_kind != str(kind or "").strip().lower():
+        return ""
+    normalized_url = _normalize_url(url or "")
+    if not normalized_url or normalized_url != _normalize_url(configured_url or ""):
+        return ""
+    return str(stored_secret or "").strip()
 
 
 def _normalize_media_source_preference(value: str) -> str:
@@ -2382,6 +4131,112 @@ def _provider_option_set(cfg: dict) -> dict:
             "plex_live_events": has_plex,
         },
     }
+
+
+def _emit_startup_config_lints(cfg: dict) -> None:
+    global _startup_lints_emitted
+    if _startup_lints_emitted:
+        return
+    _startup_lints_emitted = True
+
+    for key, replacement in _DEPRECATED_ENV_REPLACEMENTS.items():
+        if str(os.environ.get(key) or "").strip():
+            logger.warning(
+                "Deprecated config key in use: %s. Prefer %s.",
+                key,
+                replacement,
+            )
+
+    has_modern_secret = any(
+        str(os.environ.get(key) or "").strip()
+        for key in ("SORTARR_SECRET_KEY", "SORTARR_SECRET_KEY_FILE", "SORTARR_SECRET_KEY_CRED_TARGET")
+    )
+    has_legacy_secret = any(
+        str(os.environ.get(key) or "").strip()
+        for key in ("SECRET_KEY", "SECRET_KEY_FILE")
+    )
+    if has_modern_secret and has_legacy_secret:
+        logger.warning(
+            "Both SORTARR_SECRET_KEY* and legacy SECRET_KEY* are set. SORTARR_* takes precedence."
+        )
+    elif has_legacy_secret:
+        logger.warning(
+            "Legacy SECRET_KEY* compatibility alias detected. Migrate to SORTARR_SECRET_KEY*; "
+            "legacy aliases remain read-only for backward compatibility."
+        )
+
+    all_secret_keys = list(_SECRET_ENV_KEYS) + ["SECRET_KEY"]
+    multi_source_secret_count = 0
+    deprecated_inline_wincred_count = 0
+    for key in all_secret_keys:
+        count = _secret_source_count(key)
+        if count > 1:
+            multi_source_secret_count += 1
+        raw = str(os.environ.get(key) or "").strip()
+        if raw.lower().startswith("wincred:"):
+            deprecated_inline_wincred_count += 1
+    if multi_source_secret_count:
+        logger.warning(
+            "Multiple secret-source definitions detected for %s secret setting(s); keep exactly one source per secret.",
+            multi_source_secret_count,
+        )
+    if deprecated_inline_wincred_count:
+        logger.warning(
+            "Inline wincred references detected for %s secret setting(s); prefer *_CRED_TARGET references.",
+            deprecated_inline_wincred_count,
+        )
+
+    media_preference = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+    media_available = _configured_media_sources(cfg)
+    if media_preference != "auto" and media_preference not in media_available:
+        logger.warning(
+            "MEDIA_SOURCE_PREFERENCE=%s but configured media sources are %s; runtime will fall back.",
+            media_preference,
+            ",".join(media_available) or "(none)",
+        )
+
+    history_preference = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
+    history_available = _configured_history_sources(cfg)
+    if history_preference != "auto" and history_preference not in history_available:
+        logger.warning(
+            "HISTORY_SOURCE_PREFERENCE=%s but configured history sources are %s; runtime will fall back.",
+            history_preference,
+            ",".join(history_available) or "(none)",
+        )
+
+    mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
+    if not mode and str(os.environ.get("SORTARR_PROXY_MODE") or "").strip():
+        logger.warning(
+            "Invalid SORTARR_PROXY_MODE=%r. Valid values: direct|single|double|custom.",
+            os.environ.get("SORTARR_PROXY_MODE"),
+        )
+    has_proxy_overrides = any(
+        str(os.environ.get(key) or "").strip()
+        for key in (
+            "SORTARR_PROXY_HOPS_FOR",
+            "SORTARR_PROXY_HOPS_HOST",
+            "SORTARR_PROXY_HOPS_PROTO",
+            "SORTARR_PROXY_HOPS_PORT",
+            "SORTARR_PROXY_HOPS_PREFIX",
+        )
+    )
+    if has_proxy_overrides and mode not in {"custom", ""}:
+        logger.warning(
+            "SORTARR_PROXY_HOPS_* overrides are set while SORTARR_PROXY_MODE=%s. "
+            "Set SORTARR_PROXY_MODE=custom or clear overrides.",
+            mode,
+        )
+
+    if not _read_bool_env_early("SORTARR_REQUIRE_PERSISTENT_SECRET_KEY", True):
+        logger.warning(
+            "SORTARR_REQUIRE_PERSISTENT_SECRET_KEY is set to a non-secure value; "
+            "this is ignored and persistent secrets remain mandatory."
+        )
+    if not _read_bool_env_early("SORTARR_FAIL_STARTUP_ON_MISSING_SECRET_KEY", True):
+        logger.warning(
+            "SORTARR_FAIL_STARTUP_ON_MISSING_SECRET_KEY is set to a non-secure value; "
+            "this is ignored and startup hard-fail remains enabled."
+        )
 
 
 def _playback_label(provider: str) -> str:
@@ -2711,9 +4566,19 @@ def _auth_required(fn):
         user, passwd = _get_basic_auth()
         if not user and not passwd:
             return fn(*args, **kwargs)
+        if user and not passwd:
+            logger.warning("Basic auth is misconfigured: BASIC_AUTH_USER is set but password is empty.")
+            return Response("Basic auth misconfigured: password is required.", 503)
+        if passwd and not user:
+            logger.warning("Basic auth is misconfigured: BASIC_AUTH_PASS is set but username is empty.")
+            return Response("Basic auth misconfigured: username is required.", 503)
 
         auth = request.authorization
-        if auth and auth.username == user and auth.password == passwd:
+        if (
+            auth
+            and secrets.compare_digest(str(auth.username or ""), str(user or ""))
+            and secrets.compare_digest(str(auth.password or ""), str(passwd or ""))
+        ):
             return fn(*args, **kwargs)
 
         return Response(
@@ -4056,8 +5921,12 @@ def _jellystat_test_connection(base_url: str, api_key: str, timeout: int = 10) -
     try:
         _jellystat_get(base_url, api_key, "/api/getLibraries", timeout=timeout)
         return None
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"Connection failed (HTTP {status})."
     except (RuntimeError, requests.RequestException, ValueError) as exc:
-        return str(exc)
+        logger.warning("Jellystat connection test failed (%s).", type(exc).__name__)
+        return _sanitize_connection_test_failure(_safe_exception_message(exc), "API key")
 
 
 def _tautulli_metadata_ids_uncached(
@@ -9792,6 +11661,22 @@ def _refresh_arr_item_cache(
     return row_with_instance
 
 
+def _refresh_arr_item_playback_overlay(
+    app_name: str,
+    instance: dict,
+    item_id: int,
+    cfg: dict,
+) -> dict | None:
+    return _refresh_arr_item_cache(
+        app_name,
+        instance,
+        item_id,
+        cfg,
+        force_tautulli=True,
+        timing=None,
+    )
+
+
 def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool = False):
     if not instances:
         return [], "", "", False
@@ -10028,14 +11913,96 @@ def index():
     cfg = _get_config()
     if not _config_complete(cfg):
         return redirect(url_for("setup"))
+    if _security_setup_required(cfg):
+        return redirect(url_for("setup", force=1))
     csrf_token = _get_csrf_token()
     bootstrap_config = _frontend_bootstrap_config(cfg)
+    setup_warning = str(session.pop("sortarr_setup_warning", "") or "").strip()
+    if bool(cfg.get("sortarr_allow_unsafe_ephemeral_recovery")) and bool(cfg.get("sortarr_secret_key_ephemeral")):
+        recovery_banner = (
+            "Security warning: recovery mode is active with an ephemeral Session secret key. "
+            f"Set {_session_secret_reference_targets()} and disable recovery mode."
+        )
+        setup_warning = _append_warning(setup_warning, recovery_banner)
     return render_template(
         "index.html",
         app_name=APP_NAME,
         app_version=APP_VERSION,
         csrf_token=csrf_token,
+        csp_nonce=_get_csp_nonce(),
         bootstrap_config=bootstrap_config,
+        setup_warning=setup_warning,
+    )
+
+
+def _setup_form_values(cfg: dict) -> dict:
+    values = dict(cfg)
+    for key in (
+        "sonarr_api_key",
+        "sonarr_api_key_2",
+        "sonarr_api_key_3",
+        "radarr_api_key",
+        "radarr_api_key_2",
+        "radarr_api_key_3",
+        "plex_token",
+        "tautulli_api_key",
+        "jellystat_api_key",
+        "basic_auth_pass",
+        "sortarr_secret_key",
+    ):
+        values[key] = ""
+    return values
+
+
+def _setup_advanced_summary(cfg: dict) -> dict:
+    items: list[str] = []
+    if str(cfg.get("proxy_preset") or "single") != "single":
+        items.append("Proxy mode")
+    if str(cfg.get("sortarr_csrf_trusted_origins") or "").strip():
+        items.append("CSRF trusted origins")
+    if bool(cfg.get("sortarr_allow_unsafe_ephemeral_recovery")):
+        items.append("Unsafe recovery mode")
+    if int(cfg.get("sonarr_timeout_seconds") or 90) != 90:
+        items.append("Sonarr timeout")
+    if int(cfg.get("radarr_timeout_seconds") or 90) != 90:
+        items.append("Radarr timeout")
+    if int(cfg.get("sonarr_episodefile_workers") or 8) != 8:
+        items.append("Episode file workers")
+    if int(cfg.get("radarr_wanted_workers") or 2) != 2:
+        items.append("Radarr wanted workers")
+    if int(cfg.get("radarr_instance_workers") or 1) != 1:
+        items.append("Radarr instance workers")
+    if int(cfg.get("tautulli_timeout_seconds") or 60) != 60:
+        items.append("Tautulli timeout")
+    if int(cfg.get("tautulli_fetch_seconds") or 0) != 0:
+        items.append("Tautulli fetch interval")
+    if int(cfg.get("tautulli_metadata_workers") or 4) != 4:
+        items.append("Tautulli metadata workers")
+    if int(cfg.get("plex_history_page_size") or 200) != 200:
+        items.append("Plex history page size")
+    if bool(cfg.get("basic_auth_user")):
+        items.append("Basic auth")
+    count = len(items)
+    preview = ", ".join(items[:3])
+    if count > 3:
+        preview = f"{preview}, +{count - 3} more"
+    return {"count": count, "preview": preview, "items": items}
+
+
+def _setup_optional_section_open(cfg: dict, field_errors: dict | None = None) -> bool:
+    errors = field_errors or {}
+    if any(key in errors for key in ("plex", "tautulli", "jellystat")):
+        return True
+    return any(
+        str(cfg.get(key) or "").strip()
+        for key in (
+            "plex_url",
+            "tautulli_url",
+            "jellystat_url",
+            "plex_section_filters",
+            "jellystat_library_ids_sonarr",
+            "jellystat_library_ids_radarr",
+        )
     )
 
 
@@ -10043,17 +12010,33 @@ def index():
 def setup():
     cfg = _get_config()
     configured = _config_complete(cfg)
+    setup_required = _security_setup_required(cfg)
+    setup_connection_test_enabled = _setup_connection_test_enabled(cfg)
+    setup_warnings: list[str] = []
     if configured:
         user, passwd = _get_basic_auth()
-        auth = request.authorization
-        if (user or passwd) and not (auth and auth.username == user and auth.password == passwd):
-            return Response(
-                "Unauthorized Access",
-                401,
-                {"WWW-Authenticate": 'Basic realm="Authentication Required"'},
+        if _basic_auth_partially_configured(cfg):
+            logger.warning(
+                "Basic auth is partially configured; allowing Setup access so credentials can be repaired."
             )
-        if request.method == "GET" and request.args.get("force") != "1":
-            return redirect(url_for("index"))
+            setup_warnings.append(
+                "Basic Auth is partially configured. Complete both username and password in Setup to restore protected access."
+            )
+        else:
+            auth = request.authorization
+            authorized = (
+                auth
+                and secrets.compare_digest(str(auth.username or ""), str(user or ""))
+                and secrets.compare_digest(str(auth.password or ""), str(passwd or ""))
+            )
+            if (user or passwd) and not authorized:
+                return Response(
+                    "Unauthorized Access",
+                    401,
+                    {"WWW-Authenticate": 'Basic realm="Authentication Required"'},
+                )
+            if request.method == "GET" and request.args.get("force") != "1" and not setup_required:
+                return redirect(url_for("index"))
 
     error = ""
     field_errors: dict[str, str] = {}
@@ -10152,13 +12135,118 @@ def setup():
         basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
         clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
         if not basic_auth_user:
-            basic_auth_pass = ""
+            basic_auth_pass = ""  # nosec
         elif clear_basic_auth_pass:
-            basic_auth_pass = ""
+            basic_auth_pass = ""  # nosec
         elif basic_auth_pass_raw:
             basic_auth_pass = basic_auth_pass_raw
         else:
             basic_auth_pass = cfg["basic_auth_pass"]
+        auth_error = ""
+        if not basic_auth_user:
+            auth_error = "Basic auth username is required."
+        elif not basic_auth_pass:
+            auth_error = "Basic auth password is required."
+
+        proxy_preset = str(request.form.get("proxy_preset", cfg.get("proxy_preset", "single")) or "").strip().lower()
+        if proxy_preset not in {"direct", "single", "double", "custom"}:
+            proxy_preset = "single"
+        proxy_hops_raw = request.form.get("sortarr_proxy_hops", "").strip()
+        proxy_hops_for_raw = request.form.get("sortarr_proxy_hops_for", "").strip()
+        proxy_hops_host_raw = request.form.get("sortarr_proxy_hops_host", "").strip()
+        proxy_hops_proto_raw = request.form.get("sortarr_proxy_hops_proto", "").strip()
+        proxy_hops_port_raw = request.form.get("sortarr_proxy_hops_port", "").strip()
+        proxy_hops_prefix_raw = request.form.get("sortarr_proxy_hops_prefix", "").strip()
+        csrf_trusted_origins_input = request.form.get("sortarr_csrf_trusted_origins", "").strip()
+        csrf_trusted_origins = csrf_trusted_origins_input
+        trusted_origins_error = ""
+        try:
+            normalized_trusted_origins = _parse_trusted_origins(csrf_trusted_origins_input, strict=True)
+            csrf_trusted_origins = ",".join(sorted(normalized_trusted_origins))
+        except ValueError as exc:
+            trusted_origins_error = str(exc)
+        unsafe_recovery_enabled = request.form.get("sortarr_allow_unsafe_ephemeral_recovery") == "1"
+        if unsafe_recovery_enabled:
+            setup_warnings.append(
+                "Recovery mode is temporary and will auto-disable after "
+                f"{_unsafe_recovery_max_minutes()} minutes unless re-enabled manually."
+            )
+        if (
+            not trusted_origins_error
+            and unsafe_recovery_enabled
+            and csrf_trusted_origins
+            and not _allow_recovery_with_trusted_origins_force()
+        ):
+            trusted_origins_error = (
+                "Recovery mode cannot be combined with CSRF trusted origins unless "
+                "SORTARR_ALLOW_RECOVERY_WITH_TRUSTED_ORIGINS=1 is explicitly set."
+            )
+        if not trusted_origins_error and csrf_trusted_origins and not _allow_cross_host_trusted_origins():
+            setup_public_host = _configured_public_host() or _extract_host_for_compare(request.host)
+            setup_mismatches = _trusted_origin_host_mismatches(normalized_trusted_origins, setup_public_host)
+            if setup_mismatches:
+                trusted_origins_error = (
+                    "CSRF trusted origins must match the configured public host "
+                    f"({setup_public_host}): {', '.join(setup_mismatches)}. "
+                    "Set ALLOW_CROSS_HOST_TRUSTED_ORIGINS=1 only if this cross-host trust is intentional."
+                )
+        elif not trusted_origins_error and csrf_trusted_origins:
+            setup_public_host = _configured_public_host() or _extract_host_for_compare(request.host)
+            setup_mismatches = _trusted_origin_host_mismatches(normalized_trusted_origins, setup_public_host)
+            if setup_mismatches:
+                setup_warnings.append(
+                    "CSRF trusted origins include hosts that differ from the configured public host "
+                    f"({setup_public_host}): {', '.join(setup_mismatches)}."
+                )
+                logger.warning(
+                    "Setup saved with cross-host CSRF trusted origins (public_host=%s, mismatched=%s).",
+                    setup_public_host,
+                    ",".join(setup_mismatches),
+                )
+
+        sortarr_secret_key_raw = request.form.get("sortarr_secret_key", "").strip()
+        existing_sortarr_secret_key_file = (
+            os.environ.get("SORTARR_SECRET_KEY_FILE")
+            or os.environ.get("SECRET_KEY_FILE")
+            or ""
+        ).strip()
+        existing_sortarr_secret_key_target = str(
+            os.environ.get("SORTARR_SECRET_KEY_CRED_TARGET")
+            or ""
+        ).strip()
+        existing_sortarr_secret_key_raw = (
+            os.environ.get("SORTARR_SECRET_KEY")
+            or os.environ.get("SECRET_KEY")
+            or ""
+        ).strip()
+        if (
+            not existing_sortarr_secret_key_target
+            and existing_sortarr_secret_key_raw.lower().startswith("wincred:")
+        ):
+            existing_sortarr_secret_key_target = existing_sortarr_secret_key_raw.split(":", 1)[1].strip()
+        current_sortarr_secret_key = (
+            cfg.get("sortarr_secret_key")
+            or _resolve_secret_env("SORTARR_SECRET_KEY", "")
+            or ""
+        ).strip()
+        sortarr_secret_key_file = ""
+        sortarr_secret_key_cred_target = ""
+        if sortarr_secret_key_raw:
+            sortarr_secret_key = sortarr_secret_key_raw
+        elif existing_sortarr_secret_key_file:
+            # Preserve file reference instead of flattening to plaintext.
+            sortarr_secret_key = ""
+            sortarr_secret_key_file = existing_sortarr_secret_key_file
+        elif existing_sortarr_secret_key_target:
+            # Preserve wincred reference without forcing plaintext rewrite.
+            sortarr_secret_key = (
+                existing_sortarr_secret_key_raw
+                if existing_sortarr_secret_key_raw.lower().startswith("wincred:")
+                else f"wincred:{existing_sortarr_secret_key_target}"
+            )
+            sortarr_secret_key_cred_target = existing_sortarr_secret_key_target
+        else:
+            sortarr_secret_key = current_sortarr_secret_key or secrets.token_hex(32)
 
         plex_url = _normalize_url(request.form.get("plex_url", ""))
         plex_token = request.form.get("plex_token", "").strip()
@@ -10237,8 +12325,96 @@ def setup():
             "RADARR_INSTANCE_WORKERS": radarr_instance_workers,
             "BASIC_AUTH_USER": basic_auth_user,
             "BASIC_AUTH_PASS": basic_auth_pass,
+            "SORTARR_SECRET_KEY": sortarr_secret_key,
+            "SORTARR_SECRET_KEY_FILE": sortarr_secret_key_file,
+            "SORTARR_SECRET_KEY_CRED_TARGET": sortarr_secret_key_cred_target,
+            "SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY": "1" if unsafe_recovery_enabled else "0",
+            "SORTARR_UNSAFE_RECOVERY_ENABLED_AT": str(int(time.time())) if unsafe_recovery_enabled else "",
+            "SORTARR_STORE_SECRETS_AS_FILES": "0" if _windows_credstore_enabled() else "1",
+            "SORTARR_CSRF_TRUSTED_ORIGINS": csrf_trusted_origins,
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
+        _normalize_setup_secret_payload(data)
+        if not basic_auth_user or clear_basic_auth_pass:
+            data["BASIC_AUTH_PASS"] = ""
+            data["BASIC_AUTH_PASS_FILE"] = ""
+            data["BASIC_AUTH_PASS_CRED_TARGET"] = ""
+
+        proxy_error = None
+        if proxy_preset == "direct":
+            data["SORTARR_PROXY_MODE"] = "direct"
+            data["SORTARR_PROXY_HOPS"] = "0"
+            data["SORTARR_PROXY_HOPS_FOR"] = ""
+            data["SORTARR_PROXY_HOPS_HOST"] = ""
+            data["SORTARR_PROXY_HOPS_PROTO"] = ""
+            data["SORTARR_PROXY_HOPS_PORT"] = ""
+            data["SORTARR_PROXY_HOPS_PREFIX"] = ""
+        elif proxy_preset == "single":
+            data["SORTARR_PROXY_MODE"] = "single"
+            data["SORTARR_PROXY_HOPS"] = "1"
+            data["SORTARR_PROXY_HOPS_FOR"] = ""
+            data["SORTARR_PROXY_HOPS_HOST"] = ""
+            data["SORTARR_PROXY_HOPS_PROTO"] = ""
+            data["SORTARR_PROXY_HOPS_PORT"] = ""
+            data["SORTARR_PROXY_HOPS_PREFIX"] = ""
+        elif proxy_preset == "double":
+            data["SORTARR_PROXY_MODE"] = "double"
+            data["SORTARR_PROXY_HOPS"] = "2"
+            data["SORTARR_PROXY_HOPS_FOR"] = ""
+            data["SORTARR_PROXY_HOPS_HOST"] = ""
+            data["SORTARR_PROXY_HOPS_PROTO"] = ""
+            data["SORTARR_PROXY_HOPS_PORT"] = ""
+            data["SORTARR_PROXY_HOPS_PREFIX"] = ""
+        else:
+            data["SORTARR_PROXY_MODE"] = "custom"
+            def parse_proxy_hops(raw: str, label: str, required: bool = False) -> tuple[str, str | None]:
+                if not raw:
+                    if required:
+                        return "", f"{label} is required."
+                    return "", None
+                try:
+                    value = int(raw)
+                except ValueError:
+                    return "", f"{label} must be a whole number."
+                if value < 0:
+                    return "", f"{label} must be 0 or greater."
+                return str(value), None
+
+            proxy_hops, proxy_hops_error = parse_proxy_hops(proxy_hops_raw, "Proxy hops", required=True)
+            proxy_hops_for, proxy_hops_for_error = parse_proxy_hops(
+                proxy_hops_for_raw,
+                "Proxy hops (X-Forwarded-For)",
+            )
+            proxy_hops_host, proxy_hops_host_error = parse_proxy_hops(
+                proxy_hops_host_raw,
+                "Proxy hops (X-Forwarded-Host)",
+            )
+            proxy_hops_proto, proxy_hops_proto_error = parse_proxy_hops(
+                proxy_hops_proto_raw,
+                "Proxy hops (X-Forwarded-Proto)",
+            )
+            proxy_hops_port, proxy_hops_port_error = parse_proxy_hops(
+                proxy_hops_port_raw,
+                "Proxy hops (X-Forwarded-Port)",
+            )
+            proxy_hops_prefix, proxy_hops_prefix_error = parse_proxy_hops(
+                proxy_hops_prefix_raw,
+                "Proxy hops (X-Forwarded-Prefix)",
+            )
+            proxy_error = (
+                proxy_hops_error
+                or proxy_hops_for_error
+                or proxy_hops_host_error
+                or proxy_hops_proto_error
+                or proxy_hops_port_error
+                or proxy_hops_prefix_error
+            )
+            data["SORTARR_PROXY_HOPS"] = proxy_hops
+            data["SORTARR_PROXY_HOPS_FOR"] = proxy_hops_for
+            data["SORTARR_PROXY_HOPS_HOST"] = proxy_hops_host
+            data["SORTARR_PROXY_HOPS_PROTO"] = proxy_hops_proto
+            data["SORTARR_PROXY_HOPS_PORT"] = proxy_hops_port
+            data["SORTARR_PROXY_HOPS_PREFIX"] = proxy_hops_prefix
 
         config_error = (
             timeout_error
@@ -10250,6 +12426,9 @@ def setup():
             or radarr_instance_workers_error
             or tautulli_metadata_workers_error
             or plex_history_page_size_error
+            or proxy_error
+            or trusted_origins_error
+            or auth_error
         )
 
         if cache_seconds is None:
@@ -10259,16 +12438,60 @@ def setup():
         elif config_error:
             error = config_error or ""
         else:
+            def cfg_env_value(env_key: str) -> str:
+                return str(cfg.get(env_key.lower()) or "").strip()
+
+            def has_secret_value(key: str) -> bool:
+                raw = str(data.get(key) or "").strip()
+                return bool(
+                    raw
+                    or str(data.get(f"{key}_FILE") or "").strip()
+                    or str(data.get(f"{key}_CRED_TARGET") or "").strip()
+                    or cfg_env_value(key)
+                )
+
+            def resolve_secret_value(key: str) -> str:
+                raw = str(data.get(key) or "").strip()
+                file_ref = str(data.get(f"{key}_FILE") or "").strip()
+                if file_ref:
+                    value = _read_secret_from_file(file_ref)
+                    if value:
+                        return value
+                target = str(data.get(f"{key}_CRED_TARGET") or "").strip()
+                if not target and raw.lower().startswith("wincred:"):
+                    target = raw.split(":", 1)[1].strip()
+                if target:
+                    value = _wincred_read_secret(target)
+                    if value:
+                        return value
+                return raw or cfg_env_value(key)
+
+            def instance_url(prefix: str, suffix: str = "") -> str:
+                return str(
+                    data.get(f"{prefix}_URL_API{suffix}")
+                    or data.get(f"{prefix}_URL{suffix}")
+                    or cfg_env_value(f"{prefix}_URL_API{suffix}")
+                    or cfg_env_value(f"{prefix}_URL{suffix}")
+                    or ""
+                ).strip()
+
             has_sonarr = any(
-                data.get(f"SONARR_URL{suffix}") and data.get(f"SONARR_API_KEY{suffix}")
+                instance_url("SONARR", suffix) and has_secret_value(f"SONARR_API_KEY{suffix}")
                 for suffix in ("", "_2", "_3")
             )
             has_radarr = any(
-                data.get(f"RADARR_URL{suffix}") and data.get(f"RADARR_API_KEY{suffix}")
+                instance_url("RADARR", suffix) and has_secret_value(f"RADARR_API_KEY{suffix}")
                 for suffix in ("", "_2", "_3")
             )
+            # Preserve no-change saves: treat already configured instances as valid even when
+            # secret sources are external and not re-entered in the setup form.
+            has_sonarr = bool(has_sonarr or cfg.get("sonarr_instances"))
+            has_radarr = bool(has_radarr or cfg.get("radarr_instances"))
             has_arr_media = bool(has_sonarr or has_radarr)
-            has_plex_media = bool(data.get("PLEX_URL") and data.get("PLEX_TOKEN"))
+            has_plex_media = bool(
+                (data.get("PLEX_URL") and has_secret_value("PLEX_TOKEN"))
+                or (cfg.get("plex_url") and cfg.get("plex_token"))
+            )
             media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
             if media_preference == "arr" and not has_arr_media:
                 error = "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured."
@@ -10283,10 +12506,10 @@ def setup():
             elif not has_arr_media and not has_plex_media:
                 error = "Provide at least one media source: Sonarr, Radarr, or Plex."
             else:
-                sonarr2 = data.get("SONARR_URL_2") and data.get("SONARR_API_KEY_2")
-                sonarr3 = data.get("SONARR_URL_3") and data.get("SONARR_API_KEY_3")
-                radarr2 = data.get("RADARR_URL_2") and data.get("RADARR_API_KEY_2")
-                radarr3 = data.get("RADARR_URL_3") and data.get("RADARR_API_KEY_3")
+                sonarr2 = instance_url("SONARR", "_2") and has_secret_value("SONARR_API_KEY_2")
+                sonarr3 = instance_url("SONARR", "_3") and has_secret_value("SONARR_API_KEY_3")
+                radarr2 = instance_url("RADARR", "_2") and has_secret_value("RADARR_API_KEY_2")
+                radarr3 = instance_url("RADARR", "_3") and has_secret_value("RADARR_API_KEY_3")
 
                 if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
                     error = "Sonarr instance 1 name is required when additional instances are configured."
@@ -10302,9 +12525,9 @@ def setup():
                     error = "Radarr instance 3 name is required when it is configured."
                 else:
                     tautulli_url = data.get("TAUTULLI_URL") or ""
-                    tautulli_api_key = data.get("TAUTULLI_API_KEY") or ""
+                    tautulli_api_key = resolve_secret_value("TAUTULLI_API_KEY")
                     jellystat_url = data.get("JELLYSTAT_URL") or ""
-                    jellystat_api_key = data.get("JELLYSTAT_API_KEY") or ""
+                    jellystat_api_key = resolve_secret_value("JELLYSTAT_API_KEY")
                     history_preference = data.get("HISTORY_SOURCE_PREFERENCE", "auto")
                     if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
                         error = "Preferred history source is Tautulli, but Tautulli is not fully configured."
@@ -10318,7 +12541,7 @@ def setup():
                             "jellystat",
                             "Provide URL and API key or change preferred history source.",
                         )
-                    elif history_preference == "plex" and not (data.get("PLEX_URL") and data.get("PLEX_TOKEN")):
+                    elif history_preference == "plex" and not (data.get("PLEX_URL") and resolve_secret_value("PLEX_TOKEN")):
                         error = "Preferred history source is Plex, but Plex is not fully configured."
                         field_errors.setdefault(
                             "plex",
@@ -10335,8 +12558,8 @@ def setup():
                             ("Radarr", "RADARR", 3),
                         ]:
                             suffix = "" if idx == 1 else f"_{idx}"
-                            url = data.get(f"{prefix}_URL{suffix}") or ""
-                            api_key = data.get(f"{prefix}_API_KEY{suffix}") or ""
+                            url = instance_url(prefix, suffix)
+                            api_key = resolve_secret_value(f"{prefix}_API_KEY{suffix}")
                             name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
                             if not (url and api_key):
                                 continue
@@ -10355,7 +12578,7 @@ def setup():
                             if failure:
                                 connection_errors["jellystat"] = failure
                         plex_url = data.get("PLEX_URL") or ""
-                        plex_token = data.get("PLEX_TOKEN") or ""
+                        plex_token = resolve_secret_value("PLEX_TOKEN")
                         plex_client_id = data.get("PLEX_CLIENT_ID") or ""
                         if plex_url and plex_token:
                             if not plex_client_id:
@@ -10369,25 +12592,65 @@ def setup():
                             error = "Fix the highlighted connection errors."
         if not error:
             try:
+                global _upgrade_setup_required, _EPHEMERAL_APP_SECRET_KEY
                 _prepare_windows_secret_refs(data)
+                if not _windows_credstore_enabled():
+                    _materialize_file_secret_refs(data)
+                _set_plaintext_secret_policy(data)
                 _write_env_file(ENV_FILE_PATH, data)
                 for k, v in data.items():
                     os.environ[k] = v
+                _enforce_secret_policy_flags(ENV_FILE_PATH)
+                runtime_secret = str(data.get("SORTARR_SECRET_KEY") or "").strip()
+                if runtime_secret and not runtime_secret.lower().startswith("wincred:"):
+                    _apply_runtime_secret_key(runtime_secret)
+                else:
+                    resolved_runtime_secret, runtime_ephemeral = _resolve_app_secret_key()
+                    app.secret_key = resolved_runtime_secret
+                    _EPHEMERAL_APP_SECRET_KEY = bool(runtime_ephemeral)
+                state_path = _startup_state_path()
+                state = _load_startup_state(state_path)
+                if bool(state.get("upgrade_setup_required", False)):
+                    state["upgrade_setup_required"] = False
+                    state["app_version"] = APP_VERSION
+                    _save_startup_state(state_path, state)
+                _upgrade_setup_required = False
+                if setup_warnings:
+                    session["sortarr_setup_warning"] = " ".join(setup_warnings)
                 _invalidate_cache()
                 return redirect(url_for("index"))
+            except RuntimeError as exc:
+                error = str(exc)
             except OSError:
                 error = "Failed to write config file."
 
-    csrf_token = _get_csrf_token()
+    if request.method == "GET":
+        should_rotate_setup_token = setup_required or request.args.get("force") == "1"
+        csrf_token = _rotate_csrf_token() if should_rotate_setup_token else _get_csrf_token()
+        setup_csrf_warning = _consume_setup_csrf_warning()
+    else:
+        csrf_token = _get_csrf_token()
+        setup_csrf_warning = ""
+    setup_values = _setup_form_values(cfg)
+    advanced_summary = _setup_advanced_summary(cfg)
+    optional_section_open = _setup_optional_section_open(cfg, field_errors)
+    advanced_section_open = bool(advanced_summary.get("count"))
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
         error=error,
+        setup_csrf_warning=setup_csrf_warning,
         field_errors=field_errors,
-        values=cfg,
+        values=setup_values,
+        advanced_summary=advanced_summary,
+        optional_section_open=optional_section_open,
+        advanced_section_open=advanced_section_open,
+        setup_required=setup_required,
+        setup_connection_test_enabled=setup_connection_test_enabled,
         app_name=APP_NAME,
         app_version=APP_VERSION,
         csrf_token=csrf_token,
+        csp_nonce=_get_csp_nonce(),
     )
 
 
@@ -10441,12 +12704,15 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
 @_auth_required
 def api_config():
     cfg = _get_config()
+    setup_reasons = _security_setup_reasons(cfg)
     payload = _frontend_bootstrap_config(cfg)
     payload.update(
         {
             "app_name": APP_NAME,
             "app_version": APP_VERSION,
             "configured": _config_complete(cfg),
+            "setup_required": bool(setup_reasons),
+            "setup_reasons": setup_reasons,
         }
     )
     return jsonify(payload)
@@ -10567,6 +12833,12 @@ def api_status():
                     "selected": plex_selected,
                 }
             },
+            "security": {
+                "csrf": _csrf_status_payload(),
+                "session": {
+                    "ephemeral_secret_key": bool(_EPHEMERAL_APP_SECRET_KEY),
+                },
+            },
         }
     )
 
@@ -10606,10 +12878,37 @@ def api_version():
 @app.route("/api/setup/test", methods=["POST"])
 @_auth_required
 def api_setup_test():
+    cfg = _get_config()
+    if not _basic_auth_configured(cfg):
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Setup connection testing is unavailable until Basic Auth is configured and saved.",
+            }
+        ), 409
+    setup_reasons = _security_setup_reasons(cfg)
+    if setup_reasons:
+        return jsonify(
+            {
+                "ok": False,
+                "error": "Setup connection testing is unavailable until security setup is complete.",
+                "setup_required": True,
+                "setup_reasons": setup_reasons,
+            }
+        ), 409
     payload = request.get_json(silent=True) or {}
     kind = str(payload.get("kind") or "").strip().lower()
     url = _normalize_url(payload.get("url") or "")
-    api_key = (payload.get("api_key") or "").strip()
+    slot = str(payload.get("slot") or "").strip().lower()
+    use_stored_secret = bool(payload.get("use_stored_secret"))
+    api_key = _resolve_setup_test_secret(
+        cfg,
+        kind=kind,
+        slot=slot,
+        url=url,
+        api_key=(payload.get("api_key") or "").strip(),
+        use_stored_secret=use_stored_secret,
+    )
     client_id = str(payload.get("client_id") or "").strip()
     if not url or not api_key:
         return jsonify({"ok": False, "error": _("URL and API key are required.")}), 400
@@ -10631,8 +12930,40 @@ def api_setup_test():
         return jsonify({"ok": False, "error": "Unknown test target."}), 400
 
     if failure:
-        return jsonify({"ok": False, "error": failure}), 502
+        credential_label = "token" if kind == "plex" else "API key"
+        return jsonify(
+            {
+                "ok": False,
+                "error": _sanitize_connection_test_failure(failure, credential_label),
+            }
+        ), 502
     return jsonify({"ok": True})
+
+
+@app.route("/api/setup/secret_key", methods=["POST"])
+@_auth_required
+def api_setup_secret_key():
+    payload = request.get_json(silent=True) or {}
+    action = str(payload.get("action") or "").strip().lower()
+    if action == "copy":
+        return jsonify({"ok": False, "error": "Copying secret keys from the UI is disabled."}), 403
+    if action == "generate":
+        return jsonify({"ok": True, "secret_key": secrets.token_hex(32)})
+    return jsonify({"ok": False, "error": "Unknown action."}), 400
+
+
+@app.route("/api/diagnostics/csrf", methods=["GET"])
+@_auth_required
+def api_csrf_diagnostics():
+    return jsonify(_csrf_diagnostics_payload())
+
+
+@app.route("/api/diagnostics/security-self-check", methods=["GET"])
+@_auth_required
+def api_security_self_check():
+    payload = _security_self_check_payload()
+    status_code = 200 if payload.get("ok") else 503
+    return jsonify(payload), status_code
 
 
 @app.route("/api/tautulli/refresh", methods=["POST"])
@@ -10772,7 +13103,6 @@ def api_sonarr_item():
     if not instances:
         return jsonify({"error": "Sonarr is not configured."}), 503
     series_id = request.args.get("seriesId") or request.args.get("series_id")
-    force_tautulli = request.args.get("tautulli_refresh") == "1"
     timing_enabled = request.args.get("timing") == "1"
     timing = {} if timing_enabled else None
     timing_start = time.perf_counter() if timing_enabled else 0.0
@@ -10793,7 +13123,6 @@ def api_sonarr_item():
             instance,
             item_id,
             cfg,
-            force_tautulli=force_tautulli,
             timing=timing,
         )
     except Exception as exc:
@@ -10808,6 +13137,49 @@ def api_sonarr_item():
         _attach_timing_headers(resp, timing)
         return resp
     return jsonify(row)
+
+
+@app.route("/api/sonarr/item/playback_refresh", methods=["POST"])
+@_auth_required
+def api_sonarr_item_playback_refresh():
+    cfg = _get_config()
+    instances = cfg.get("sonarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Sonarr is not configured."}), 503
+    payload = request.get_json(silent=True) or {}
+    series_id = payload.get("seriesId") or payload.get("series_id") or request.args.get("seriesId")
+    if not series_id:
+        return jsonify({"error": "seriesId is required."}), 400
+    item_id = _parse_arr_item_id(series_id)
+    if not item_id:
+        return jsonify({"error": "seriesId is required."}), 400
+    instance_id = (
+        payload.get("instance_id")
+        or payload.get("instanceId")
+        or request.args.get("instance_id")
+        or request.args.get("instanceId")
+    )
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Sonarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Sonarr instances."}), 400
+    try:
+        row = _refresh_arr_item_playback_overlay("sonarr", instance, item_id, cfg)
+    except Exception as exc:
+        resp = jsonify({"error": "Sonarr playback refresh failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("sonarr", exc)
+        return resp, 502
+    if not row:
+        return jsonify({"error": "Series not found."}), 404
+    return jsonify(
+        {
+            "ok": True,
+            "scope": "item",
+            "instance_id": instance.get("id") or "",
+            "series_id": item_id,
+        }
+    )
 
 
 @app.route("/api/sonarr/series/<int:series_id>/seasons")
@@ -10981,7 +13353,6 @@ def api_radarr_item():
     if not instances:
         return jsonify({"error": "Radarr is not configured."}), 503
     movie_id = request.args.get("movieId") or request.args.get("movie_id")
-    force_tautulli = request.args.get("tautulli_refresh") == "1"
     timing_enabled = request.args.get("timing") == "1"
     timing = {} if timing_enabled else None
     timing_start = time.perf_counter() if timing_enabled else 0.0
@@ -11002,7 +13373,6 @@ def api_radarr_item():
             instance,
             item_id,
             cfg,
-            force_tautulli=force_tautulli,
             timing=timing,
         )
     except Exception as exc:
@@ -11017,6 +13387,49 @@ def api_radarr_item():
         _attach_timing_headers(resp, timing)
         return resp
     return jsonify(row)
+
+
+@app.route("/api/radarr/item/playback_refresh", methods=["POST"])
+@_auth_required
+def api_radarr_item_playback_refresh():
+    cfg = _get_config()
+    instances = cfg.get("radarr_instances", [])
+    if not instances:
+        return jsonify({"error": "Radarr is not configured."}), 503
+    payload = request.get_json(silent=True) or {}
+    movie_id = payload.get("movieId") or payload.get("movie_id") or request.args.get("movieId")
+    if not movie_id:
+        return jsonify({"error": "movieId is required."}), 400
+    item_id = _parse_arr_item_id(movie_id)
+    if not item_id:
+        return jsonify({"error": "movieId is required."}), 400
+    instance_id = (
+        payload.get("instance_id")
+        or payload.get("instanceId")
+        or request.args.get("instance_id")
+        or request.args.get("instanceId")
+    )
+    instance = _resolve_arr_instance(instances, str(instance_id or "").strip())
+    if not instance:
+        if instance_id:
+            return jsonify({"error": "Unknown Radarr instance."}), 400
+        return jsonify({"error": "instance_id is required for multiple Radarr instances."}), 400
+    try:
+        row = _refresh_arr_item_playback_overlay("radarr", instance, item_id, cfg)
+    except Exception as exc:
+        resp = jsonify({"error": "Radarr playback refresh failed."})
+        resp.headers["X-Sortarr-Error"] = _arr_error_hint("radarr", exc)
+        return resp, 502
+    if not row:
+        return jsonify({"error": "Movie not found."}), 404
+    return jsonify(
+        {
+            "ok": True,
+            "scope": "item",
+            "instance_id": instance.get("id") or "",
+            "movie_id": item_id,
+        }
+    )
 
 
 @app.route("/api/history")
@@ -11336,7 +13749,7 @@ def _stream_arr_mediacover(
             url,
             headers=headers,
             stream=True,
-            timeout=timeout_seconds if timeout_seconds > 0 else None,
+            timeout=timeout_seconds if timeout_seconds > 0 else None,  # nosec
         )
     except Exception as exc:
         logging.warning("Asset proxy upstream error: %s", exc)
@@ -11346,7 +13759,7 @@ def _stream_arr_mediacover(
         try:
             upstream.close()
         except Exception:
-            pass
+            logger.debug("Asset upstream close failed after non-200 response.")
         if upstream.status_code == 404:
             return jsonify({"error": "not found"}), 404
         return jsonify({"error": "upstream fetch failed"}), 502
@@ -11366,7 +13779,7 @@ def _stream_arr_mediacover(
             try:
                 upstream.close()
             except Exception:
-                pass
+                logger.debug("Asset upstream close failed after stream iteration.")
 
     return Response(_generate(), headers=headers_out)
 
@@ -12206,7 +14619,7 @@ def api_plex_diagnostics():
     )
 
 
-@app.route("/api/plex/insights", methods=["GET"])
+@app.route("/api/plex/insights", methods=["GET", "POST"])
 @_auth_required
 def api_plex_insights():
     cfg = _get_config()
@@ -12215,13 +14628,20 @@ def api_plex_insights():
     if not (plex_url and plex_token):
         return jsonify({"error": "Plex is not configured."}), 503
 
+    request_payload = request.get_json(silent=True) if request.method == "POST" else {}
+    if not isinstance(request_payload, dict):
+        request_payload = {}
     client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
-    include_raw = str(request.args.get("include") or "hubs,activities,butler,sections,match_health")
+    include_raw = str(
+        request_payload.get("include")
+        or request.args.get("include")
+        or "hubs,activities,butler,sections,match_health"
+    )
     include = [part.strip().lower() for part in include_raw.split(",") if part.strip()]
-    section_id = str(request.args.get("section_id") or "").strip()
-    hub_count = max(1, min(20, _safe_int(request.args.get("hub_count") or 6)))
-    item_count = max(1, min(30, _safe_int(request.args.get("item_count") or 8)))
-    force_refresh = request.args.get("refresh") == "1"
+    section_id = str(request_payload.get("section_id") or request.args.get("section_id") or "").strip()
+    hub_count = max(1, min(20, _safe_int(request_payload.get("hub_count") or request.args.get("hub_count") or 6)))
+    item_count = max(1, min(30, _safe_int(request_payload.get("item_count") or request.args.get("item_count") or 8)))
+    force_refresh = request.method == "POST"
     cache_key = _plex_insights_cache_key(section_id, hub_count, item_count, include)
     cached, cached_ts = (None, 0.0)
     if not force_refresh:
@@ -12329,7 +14749,7 @@ def api_plex_events():
                 try:
                     upstream.close()
                 except Exception:
-                    pass
+                    logger.debug("Plex events upstream close failed.")
 
     headers = {
         "Cache-Control": "no-cache",
@@ -12346,7 +14766,7 @@ def api_shows():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Sonarr is not configured"}), 503
-    force = request.args.get("refresh") == "1"
+    force = False
     try:
         refresh_notice = ""
         plex_scope = _get_plex_library_scope(cfg)
@@ -12434,7 +14854,7 @@ def api_movies():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Radarr is not configured"}), 503
-    force = request.args.get("refresh") == "1"
+    force = False
     try:
         refresh_notice = ""
         plex_scope = _get_plex_library_scope(cfg)
@@ -12538,7 +14958,7 @@ def shows_csv():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Sonarr is not configured"}), 503
-    force = request.args.get("refresh") == "1"
+    force = False
     try:
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
@@ -12645,7 +15065,7 @@ def movies_csv():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Radarr is not configured"}), 503
-    force = request.args.get("refresh") == "1"
+    force = False
     try:
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
@@ -12753,7 +15173,7 @@ def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8787"))
-    host = os.environ.get("HOST", "0.0.0.0")
+    host = os.environ.get("HOST", "0.0.0.0")  # nosec
     use_waitress = os.environ.get("SORTARR_USE_WAITRESS", "1").strip() != "0"
     if use_waitress:
         try:

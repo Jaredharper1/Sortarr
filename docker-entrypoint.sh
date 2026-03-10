@@ -3,6 +3,7 @@ set -e
 
 PUID="${PUID:-}"
 PGID="${PGID:-}"
+CONFIG_PATH="${SORTARR_CONFIG_PATH:-${ENV_FILE_PATH:-/config/Sortarr.env}}"
 
 is_number() {
     case "$1" in
@@ -50,11 +51,12 @@ if [ -n "$PUID" ] && [ -n "$PGID" ]; then
     if [ -d "/config" ]; then
         safe_chown "/config"
     fi
-    for path in "$ENV_FILE_PATH" "$TAUTULLI_METADATA_CACHE" "$SONARR_CACHE_PATH" "$RADARR_CACHE_PATH"; do
+    for path in "$CONFIG_PATH" "$ENV_FILE_PATH" "$TAUTULLI_METADATA_CACHE" "$SONARR_CACHE_PATH" "$RADARR_CACHE_PATH"; do
         if [ -n "$path" ]; then
             safe_chown "$(dirname "$path")"
         fi
     done
+    safe_chown "$(dirname "$CONFIG_PATH")/secrets"
 
     if [ "$PUID" != "0" ] || [ "$PGID" != "0" ]; then
         if command -v gosu >/dev/null 2>&1; then

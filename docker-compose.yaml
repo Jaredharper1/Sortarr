@@ -8,9 +8,15 @@ services:
       - "9595:8787"
     environment:
       - SORTARR_CONFIG_PATH=/data/Sortarr.env
+      - ENV_FILE_PATH=/data/Sortarr.env
       - CACHE_SECONDS=300
-      # Optional: Use Reverse Proxy? ie. NGINX, Cloudflare, Caddy, Traefik, Apache? Use this:
-      # eg. SORTARR_PROXY_HOPS=1
+      - SORTARR_STORE_SECRETS_AS_FILES=1
+      - SORTARR_ALLOW_PLAINTEXT_SECRETS=0
+      - SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=0
+      # Optional: Reverse proxy preset (recommended):
+      # eg. SORTARR_PROXY_MODE=single
+      # eg. SORTARR_PROXY_MODE=double
+      # eg. SORTARR_PROXY_MODE=direct
       # Optional: Map container paths to host paths for the UI
       # eg. RADARR_PATH_MAP=/movies:/mnt/media/movies
     volumes:

@@ -12,8 +12,8 @@ td.right,
 :root {
   --font-sans-fallback: "Segoe UI", "Helvetica Neue", Arial, system-ui, sans-serif;
   --font-mono-fallback: "Cascadia Mono", Consolas, "Segoe UI Mono", Menlo, monospace;
-  --font-sans: Inter, var(--font-sans-fallback);
-  --font-mono: "JetBrains Mono", var(--font-mono-fallback);
+  --font-sans: var(--font-sans-fallback);
+  --font-mono: var(--font-mono-fallback);
 
 
   --bg: #f1f3f6;
@@ -171,6 +171,7 @@ td.right,
 
   --table-header-bg: rgba(230, 236, 245, 0.92);
   --table-header-bg-glass: rgba(230, 236, 245, 0.8);
+  --sort-indicator-active: rgba(17, 24, 39, 0.9);
 
   --table-header-height: calc(0.95em * 1.2 + 16px);
 
@@ -305,6 +306,7 @@ html[data-theme="dark"] {
 
   --table-header-bg: rgba(24, 28, 34, 0.86);
   --table-header-bg-glass: rgba(24, 28, 34, 0.74);
+  --sort-indicator-active: rgba(243, 244, 246, 0.95);
 
 }
 
@@ -618,10 +620,22 @@ body {
 
   width: 32px;
 
-  padding: 6px 0;
+  padding: 0;
 
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: rotate(180deg);
+  transform-origin: 50% 50%;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 220ms ease;
+  opacity: 0.9;
+  font-size: 16px;
 
+}
+
+.filters-toggle-btn[aria-expanded="false"] {
+  transform: rotate(0deg);
 }
 
 
@@ -1556,6 +1570,13 @@ html:not([data-theme="dark"]) .chip:not(.chip--pos):not(.chip--neg):hover {
 
   box-shadow: var(--panel-shadow);
 
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .column-panel {
+    backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+  }
 }
 
 @media (max-width: 700px) {
@@ -3363,6 +3384,18 @@ html:not([data-theme="dark"]) .status-pill.status-pill--loaded {
 
 }
 
+.status-banner--warn {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+}
+
+html[data-theme="dark"] .status-banner--warn {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
 html:not([data-theme="dark"]) .status-banner {
   color: color-mix(in srgb, rgb(var(--accent-rgb)) 60%, black);
   max-width: max-content;
@@ -4297,20 +4330,18 @@ th[data-sort]:hover {
 .sort-indicator {
 
   display: inline-block;
-
-  width: 12px;
-
-  min-width: 12px;
-
-  flex: 0 0 12px;
-
-  text-align: center;
-
+  width: 7px;
+  height: 7px;
+  min-width: 7px;
+  flex: 0 0 7px;
   margin-left: 6px;
-
-  font-size: 0.75em;
-
-  opacity: 0.6;
+  border-right: 1.75px solid var(--muted);
+  border-bottom: 1.75px solid var(--muted);
+  transform: rotate(45deg);
+  transform-origin: 50% 45%;
+  opacity: 0.42;
+  transition: transform 160ms ease, opacity 160ms ease, border-color 160ms ease;
+  vertical-align: middle;
 
 }
 
@@ -4318,6 +4349,15 @@ th[data-sort]:hover {
 
 th.active-sort .sort-indicator {
   opacity: 1;
+  border-color: var(--sort-indicator-active, var(--text));
+}
+
+th.sort-asc .sort-indicator {
+  transform: rotate(-135deg);
+}
+
+th.sort-desc .sort-indicator {
+  transform: rotate(45deg);
 }
 
 
@@ -4525,10 +4565,118 @@ tr.series-child-row--open .series-expansion {
 }
 
 .series-expansion-actions {
-  margin-left: auto;
+  margin-left: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-start;
   gap: 8px;
+}
+
+.series-sort-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.78em;
+  color: var(--muted);
+}
+
+.series-sort-control span {
+  font-weight: 600;
+  color: var(--muted);
+}
+
+html.custom-selects .series-sort-control select {
+  display: none;
+}
+
+.series-sort-control .custom-select {
+  width: auto;
+  min-width: 112px;
+}
+
+.series-sort-control .custom-select-trigger {
+  width: auto;
+  min-width: 112px;
+  border: 1px solid var(--series-expand-border);
+  background: var(--column-panel-surface);
+  color: var(--text);
+  border-radius: 999px;
+  font-size: 0.95em;
+  padding: 3px 10px;
+  min-height: 26px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.series-sort-control .custom-select-trigger:hover,
+.series-sort-control .custom-select-trigger:focus,
+.series-sort-control .custom-select-trigger:focus-visible {
+  border-color: var(--accent);
+}
+
+.series-sort-control .custom-select-label {
+  padding-right: 8px;
+}
+
+.series-sort-control .custom-select-caret {
+  width: 7px;
+  height: 7px;
+}
+
+.series-sort-control .custom-select[data-sort-dir="asc"] .custom-select-caret,
+.series-sort-control .custom-select.custom-select--open[data-sort-dir="asc"] .custom-select-caret {
+  transform: rotate(-135deg);
+}
+
+.series-sort-control .custom-select[data-sort-dir="desc"] .custom-select-caret,
+.series-sort-control .custom-select.custom-select--open[data-sort-dir="desc"] .custom-select-caret {
+  transform: rotate(45deg);
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .series-sort-control .custom-select-trigger {
+    backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+  }
+}
+
+.series-sort-control select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  border: 1px solid var(--series-expand-border);
+  background: var(--column-panel-surface);
+  --filter-select-caret: var(--muted);
+  background-image:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0)),
+    linear-gradient(45deg, transparent 50%, var(--filter-select-caret) 50%),
+    linear-gradient(135deg, var(--filter-select-caret) 50%, transparent 50%);
+  background-position:
+    0 0,
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 100% 100%, 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  color: var(--text);
+  border-radius: 999px;
+  font-size: 0.95em;
+  padding: 3px 24px 3px 10px;
+  min-height: 26px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.series-sort-control select:hover,
+.series-sort-control select:focus-visible {
+  --filter-select-caret: var(--text);
+  border-color: var(--accent);
+  outline: none;
+}
+
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .series-sort-control select {
+    backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(120%);
+  }
 }
 
 .series-expansion-toggle {

@@ -3,12 +3,6 @@
 
 <head>
   <meta charset="utf-8" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="preload" as="style"
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=optional">
-  <link rel="stylesheet"
-    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=optional">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description"
     content="Sortarr provides Sonarr and Radarr media library insights with filters, playback context, and sortable metrics.">
@@ -16,18 +10,7 @@
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>{{ app_name }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <script>
-    try {
-      const root = document.documentElement;
-      if (localStorage.getItem("Sortarr-filters-collapsed") === "1") {
-        root.setAttribute("data-filters-collapsed", "1");
-      }
-      if (localStorage.getItem("Sortarr-chips-enabled") === "1") {
-        root.setAttribute("data-chips-enabled", "1");
-      }
-    } catch {
-    }
-  </script>
+  <script src="/static/index_startup.js?v={{ app_version }}-startupfix4"></script>
   <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}-startupfix4" />
 </head>
 
@@ -44,6 +27,9 @@
 
       <button id="resetUiBtn" title="{{ _('Clear UI settings and reload cached data') }}">{{ _('Reset UI') }}</button>
       <button id="settingsBtn" title="{{ _('Open setup') }}">{{ _('Settings') }}</button>
+      {% if setup_warning %}
+      <div class="status-banner status-banner--warn" id="setupSaveWarning">{{ setup_warning }}</div>
+      {% endif %}
       <div class="column-menu">
         <button id="columnsBtn" type="button" title="{{ _('Adjust visible columns') }}" aria-expanded="false"
           aria-controls="columnsPanel">{{ _('Columns') }}</button>
@@ -442,17 +428,7 @@
       </div>
       <div class="filters-footer">
         <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide filters and chips') }}"
-          aria-expanded="true" aria-controls="filtersPanel">▴</button>
-        <script>
-          (() => {
-            if (document.documentElement.getAttribute("data-filters-collapsed") !== "1") return;
-            const btn = document.getElementById("filtersToggleBtn");
-            if (!btn) return;
-            btn.setAttribute("aria-expanded", "false");
-            btn.title = "{{ _('Show filters and chips') }}";
-            btn.textContent = "▾";
-          })();
-        </script>
+          aria-label="{{ _('Hide filters and chips') }}" aria-expanded="true" aria-controls="filtersPanel">▾</button>
         <div class="plex-library-scope hidden" id="plexLibraryScope" data-app="sonarr">
           <label for="plexLibrarySelect">{{ _('Plex Libraries') }}</label>
           <select id="plexLibrarySelect" class="plex-library-select" multiple size="4"
@@ -477,6 +453,7 @@
       {{ _('Partial playback data loaded. Matching will continue in the background.') }}</div>
     <div class="status-banner hidden" id="fastModeBanner">
       {{ _('Sonarr fast mode enabled. Codec and language details may be missing.') }}</div>
+    <div class="status-banner status-banner--warn hidden" id="csrfBanner"></div>
 
     <div class="table-wrap table-wrap-y" id="tableWrap">
       <div class="table-wrap-x" id="tableWrapX">
@@ -669,6 +646,20 @@
           aria-pressed="false">{{ _("Expand all seasons") }}</button>
         <div class="series-expansion-title">{{ _("Seasons") }}</div>
         <div class="series-expansion-actions">
+          <label class="series-sort-control" title="{{ _('Season order') }}">
+            <span>{{ _('Seasons') }}</span>
+            <select data-role="series-season-sort" aria-label="{{ _('Season order') }}">
+              <option value="asc">{{ _('Ascending') }}</option>
+              <option value="desc">{{ _('Descending') }}</option>
+            </select>
+          </label>
+          <label class="series-sort-control" title="{{ _('Episode order') }}">
+            <span>{{ _('Episodes') }}</span>
+            <select data-role="series-episode-sort" aria-label="{{ _('Episode order') }}">
+              <option value="asc">{{ _('Ascending') }}</option>
+              <option value="desc">{{ _('Descending') }}</option>
+            </select>
+          </label>
           <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
         </div>
       </div>
@@ -679,7 +670,7 @@
 
 
 
-  <script id="i18n-json" type="application/json">
+  <script id="i18n-json" nonce="{{ csp_nonce }}" type="application/json">
   {{ {
     "ariaRemoveFilter": "Remove filter %(label)s",
     "statusLoadedCounts": _("Loaded %(rows)s / %(total)s", rows="%(rows)s", total="%(total)s"),
@@ -692,6 +683,10 @@
     "sonarr_no_seasons_available": _("No seasons available."),
 
     "series_expansion_title_seasons": _("Seasons"),
+    "Season order": _("Season order"),
+    "Episode order": _("Episode order"),
+    "Ascending": _("Ascending"),
+    "Descending": _("Descending"),
     "series_failed_to_load": _("Failed to load."),
     "episode_grid_column_episode_title": _("Episode"),
     "episode_title_untitled": _("Untitled"),
@@ -988,51 +983,14 @@
 
 
 
-  <script id="bootstrap-config-json" type="application/json">
+  <script id="bootstrap-config-json" nonce="{{ csp_nonce }}" type="application/json">
 {{ bootstrap_config|tojson }}
 </script>
 
-  <script>
-    window.I18N = JSON.parse(document.getElementById("i18n-json").textContent);
-  </script>
+  <script src="/static/index_bootstrap.js?v={{ app_version }}-startupfix4"></script>
 
   <script src="/static/column_widths.js?v={{ app_version }}-startupfix4"></script>
   <script src="/static/app.min.js?v={{ app_version }}-startupfix4"></script>
-  <script>
-    (() => {
-      try {
-        const bootstrapEl = document.getElementById("bootstrap-config-json");
-        if (!bootstrapEl) return;
-        const cfg = JSON.parse(bootstrapEl.textContent || "{}");
-        const provider = String(cfg.playback_provider || "").toLowerCase();
-        const playbackEnabled = Boolean(cfg.playback_configured ?? cfg.tautulli_configured);
-        const label = provider === "jellystat"
-          ? "Jellystat"
-          : (provider === "tautulli" ? "Tautulli" : (provider === "plex" ? "Plex" : "Playback"));
-        const refreshBtn = document.getElementById("refreshTautulliBtn");
-        const deepRefreshBtn = document.getElementById("deepRefreshTautulliBtn");
-        const playbackLabelEl = document.querySelector("[data-playback-label]");
-        const showDeepRefresh = playbackEnabled && provider !== "jellystat";
-
-        if (playbackLabelEl) {
-          playbackLabelEl.textContent = label;
-        }
-        if (refreshBtn) {
-          refreshBtn.textContent = `Re-match from ${label}`;
-          refreshBtn.title = `Re-match using current ${label} data`;
-          refreshBtn.classList.toggle("hidden", !playbackEnabled);
-          refreshBtn.disabled = !playbackEnabled;
-        }
-        if (deepRefreshBtn) {
-          deepRefreshBtn.textContent = `Rebuild ${label} data`;
-          deepRefreshBtn.title = `Refresh ${label} library data, then rebuild matches`;
-          deepRefreshBtn.classList.toggle("hidden", !showDeepRefresh);
-          deepRefreshBtn.disabled = !showDeepRefresh;
-        }
-      } catch {
-      }
-    })();
-  </script>
 </body>
 
 </html>

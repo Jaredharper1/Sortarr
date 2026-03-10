@@ -14,7 +14,7 @@
   <TemplateURL>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/docs/unraid-template.xml</TemplateURL>
 
   <Overview>Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage.</Overview>
-  <Description>Storage insights dashboard for Sonarr and Radarr libraries. Read-only and safe.</Description>
+  <Description>Storage insights dashboard for Sonarr and Radarr libraries. Secrets are migrated to /config/secrets and plaintext secret fallback is disabled.</Description>
 
   <Category>MediaApp:Tools</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>
@@ -62,4 +62,28 @@
           Display="advanced"
           Required="false"
           Mask="false">/config/Sortarr.env</Config>
+
+  <Config Name="SORTARR_STORE_SECRETS_AS_FILES"
+          Target="SORTARR_STORE_SECRETS_AS_FILES"
+          Default="1"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">1</Config>
+
+  <Config Name="SORTARR_ALLOW_PLAINTEXT_SECRETS"
+          Target="SORTARR_ALLOW_PLAINTEXT_SECRETS"
+          Default="0"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">0</Config>
+
+  <Config Name="SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY"
+          Target="SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY"
+          Default="0"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">0</Config>
 </Container>

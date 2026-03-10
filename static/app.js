@@ -43,6 +43,7 @@ const statusRowEl = document.getElementById("statusRow");
 const statusPillEl = document.getElementById("statusPill");
 const partialBannerEl = document.getElementById("partialBanner");
 const fastModeBannerEl = document.getElementById("fastModeBanner");
+const csrfBannerEl = document.getElementById("csrfBanner");
 const playbackLabelEls = document.querySelectorAll("[data-playback-label]");
 const playbackTitleEls = document.querySelectorAll("[data-playback-title]");
 const playbackMatchTitleEls = document.querySelectorAll("[data-playback-match-title]");
@@ -1659,6 +1660,7 @@ function findTopVisibleRowIndex(rows, visibleTop) {
 }
 
 function captureTableScrollAnchor() {
+  if (isSeriesExpansionActive()) return null;
   if (!tableWrapEl || !tbody) return null;
   const rows = getTableSnapRows();
   if (!rows || !rows.length) return null;
@@ -1714,6 +1716,7 @@ function restoreTableScrollAnchor(anchor) {
 }
 
 function scheduleScrollAnchorRestore(anchor, token) {
+  if (isSeriesExpansionActive()) return;
   if (!anchor) return;
   pendingScrollAnchor = {
     ...anchor,
@@ -1726,6 +1729,10 @@ function scheduleScrollAnchorRestore(anchor, token) {
 
 function attemptScrollAnchorRestore() {
   scrollAnchorFrame = null;
+  if (isSeriesExpansionActive()) {
+    pendingScrollAnchor = null;
+    return;
+  }
   const anchor = pendingScrollAnchor;
   if (!anchor) return;
   const restored = restoreTableScrollAnchor(anchor);
@@ -2076,8 +2083,8 @@ function setFiltersCollapsed(collapsed) {
   filtersEl.classList.toggle("filters--collapsed", filtersCollapsed);
   if (filtersToggleBtn) {
     filtersToggleBtn.setAttribute("aria-expanded", String(!filtersCollapsed));
-    filtersToggleBtn.textContent = filtersCollapsed ? "▾" : "▴";
     filtersToggleBtn.title = filtersCollapsed ? t("Show filters and chips") : t("Hide filters and chips");
+    filtersToggleBtn.setAttribute("aria-label", filtersToggleBtn.title);
   }
   try {
     localStorage.setItem(FILTERS_COLLAPSED_KEY, filtersCollapsed ? "1" : "0");
@@ -2207,10 +2214,14 @@ function readCookie(name) {
 }
 
 function getCsrfToken() {
+  // Prefer the cookie token because it stays current if a page/view rotates CSRF.
+  // The meta tag can become stale in long-lived tabs or setup/auth navigation paths.
+  const cookieToken = readCookie(CSRF_COOKIE_NAME);
+  if (cookieToken) return cookieToken;
   const meta = document.querySelector('meta[name="csrf-token"]');
   const metaToken = meta && meta.getAttribute("content");
   if (metaToken) return metaToken;
-  return readCookie(CSRF_COOKIE_NAME);
+  return "";
 }
 
 function withCsrfHeaders(headers = {}) {
@@ -2275,7 +2286,7 @@ const STATUS_PILL_LOADED_MS = 5000;
 let tautulliRefreshReloadTimer = null;
 let copyToastEl = null;
 let copyToastTimer = null;
-const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null };
+const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null, security: null };
 const healthState = { sonarr: null, radarr: null, lastFetchedAt: { sonarr: 0, radarr: 0 }, dismissed: { sonarr: {}, radarr: {} } };
 const HEALTH_DISMISS_KEY = "Sortarr-health-dismissed";
 let columnVisibilityVersion = 0;
@@ -3425,6 +3436,7 @@ function setupRadarrPosterTooltipDelegation() {
   window.addEventListener("resize", () => hideRadarrPosterTooltip());
 }
 setupRadarrPosterTooltipDelegation._done = false;
+const SONARR_EXPANSION_SORT_STORAGE_KEY = "Sortarr-sonarr-expansion-sort";
 const sonarrExpansionState = {
   expandedSeries: new Set(),
   expandedSeasons: new Set(),
@@ -3435,6 +3447,8 @@ const sonarrExpansionState = {
   fastModeBySeries: new Map(),
   childRowsBySeries: new Map(),
   expansionHeightBySeries: new Map(),
+  seasonSortDir: "asc",
+  episodeSortDir: "asc",
 };
 const SERIES_EXPANSION_MAX_HEIGHT = 280;
 const SERIES_EXPANSION_ROW_HEIGHT = 32;
@@ -3920,6 +3934,18 @@ function updateFastModeBanner() {
   if (!fastModeBannerEl) return;
   const show = activeApp === "sonarr" && fastModeByApp.sonarr;
   fastModeBannerEl.classList.toggle("hidden", !show);
+}
+
+function updateCsrfBanner() {
+  if (!csrfBannerEl) return;
+  const payload = statusState.security && statusState.security.csrf;
+  const show = Boolean(payload && payload.show && payload.message);
+  csrfBannerEl.classList.toggle("hidden", !show);
+  if (!show) {
+    csrfBannerEl.textContent = "";
+    return;
+  }
+  csrfBannerEl.textContent = String(payload.message || "");
 }
 
 function getLoadedRowProgressCounts(app = activeApp) {
@@ -4413,7 +4439,7 @@ async function refreshActiveAppData() {
   } catch (e) {
     setStatus(t("errorPrefix", "Error: ") + e.message);
   }
-  load(true);
+  load(false);
 }
 
 function updateArrRefreshButtons() {
@@ -5266,12 +5292,14 @@ async function fetchStatusNow({ silent = false, lite = false } = {}) {
     const prevTautulli = statusState.tautulli;
     statusState.apps = mergeStatusApps(statusState.apps, data.apps) || statusState.apps;
     statusState.tautulli = data.tautulli || statusState.tautulli;
+    statusState.security = data.security || null;
     tautulliMatched = Boolean(statusState.tautulli?.configured || tautulliEnabled);
     applyPlexScopeFromStatus(data.scope || {});
     lastStatusFetchAt = Date.now();
     syncTautulliPendingFromStatus(prevTautulli, statusState.tautulli);
     handleTautulliRefreshState(prevTautulli, statusState.tautulli);
     updateStatusPanel();
+    updateCsrfBanner();
     updatePlexLibraryScopeControl();
     updateEffectiveSourcesLine();
     updateLastUpdatedDisplay();
@@ -5530,9 +5558,22 @@ function getSonarrSeriesKeyFromRow(row) {
 
 function getCachedSeriesExpansionHeight(seriesKey) {
   if (!seriesKey) return 0;
+  const childRow = sonarrExpansionState.childRowsBySeries.get(seriesKey);
+  if (childRow && childRow.isConnected) {
+    try {
+      const liveHeight = Number(childRow.getBoundingClientRect().height);
+      if (Number.isFinite(liveHeight) && liveHeight > 0) {
+        const rounded = Math.round(liveHeight * 100) / 100;
+        sonarrExpansionState.expansionHeightBySeries.set(seriesKey, rounded);
+        return rounded;
+      }
+    } catch { }
+  }
   const value = Number(sonarrExpansionState.expansionHeightBySeries.get(seriesKey));
   if (Number.isFinite(value) && value > 0) return value;
-  return SERIES_EXPANSION_MAX_HEIGHT;
+  // First interaction after opening can happen before height caching settles.
+  // Use a conservative estimate here to avoid large virtual-window row jumps.
+  return Math.min(SERIES_EXPANSION_MAX_HEIGHT, 220);
 }
 
 function cacheSeriesExpansionHeight(seriesKey, childRowEl) {
@@ -6136,7 +6177,6 @@ async function requestArrRefresh(app, options = {}) {
 async function requestArrItemReload(app, options = {}) {
   const itemId = options.itemId;
   const instanceId = options.instanceId || "";
-  const forceTautulli = options.forceTautulli === true;
   const idKey = app === "sonarr" ? "seriesId" : "movieId";
   const base = app === "sonarr" ? "/api/sonarr/item" : "/api/radarr/item";
   if (!itemId) {
@@ -6147,10 +6187,35 @@ async function requestArrItemReload(app, options = {}) {
   if (instanceId) {
     params.set("instance_id", instanceId);
   }
-  if (forceTautulli) {
-    params.set("tautulli_refresh", "1");
-  }
   const res = await fetch(apiUrl(`${base}?${params.toString()}`));
+  if (!res.ok) {
+    const detail = await readErrorDetail(res);
+    const err = new Error(detail || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+async function requestArrItemPlaybackRefresh(app, options = {}) {
+  const itemId = options.itemId;
+  const instanceId = options.instanceId || "";
+  const idKey = app === "sonarr" ? "seriesId" : "movieId";
+  const base = app === "sonarr"
+    ? "/api/sonarr/item/playback_refresh"
+    : "/api/radarr/item/playback_refresh";
+  if (!itemId) {
+    throw new Error(`${idKey} is required.`);
+  }
+  const payload = { [idKey]: itemId };
+  if (instanceId) {
+    payload.instance_id = instanceId;
+  }
+  const res = await fetch(apiUrl(base), {
+    method: "POST",
+    headers: withCsrfHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
   if (!res.ok) {
     const detail = await readErrorDetail(res);
     const err = new Error(detail || res.statusText);
@@ -6521,10 +6586,15 @@ async function handleRowRefreshClick(btn) {
     if (arrOk) {
       try {
         await reloadDelayPromise;
+        if (shouldForceTautulli) {
+          await requestArrItemPlaybackRefresh(app, {
+            itemId,
+            instanceId,
+          });
+        }
         const updatedRow = await requestArrItemReload(app, {
           itemId,
           instanceId,
-          forceTautulli: shouldForceTautulli,
         });
         const filtersActive = hasActiveFilters();
         const shouldClearFilters = filtersActive && !rowMatchesCurrentFilters(updatedRow);
@@ -7273,6 +7343,101 @@ function renderSeriesError(container, message) {
   container.appendChild(error);
 }
 
+function normalizeExpansionSortDir(value) {
+  return value === "desc" ? "desc" : "asc";
+}
+
+function loadSonarrExpansionSortPrefs() {
+  let prefs = null;
+  try {
+    prefs = JSON.parse(localStorage.getItem(SONARR_EXPANSION_SORT_STORAGE_KEY) || "");
+  } catch {
+    prefs = null;
+  }
+  if (!prefs || typeof prefs !== "object") return;
+  sonarrExpansionState.seasonSortDir = normalizeExpansionSortDir(prefs.seasonSortDir);
+  sonarrExpansionState.episodeSortDir = normalizeExpansionSortDir(prefs.episodeSortDir);
+}
+
+function saveSonarrExpansionSortPrefs() {
+  const payload = {
+    seasonSortDir: normalizeExpansionSortDir(sonarrExpansionState.seasonSortDir),
+    episodeSortDir: normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir),
+  };
+  localStorage.setItem(SONARR_EXPANSION_SORT_STORAGE_KEY, JSON.stringify(payload));
+}
+
+function sortSeasonsForExpansion(seasons) {
+  const dir = sonarrExpansionState.seasonSortDir === "desc" ? -1 : 1;
+  return [...(Array.isArray(seasons) ? seasons : [])].sort((a, b) => {
+    const aSeason = Number(a?.seasonNumber ?? 0);
+    const bSeason = Number(b?.seasonNumber ?? 0);
+    if (aSeason !== bSeason) {
+      return (aSeason - bSeason) * dir;
+    }
+    return 0;
+  });
+}
+
+function sortEpisodesForExpansion(episodes) {
+  const dir = sonarrExpansionState.episodeSortDir === "desc" ? -1 : 1;
+  return [...(Array.isArray(episodes) ? episodes : [])].sort((a, b) => {
+    const aEpisode = Number(a?.episodeNumber ?? 0);
+    const bEpisode = Number(b?.episodeNumber ?? 0);
+    if (aEpisode !== bEpisode) {
+      return (aEpisode - bEpisode) * dir;
+    }
+    const aId = Number(a?.episodeId ?? 0);
+    const bId = Number(b?.episodeId ?? 0);
+    if (aId !== bId) {
+      return (aId - bId) * dir;
+    }
+    return 0;
+  });
+}
+
+function syncSeriesExpansionSortControls(expansion) {
+  if (!expansion) return;
+  const seasonSelect = expansion.querySelector('[data-role="series-season-sort"]');
+  const episodeSelect = expansion.querySelector('[data-role="series-episode-sort"]');
+  if (seasonSelect) {
+    seasonSelect.value = normalizeExpansionSortDir(sonarrExpansionState.seasonSortDir);
+  }
+  if (episodeSelect) {
+    episodeSelect.value = normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir);
+  }
+  syncSeriesSortCaretDirections(expansion);
+}
+
+function syncSeriesSortCaretDirections(expansion) {
+  if (!expansion) return;
+  const sortSelects = expansion.querySelectorAll(
+    '[data-role="series-season-sort"], [data-role="series-episode-sort"]'
+  );
+  sortSelects.forEach(selectEl => {
+    const customSelect = selectEl.closest(".custom-select");
+    if (!customSelect) return;
+    customSelect.dataset.sortDir = normalizeExpansionSortDir(selectEl.value);
+  });
+}
+
+function rerenderSeriesExpansionByKey(seriesKey) {
+  if (!seriesKey) return;
+  const rowEl = findSeriesRowByKey(seriesKey);
+  if (!rowEl) return;
+  const childRow = sonarrExpansionState.childRowsBySeries.get(seriesKey) ||
+    rowEl.nextElementSibling;
+  if (!childRow || !childRow.classList?.contains("series-child-row")) return;
+  const expansion = childRow.querySelector(".series-expansion");
+  const body = expansion?.querySelector('[data-role="series-expansion-body"]');
+  if (!expansion || !body) return;
+  syncSeriesExpansionSortControls(expansion);
+  const seasons = sonarrExpansionState.seasonsBySeries.get(seriesKey);
+  if (Array.isArray(seasons)) {
+    renderSeasonList(body, seriesKey, seasons);
+  }
+}
+
 function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
   const template = document.getElementById("sonarrSeriesExpansionTemplate");
   let shell = null;
@@ -7290,6 +7455,20 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
           <button class="series-expansion-toggle hidden" type="button" data-role="series-expand-all-seasons" aria-pressed="false">${t("Expand all seasons", "Expand all seasons")}</button>
           <div class="series-expansion-title">${t("series_expansion_title_seasons", "Seasons")}</div>
           <div class="series-expansion-actions">
+            <label class="series-sort-control" title="${escapeHtml(t("Season order", "Season order"))}">
+              <span>${escapeHtml(t("Seasons", "Seasons"))}</span>
+              <select data-role="series-season-sort" aria-label="${escapeHtml(t("Season order", "Season order"))}">
+                <option value="asc">${escapeHtml(t("Ascending", "Ascending"))}</option>
+                <option value="desc">${escapeHtml(t("Descending", "Descending"))}</option>
+              </select>
+            </label>
+            <label class="series-sort-control" title="${escapeHtml(t("Episode order", "Episode order"))}">
+              <span>${escapeHtml(t("Episodes", "Episodes"))}</span>
+              <select data-role="series-episode-sort" aria-label="${escapeHtml(t("Episode order", "Episode order"))}">
+                <option value="asc">${escapeHtml(t("Ascending", "Ascending"))}</option>
+                <option value="desc">${escapeHtml(t("Descending", "Descending"))}</option>
+              </select>
+            </label>
             <div class="series-expansion-status muted" data-role="series-expansion-status"></div>
           </div>
         </div>
@@ -7303,9 +7482,22 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
   if (instanceId != null) {
     shell.dataset.instanceId = String(instanceId);
   }
+  const seasonSortSelect = shell.querySelector('[data-role="series-season-sort"]');
+  const episodeSortSelect = shell.querySelector('[data-role="series-episode-sort"]');
+  if (seasonSortSelect && episodeSortSelect && !shouldUseNativeSelects()) {
+    const sortIdBase = String(seriesKey || seriesId || "series")
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase();
+    if (!seasonSortSelect.id) seasonSortSelect.id = `series-season-sort-${sortIdBase}`;
+    if (!episodeSortSelect.id) episodeSortSelect.id = `series-episode-sort-${sortIdBase}`;
+    initCustomSelect(seasonSortSelect);
+    initCustomSelect(episodeSortSelect);
+  }
   const body = shell.querySelector('[data-role="series-expansion-body"]') || shell;
   const statusEl = shell.querySelector('[data-role="series-expansion-status"]');
   const posterImg = shell.querySelector('[data-role="series-expansion-poster"]');
+  syncSeriesExpansionSortControls(shell);
   return { shell, body, statusEl, posterImg };
 }
 
@@ -7490,8 +7682,7 @@ function renderSeasonList(container, seriesKey, seasons) {
   const expansion = container.closest(".series-expansion");
   const seriesId = expansion?.dataset?.seriesId || "";
   const instanceId = expansion?.dataset?.instanceId || "";
-  const visible = Array.isArray(seasons)
-    ? seasons.filter(season => {
+  const visible = sortSeasonsForExpansion(seasons).filter(season => {
       const seasonNumber = Number(season.seasonNumber || 0);
       if (seasonNumber !== 0) return true;
       const fileCount = season.episodeFileCount;
@@ -7503,8 +7694,7 @@ function renderSeasonList(container, seriesKey, seasons) {
         return Number(episodeCount) > 0;
       }
       return false;
-    })
-    : [];
+    });
   if (!visible.length) {
     const empty = document.createElement("div");
     empty.className = "series-expansion-empty";
@@ -7634,14 +7824,15 @@ async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container,
 function renderEpisodeList(container, episodes) {
   if (!container) return;
   container.textContent = "";
-  if (!episodes || !episodes.length) {
+  const orderedEpisodes = sortEpisodesForExpansion(episodes);
+  if (!orderedEpisodes.length) {
     const empty = document.createElement("div");
     empty.className = "series-expansion-empty";
     empty.textContent = t("sonarr_no_episodes_available", "No episodes available.");
     container.appendChild(empty);
     return;
   }
-  const orderedColumns = getEpisodeGridColumns(episodes);
+  const orderedColumns = getEpisodeGridColumns(orderedEpisodes);
   applyEpisodeGridTemplate(container, orderedColumns);
   const header = buildEpisodeGridHeader(orderedColumns);
   const renderEpisodeRow = (episode, index) => {
@@ -7652,14 +7843,14 @@ function renderEpisodeList(container, episodes) {
     }
     return row;
   };
-  if (episodes.length <= 40) {
+  if (orderedEpisodes.length <= 40) {
     const scroll = document.createElement("div");
     scroll.className = "series-episode-scroll";
     scroll.style.maxHeight = `${SERIES_EXPANSION_MAX_HEIGHT}px`;
     scroll.appendChild(header);
     const rows = document.createElement("div");
     rows.className = "series-episode-rows";
-    episodes.forEach((episode, index) => {
+    orderedEpisodes.forEach((episode, index) => {
       rows.appendChild(renderEpisodeRow(episode, index));
     });
     scroll.appendChild(rows);
@@ -7685,7 +7876,7 @@ function renderEpisodeList(container, episodes) {
     headerEl: header,
   });
   vlist.setRenderRow(renderEpisodeRow);
-  vlist.setData(episodes);
+  vlist.setData(orderedEpisodes);
   container.appendChild(vlist.root);
   const selectedIndex = Number(container.dataset.selectedEpisodeIndex);
   const seasonKey = container.dataset.seriesKey || "";
@@ -10276,6 +10467,7 @@ function resetColumnPrefs() {
 function updateSortIndicators() {
   document.querySelectorAll("th[data-sort]").forEach(h => {
     h.classList.remove("active-sort");
+    h.classList.remove("sort-asc", "sort-desc");
     const i = h.querySelector(".sort-indicator");
     if (i) i.textContent = "";
   });
@@ -10290,8 +10482,9 @@ function updateSortIndicators() {
   if (!th) return;
 
   th.classList.add("active-sort");
+  th.classList.add(sortDir === "asc" ? "sort-asc" : "sort-desc");
   const ind = th.querySelector(".sort-indicator");
-  if (ind) ind.textContent = sortDir === "asc" ? "^" : "v";
+  if (ind) ind.textContent = "";
 }
 
 function updateColumnVisibility(rootEl = document) {
@@ -12442,7 +12635,9 @@ async function load(refresh, options = {}) {
 
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const params = [];
-    if (refresh) params.push("refresh=1");
+    if (refresh) {
+      await requestArrRefresh(app);
+    }
     if (options.lite === true) {
       params.push("lite=1");
     } else if (options.lite === false) {
@@ -12796,7 +12991,9 @@ async function prefetch(app, refresh, options = {}) {
   try {
     const base = app === "sonarr" ? "/api/shows" : "/api/movies";
     const params = [];
-    if (refresh) params.push("refresh=1");
+    if (refresh) {
+      await requestArrRefresh(app);
+    }
     if (options.lite === true) {
       params.push("lite=1");
     } else if (options.lite === false) {
@@ -13048,6 +13245,27 @@ if (advancedHelpBtn) {
 }
 
 if (tbody) {
+  tbody.addEventListener("change", e => {
+    const seasonSort = e.target.closest('[data-role="series-season-sort"]');
+    if (seasonSort) {
+      sonarrExpansionState.seasonSortDir = normalizeExpansionSortDir(seasonSort.value);
+      syncSeriesSortCaretDirections(seasonSort.closest(".series-expansion"));
+      saveSonarrExpansionSortPrefs();
+      const expansion = seasonSort.closest(".series-expansion");
+      const seriesKey = expansion?.dataset?.seriesKey || "";
+      rerenderSeriesExpansionByKey(seriesKey);
+      return;
+    }
+    const episodeSort = e.target.closest('[data-role="series-episode-sort"]');
+    if (episodeSort) {
+      sonarrExpansionState.episodeSortDir = normalizeExpansionSortDir(episodeSort.value);
+      syncSeriesSortCaretDirections(episodeSort.closest(".series-expansion"));
+      saveSonarrExpansionSortPrefs();
+      const expansion = episodeSort.closest(".series-expansion");
+      const seriesKey = expansion?.dataset?.seriesKey || "";
+      rerenderSeriesExpansionByKey(seriesKey);
+    }
+  });
   tbody.addEventListener("mouseover", e => {
     const updated = updateSelectionFromPointer(e.target);
     if (updated) {
@@ -13069,6 +13287,9 @@ if (tbody) {
         const scrollAnchor = captureTableScrollAnchor();
         render(dataByApp[activeApp] || [], { scrollAnchor });
       }
+      return;
+    }
+    if (e.target.closest(".series-sort-control")) {
       return;
     }
     const expandAllBtn = e.target.closest('[data-role="series-expand-all-seasons"]');
@@ -14156,21 +14377,35 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
   if (!silent) updatePlexMeta(t("Fetching Plex insights..."));
   plexInsightsState.loading = true;
   try {
-    const params = new URLSearchParams();
-    params.set("hub_count", "6");
-    params.set("item_count", "8");
-    params.set("include", "hubs,activities,butler,sections,match_health");
-    if (plexInsightsState.sectionId) params.set("section_id", plexInsightsState.sectionId);
-    if (refresh) params.set("refresh", "1");
-    const res = await fetch(apiUrl(`/api/plex/insights?${params.toString()}`));
+    const payload = {
+      hub_count: 6,
+      item_count: 8,
+      include: "hubs,activities,butler,sections,match_health",
+      ...(plexInsightsState.sectionId ? { section_id: plexInsightsState.sectionId } : {}),
+    };
+    let res;
+    if (refresh) {
+      res = await fetch(apiUrl("/api/plex/insights"), {
+        method: "POST",
+        headers: withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const params = new URLSearchParams();
+      params.set("hub_count", "6");
+      params.set("item_count", "8");
+      params.set("include", "hubs,activities,butler,sections,match_health");
+      if (plexInsightsState.sectionId) params.set("section_id", plexInsightsState.sectionId);
+      res = await fetch(apiUrl(`/api/plex/insights?${params.toString()}`));
+    }
     if (!res.ok) {
       throw new Error(await res.text());
     }
-    const payload = await res.json();
-    plexInsightsState.data = payload || {};
+    const responsePayload = await res.json();
+    plexInsightsState.data = responsePayload || {};
     plexInsightsState.loading = false;
     renderPlexInsights();
-    const fetchedAt = payload?.fetched_at || payload?.cache_ts || 0;
+    const fetchedAt = responsePayload?.fetched_at || responsePayload?.cache_ts || 0;
     const sectionLabel = getPlexSectionLabel();
     const metaBits = [];
     if (fetchedAt) {
@@ -14849,7 +15084,8 @@ function scheduleDeferredUiBindings() {
     try {
       const url = new URL(window.location.href);
       url.searchParams.delete(RESET_UI_PARAM);
-      window.history.replaceState({}, "", url);
+      const cleanPath = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, "", cleanPath);
     } catch (e) {
       console.warn("reset_ui replaceState failed", e);
     }
@@ -14857,6 +15093,7 @@ function scheduleDeferredUiBindings() {
   loadColumnPrefsState();
   loadColumnPrefs();
   loadCsvColumnsState();
+  loadSonarrExpansionSortPrefs();
   loadPlexLibrarySelection();
   loadViewState();
   applyViewState(activeApp);

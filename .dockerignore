@@ -1,5 +1,6 @@
 docs/Thumbs.db
 .vscode/
+*.bak
 smoke_test.py
 selenium_stress_test.py
 tautulli_id_match_test.py
@@ -32,3 +33,5 @@ docs/openapitools.json
 docs/plex-openapi.yaml
 docs/radarr-openapi.json
 docs/sonarr-openapi.json
+secrets/
+.env

@@ -2,17 +2,49 @@
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-10
+
+### Security
+- Added a `0.8.3` security-upgrade flow for configured installs from `0.8.2.1` and earlier: upgrades now lock into a one-time Setup remediation save before normal access resumes.
+- Persistent session-secret references are now the enforced steady-state model. First bootstrap may use a temporary ephemeral session secret until the first successful Setup save, but configured startup aborts when a persistent secret cannot be resolved and unsafe recovery is not enabled.
+- Session-secret resolution is now secure by default: `SORTARR_SECRET_KEY` honors `*_FILE`, `*_CRED_TARGET`, and `wincred:` references, plaintext secret values are treated as migration-only input, and startup rewrites legacy plaintext secrets to secret files or Windows Credential Manager refs before Flask resolves the signing key.
+- Added bounded unsafe recovery mode via `SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=1` for lockout repair only; recovery windows now auto-expire and cannot be combined with trusted origins unless explicitly forced.
+- Configured installs now remain in setup-required state until both Basic Auth and persistent-secret requirements are satisfied. Partial Basic Auth config routes into Setup remediation instead of returning a hard `503`.
+- Disabled interactive setup connection testing until Basic Auth is configured and security remediation is complete, removing the remaining pre-auth outbound test path while preserving final save-time validation.
+- Setup connection-test failures now return normalized connection errors instead of helper-specific exception text, and secret-related startup/migration warnings now use count-based summaries instead of enumerating secret-setting identifiers.
+- Hardened CSRF policy around exact trusted origins: trusted-origin fallback is token-gated, same-host by default, cross-host only with `ALLOW_CROSS_HOST_TRUSTED_ORIGINS=1`, and setup/startup now reject mismatched trusted-origin/public-host combinations.
+- Added proxy/CSRF diagnostics (`GET /api/diagnostics/csrf`) and security self-check diagnostics (`GET /api/diagnostics/security-self-check`) so operators can validate proxy forwarding, cookie policy, persistent-secret posture, unsafe recovery state, and trusted-origin policy.
+- Tightened the default CSP `connect-src` policy to same-origin only, and made session/CSRF cookie `Secure` defaults follow deployment mode: direct HTTP remains usable by default, while proxied modes stay `Secure` unless explicitly overridden.
+- Removed state-changing `GET ?refresh=1`; refresh actions now use CSRF-protected POST endpoints, including Plex insights refresh and per-item playback refresh flows.
+
+### Features
+- Sonarr series expansion now includes Season and Episode sort controls (Ascending/Descending) with persisted UI preferences.
+- Episode-list sort controls now use the glass custom-select treatment for consistent styling with the rest of the UI.
+- Episode-list sort carets now indicate selected sort direction (up for ascending, down for descending), independent of open/closed menu state.
+
+### UI/UX
+- Upgraded main table column sort indicators from text glyphs to animated caret indicators with direction classes.
+- Tuned sort-indicator sizing and active-state contrast for both light and dark themes.
+- Updated the Filters show/hide button to use a single animated glyph path with synced aria-label/title state, removing duplicate-icon rendering paths.
+
+### Fixes
+- Hardened expansion scroll behavior by disabling table scroll-anchor capture/restore while any Sonarr series expansion is active.
+- Reduced first-interaction expansion jump risk by preferring live measured expansion heights and using a conservative fallback estimate in virtualized Sonarr expansion calculations.
+
 ## [0.8.2.1] - 2026-03-04
 
 ### Fixes
 - Preloaded the env file before reverse-proxy `ProxyFix` initialization so `SORTARR_PROXY_HOPS*` settings from `.env` apply at startup.
-- Added targeted CSRF mismatch warning logs with sanitized request URL plus `Host` / `Origin` / `Referer` / `X-Forwarded-*` context for proxy troubleshooting.
+- Added targeted CSRF mismatch warning logs with sanitized request URL plus `Host` / `Origin` / `Referer` / `X-Forwarded-*` context.
+- Added narrow same-host CSRF scheme fallback for proxied setups: when only `http`/`https` differs and token validation succeeds, request is accepted and logged (`origin-scheme-fallback-accepted` / `referer-scheme-fallback-accepted`).
+- Added optional exact trusted-origin CSRF fallback via `SORTARR_CSRF_TRUSTED_ORIGINS` (still token-gated), with warning reason codes for accepted trusted-origin fallbacks.
+- CSRF tokens are now session-bound with TTL (`SORTARR_CSRF_TOKEN_TTL_SECONDS`, min `60`), and setup GET rotates the token boundary.
+- Added explicit CSRF token-state warning reasons (`token-missing-cookie`, `token-missing-request`, `token-mismatch`, `token-session-mismatch`) for easier diagnostics.
 - Replaced Windows credential write warning key names with non-sensitive category labels to avoid logging secret-setting identifiers.
 
-## Important Migration Notice
-- Secret-file/Credential-Manager support is currently `opt-in` only to give existing users time to prepare.
-- This is a transition period, not a permanent default.
-- In releases approaching `1.0`, this behavior will be flipped to `opt-out` (secure secret resolution enabled by default).
+## Historical Migration Note (0.8.2 and earlier)
+- Before `0.8.3`, secret-file/Credential-Manager resolution was introduced as a transition path.
+- As of `0.8.3`, secure secret resolution is the default posture; current builds migrate legacy plaintext values to external refs instead of supporting plaintext runtime fallback.
 
 ## [0.8.2] - 2026-02-26
 

@@ -7,6 +7,11 @@
   const apiOrigin = window.location && window.location.host
     ? `${window.location.protocol}//${window.location.host}`
     : "";
+  const setupForm = document.querySelector(".setup-form");
+  const setupTestsEnabled = !setupForm || String(setupForm.dataset.setupTestsEnabled || "1") === "1";
+  const setupSecurityLocked = Boolean(
+    setupForm && String(setupForm.dataset.securityLocked || "0") === "1"
+  );
 
   const CSRF_COOKIE_NAME = "sortarr_csrf";
 
@@ -27,10 +32,12 @@
   }
 
   function getCsrfToken() {
+    const cookieToken = readCookie(CSRF_COOKIE_NAME);
+    if (cookieToken) return cookieToken;
     const meta = document.querySelector('meta[name="csrf-token"]');
     const metaToken = meta && meta.getAttribute("content");
     if (metaToken) return metaToken;
-    return readCookie(CSRF_COOKIE_NAME);
+    return "";
   }
 
   function withCsrfHeaders(headers = {}) {
@@ -39,8 +46,33 @@
     return { ...headers, "X-CSRF-Token": token };
   }
 
+  function syncSetupFormCsrfToken() {
+    const form = document.querySelector(".setup-form");
+    if (!form) return;
+    const csrfInput = form.querySelector('input[name="csrf_token"]');
+    if (!csrfInput) return;
+    const token = getCsrfToken();
+    if (token) {
+      csrfInput.value = token;
+    }
+  }
+
   function delay(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  function setSecretInlineMessage(message, state) {
+    const el = document.getElementById("secretKeyInlineMessage");
+    if (!el) return;
+    if (!message) {
+      el.textContent = "";
+      el.classList.add("hidden");
+      el.classList.remove("is-error", "is-ok", "is-pending");
+      return;
+    }
+    el.textContent = message;
+    el.classList.remove("hidden", "is-error", "is-ok", "is-pending");
+    if (state) el.classList.add(state);
   }
 
   async function ensureMinimumDelay(startedAt, minMs) {
@@ -98,11 +130,14 @@
     const keyField = button.dataset.keyId || "";
     const clientIdField = button.dataset.clientId || "";
     const inlineKey = button.dataset.inlineKey || "";
+    const slot = button.dataset.slot || "";
+    const storedSecretAvailable = String(button.dataset.storedSecret || "0") === "1";
 
     const url = getFieldValue(urlField);
     const apiKey = getFieldValue(keyField);
     const clientId = clientIdField ? getFieldValue(clientIdField) : "";
-    if (!url || !apiKey) {
+    const useStoredSecret = Boolean(url && !apiKey && storedSecretAvailable && slot);
+    if (!url || (!apiKey && !useStoredSecret)) {
       updateInlineMessage(
         inlineKey,
         (window.SORTARR_I18N && window.SORTARR_I18N.url_key_required)
@@ -136,6 +171,8 @@
           kind,
           url,
           api_key: apiKey,
+          slot,
+          use_stored_secret: useStoredSecret,
           ...(clientId ? { client_id: clientId } : {}),
         }),
       });
@@ -192,8 +229,90 @@
 
 
   document.querySelectorAll(".setup-test").forEach((button) => {
+    toggleButtonDisabled(button, !setupTestsEnabled);
     button.addEventListener("click", () => runTest(button));
   });
+
+  function generateSecretKey() {
+    if (!window.crypto || typeof window.crypto.getRandomValues !== "function") {
+      throw new Error("crypto unavailable");
+    }
+    const bytes = new Uint8Array(32);
+    window.crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+
+  async function initSecretKeyActions() {
+    const form = document.querySelector(".setup-form");
+    const input = document.querySelector('[name="sortarr_secret_key"]');
+    const generateBtn = document.getElementById("generateSecretKeyBtn");
+    if (!input || !generateBtn) return;
+
+    generateBtn.addEventListener("click", async () => {
+      try {
+        input.value = generateSecretKey();
+        setSecretInlineMessage(
+          (window.SORTARR_I18N && window.SORTARR_I18N.secret_generated)
+            ? window.SORTARR_I18N.secret_generated
+            : "Permanent secret key generated. Save settings to persist it.",
+          "is-ok"
+        );
+      } catch {
+        try {
+          const res = await fetch(apiUrl("/api/setup/secret_key"), {
+            method: "POST",
+            headers: withCsrfHeaders({ "Content-Type": "application/json" }),
+            credentials: "same-origin",
+            body: JSON.stringify({ action: "generate" }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          if (!res.ok || !payload.ok || !payload.secret_key) {
+            throw new Error("generate failed");
+          }
+          input.value = String(payload.secret_key || "");
+          setSecretInlineMessage(
+            (window.SORTARR_I18N && window.SORTARR_I18N.secret_generated)
+              ? window.SORTARR_I18N.secret_generated
+              : "Permanent secret key generated. Save settings to persist it.",
+            "is-ok"
+          );
+        } catch {
+          setSecretInlineMessage(
+            (window.SORTARR_I18N && window.SORTARR_I18N.secret_generate_failed)
+              ? window.SORTARR_I18N.secret_generate_failed
+              : "Unable to generate a secret key right now.",
+            "is-error"
+          );
+        }
+      }
+    });
+
+    if (form && String(form.dataset.ephemeralSecret || "") === "1") {
+      form.addEventListener("submit", (event) => {
+        if (String(input.value || "").trim()) {
+          return;
+        }
+        try {
+          input.value = generateSecretKey();
+          setSecretInlineMessage(
+            (window.SORTARR_I18N && window.SORTARR_I18N.secret_generated)
+              ? window.SORTARR_I18N.secret_generated
+              : "Permanent secret key generated. Save settings to persist it.",
+            "is-ok"
+          );
+        } catch {
+          event.preventDefault();
+          setSecretInlineMessage(
+            (window.SORTARR_I18N && window.SORTARR_I18N.secret_required_before_save)
+              ? window.SORTARR_I18N.secret_required_before_save
+              : "Generate or enter a permanent Session secret key before saving settings.",
+            "is-error"
+          );
+          generateBtn.focus();
+        }
+      });
+    }
+  }
 
   function buildPathMapInput(name, placeholder) {
     const input = document.createElement("input");
@@ -255,8 +374,8 @@
     const tautulliTest = document.querySelector('.setup-test[data-kind="tautulli"]');
     jellyFields.forEach((field) => toggleFieldDisabled(field, false));
     tautulliFields.forEach((field) => toggleFieldDisabled(field, false));
-    toggleButtonDisabled(jellyTest, false);
-    toggleButtonDisabled(tautulliTest, false);
+    toggleButtonDisabled(jellyTest, !setupTestsEnabled);
+    toggleButtonDisabled(tautulliTest, !setupTestsEnabled);
   }
 
   function initHistorySourceLock() {
@@ -430,11 +549,137 @@
   function initSourcePreferenceSelects() {
     initSetupCustomSelect(document.querySelector('[name="media_source_preference"]'));
     initSetupCustomSelect(document.querySelector('[name="history_source_preference"]'));
+    initSetupCustomSelect(document.querySelector('[name="proxy_preset"]'));
+  }
+
+  function updateProxyPresetFields() {
+    const preset = document.querySelector('[name="proxy_preset"]');
+    const custom = document.getElementById("proxyCustomFields");
+    if (!preset || !custom) return;
+    const isCustom = String(preset.value || "").trim().toLowerCase() === "custom";
+    custom.classList.toggle("hidden", !isCustom);
+  }
+
+  function initProxyPresetFields() {
+    const preset = document.querySelector('[name="proxy_preset"]');
+    if (!preset) return;
+    preset.addEventListener("change", updateProxyPresetFields);
+    updateProxyPresetFields();
+  }
+
+  function setCsrfDiagnosticsInline(message, state) {
+    const inline = document.getElementById("csrfDiagnosticsInlineMessage");
+    if (!inline) return;
+    if (!message) {
+      inline.textContent = "";
+      inline.classList.add("hidden");
+      inline.classList.remove("is-error", "is-ok", "is-pending");
+      return;
+    }
+    inline.textContent = message;
+    inline.classList.remove("hidden", "is-error", "is-ok", "is-pending");
+    if (state) inline.classList.add(state);
+  }
+
+  function setCsrfDiagnosticsOutput(lines = []) {
+    const output = document.getElementById("csrfDiagnosticsOutput");
+    if (!output) return;
+    if (!Array.isArray(lines) || !lines.length) {
+      output.textContent = "";
+      output.classList.add("hidden");
+      return;
+    }
+    output.textContent = lines.join("\n");
+    output.classList.remove("hidden");
+  }
+
+  function initSetupCsrfSync() {
+    const form = document.querySelector(".setup-form");
+    if (!form) return;
+    form.addEventListener("submit", () => {
+      syncSetupFormCsrfToken();
+    });
+    window.addEventListener("focus", syncSetupFormCsrfToken);
+    window.addEventListener("pageshow", syncSetupFormCsrfToken);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") {
+        syncSetupFormCsrfToken();
+      }
+    });
+    syncSetupFormCsrfToken();
+  }
+
+  function initCsrfDiagnosticsAction() {
+    const button = document.getElementById("runCsrfDiagnosticsBtn");
+    if (!button) return;
+    if (setupSecurityLocked) {
+      toggleButtonDisabled(button, true);
+      return;
+    }
+    button.addEventListener("click", async () => {
+      if (button.dataset.loading === "1") return;
+      button.dataset.loading = "1";
+      button.classList.add("is-testing");
+      button.setAttribute("aria-busy", "true");
+      setCsrfDiagnosticsInline(
+        (window.SORTARR_I18N && window.SORTARR_I18N.csrf_diag_running)
+          ? window.SORTARR_I18N.csrf_diag_running
+          : "Running CSRF/proxy diagnostics...",
+        "is-pending"
+      );
+      setCsrfDiagnosticsOutput([]);
+      try {
+        const res = await fetch(apiUrl("/api/diagnostics/csrf"), {
+          method: "GET",
+          credentials: "same-origin",
+          headers: withCsrfHeaders({}),
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload || payload.ok !== true) {
+          throw new Error((payload && payload.error) || "diagnostics failed");
+        }
+        const current = payload.current || {};
+        const last = payload.last_csrf_event || {};
+        const guidance = payload.guidance || {};
+        const lines = [
+          `Current proxy mode: ${current.proxy_mode_current || "unknown"}`,
+          `Suggested proxy mode: ${current.proxy_mode_suggested || "unknown"}`,
+          `Request scheme/host: ${current.scheme || "?"}://${current.host || "?"}`,
+          `X-Forwarded-Proto: ${((current.headers || {})["X-Forwarded-Proto"] || "").trim() || "(missing)"}`,
+          `X-Forwarded-Host: ${((current.headers || {})["X-Forwarded-Host"] || "").trim() || "(missing)"}`,
+          `X-Forwarded-For: ${((current.headers || {})["X-Forwarded-For"] || "").trim() || "(missing)"}`,
+          `Last CSRF event: ${last.seen ? `${last.reason || "unknown"} (${last.age_seconds ?? "?"}s ago)` : "none recorded"}`,
+        ];
+        if (guidance.message) lines.push(`Guidance: ${guidance.message}`);
+        setCsrfDiagnosticsOutput(lines);
+        setCsrfDiagnosticsInline(
+          (window.SORTARR_I18N && window.SORTARR_I18N.csrf_diag_done)
+            ? window.SORTARR_I18N.csrf_diag_done
+            : "Diagnostics complete.",
+          "is-ok"
+        );
+      } catch (err) {
+        setCsrfDiagnosticsInline(
+          `${(window.SORTARR_I18N && window.SORTARR_I18N.csrf_diag_failed)
+            ? window.SORTARR_I18N.csrf_diag_failed
+            : "Unable to run diagnostics."} ${err}`,
+          "is-error"
+        );
+      } finally {
+        button.dataset.loading = "0";
+        button.classList.remove("is-testing");
+        button.removeAttribute("aria-busy");
+      }
+    });
   }
 
   initPathMapGroups();
   initHistorySourceLock();
   initSourcePreferenceSelects();
+  initProxyPresetFields();
+  initSecretKeyActions();
+  initSetupCsrfSync();
+  initCsrfDiagnosticsAction();
 
   function applyCategoryTranslations() {
     const i18n = window.SORTARR_I18N || {};
