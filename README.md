@@ -8,13 +8,13 @@
 
 ---
 
-## 0.8.5 Release Notes
+## 0.8.5.1 Release Notes
 
-`0.8.5` is a packaging and logging follow-up to the `0.8.4` proxy/CSRF release.
+`0.8.5.1` is a hotfix for the `0.8.5` Docker publish failure.
 
-- Restores `run_waitress.py` to the Docker build context so the published Docker image can build and ship the same Waitress proxy-trust startup path used locally.
-- Keeps the `0.8.4` Waitress proxy-trust runtime fix intact for Docker deployments instead of failing during image publish.
-- Reduces Waitress proxy-trust startup logging to coarse state only, removing exact trusted proxy/header values from logs while preserving useful diagnostics.
+- Removes `run_waitress.py` from `.gitignore` and adds the file to the repository so release builds actually include the shared Waitress entrypoint.
+- Fixes the `Dockerfile` copy step for published images, allowing the container release pipeline to build the same Waitress proxy-trust startup path used locally.
+- Keeps the `0.8.5` packaging/logging changes intact while correcting the missing tracked-file regression.
 
 # Important 0.8.3 Security Upgrade Notice
 

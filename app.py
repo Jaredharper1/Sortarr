@@ -36,7 +36,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.5"
+APP_VERSION = "0.8.5.1"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"

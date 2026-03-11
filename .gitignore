@@ -13,7 +13,6 @@ sortarr_run.log
 Sortarr.startup.json
 Sortarr.startup.json.tmp
 docs/Thumbs.db
-run_waitress.py
 tests/
 compile_exe.ps1
 docs/SonarrAPI.v3.openapi.json

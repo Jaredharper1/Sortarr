@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.8.5.1] - 2026-03-12
+
+### Fixes
+- Hotfix for the `0.8.5` container publish failure: removed `run_waitress.py` from `.gitignore` and added the shared Waitress entrypoint to the repository so Docker releases can actually copy `/app/run_waitress.py` during image builds.
+
 ## [0.8.5] - 2026-03-12
 
 ### Fixes
