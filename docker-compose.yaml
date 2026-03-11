@@ -17,6 +17,12 @@ services:
       # eg. SORTARR_PROXY_MODE=single
       # eg. SORTARR_PROXY_MODE=double
       # eg. SORTARR_PROXY_MODE=direct
+      # Optional: Immediate upstream proxy IP/host for Waitress trusted-proxy handling
+      # eg. SORTARR_WAITRESS_TRUSTED_PROXY=172.21.0.22
+      # eg. SORTARR_WAITRESS_TRUSTED_PROXY=traefik
+      # Optional: Only for path-prefix proxy setups
+      # eg. SORTARR_PROXY_MODE=custom
+      # eg. SORTARR_PROXY_HOPS_PREFIX=1
       # Optional: Map container paths to host paths for the UI
       # eg. RADARR_PATH_MAP=/movies:/mnt/media/movies
     volumes:

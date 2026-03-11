@@ -36,7 +36,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.3.1"
+APP_VERSION = "0.8.4"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -668,9 +668,9 @@ def _proxy_fix_kwargs_from_env() -> dict[str, int]:
     if mode == "direct":
         return {"x_for": 0, "x_proto": 0, "x_host": 0, "x_port": 0, "x_prefix": 0}
     elif mode == "single":
-        return {"x_for": 1, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 1}
+        return {"x_for": 1, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 0}
     elif mode == "double":
-        return {"x_for": 2, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 1}
+        return {"x_for": 2, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 0}
 
     # custom mode (or legacy envs without SORTARR_PROXY_MODE) uses explicit hops config
     proxy_hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
@@ -681,8 +681,25 @@ def _proxy_fix_kwargs_from_env() -> dict[str, int]:
         "x_proto": _proxy_hops_env("SORTARR_PROXY_HOPS_PROTO", 1 if proxy_hops > 0 else 0),
         "x_host": _proxy_hops_env("SORTARR_PROXY_HOPS_HOST", 1 if proxy_hops > 0 else 0),
         "x_port": _proxy_hops_env("SORTARR_PROXY_HOPS_PORT", 1 if proxy_hops > 0 else 0),
-        "x_prefix": _proxy_hops_env("SORTARR_PROXY_HOPS_PREFIX", 1 if proxy_hops > 0 else 0),
+        "x_prefix": _proxy_hops_env("SORTARR_PROXY_HOPS_PREFIX", 0),
     }
+
+
+def _proxy_preset_from_kwargs(proxy_kwargs: dict[str, int]) -> str:
+    normalized = {
+        "x_for": int(proxy_kwargs.get("x_for") or 0),
+        "x_proto": int(proxy_kwargs.get("x_proto") or 0),
+        "x_host": int(proxy_kwargs.get("x_host") or 0),
+        "x_port": int(proxy_kwargs.get("x_port") or 0),
+        "x_prefix": int(proxy_kwargs.get("x_prefix") or 0),
+    }
+    if normalized == {"x_for": 0, "x_proto": 0, "x_host": 0, "x_port": 0, "x_prefix": 0}:
+        return "direct"
+    if normalized == {"x_for": 1, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 0}:
+        return "single"
+    if normalized == {"x_for": 2, "x_proto": 1, "x_host": 1, "x_port": 1, "x_prefix": 0}:
+        return "double"
+    return "custom"
 
 
 def _validate_csrf_trusted_origins(raw: str, max_count: int = CSRF_TRUSTED_ORIGINS_MAX) -> tuple[set[str], list[str]]:
@@ -818,26 +835,128 @@ proxy_fix_kwargs = {"x_for": 0, "x_proto": 0, "x_host": 0, "x_port": 0, "x_prefi
 
 
 def _proxy_preset_from_env() -> str:
-    mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
-    if mode and mode != "custom":
-        return mode
-    override_keys = (
-        "SORTARR_PROXY_HOPS_FOR",
-        "SORTARR_PROXY_HOPS_HOST",
-        "SORTARR_PROXY_HOPS_PROTO",
-        "SORTARR_PROXY_HOPS_PORT",
-        "SORTARR_PROXY_HOPS_PREFIX",
+    return _proxy_preset_from_kwargs(_proxy_fix_kwargs_from_env())
+
+
+def _waitress_trusted_proxy_from_env() -> str:
+    return str(os.environ.get("SORTARR_WAITRESS_TRUSTED_PROXY", "") or "").strip()
+
+
+_PROXY_TRUST_ENV_KEYS = (
+    "SORTARR_PROXY_MODE",
+    "SORTARR_WAITRESS_TRUSTED_PROXY",
+    "SORTARR_PROXY_HOPS",
+    "SORTARR_PROXY_HOPS_FOR",
+    "SORTARR_PROXY_HOPS_HOST",
+    "SORTARR_PROXY_HOPS_PROTO",
+    "SORTARR_PROXY_HOPS_PORT",
+    "SORTARR_PROXY_HOPS_PREFIX",
+)
+
+
+def _proxy_trust_env_snapshot(source=None) -> dict[str, str]:
+    lookup = source if source is not None else os.environ
+    return {key: str(lookup.get(key) or "").strip() for key in _PROXY_TRUST_ENV_KEYS}
+
+
+def _proxy_trust_settings_changed(new_values: dict[str, object], current_values=None) -> bool:
+    current = _proxy_trust_env_snapshot(current_values)
+    updated = _proxy_trust_env_snapshot(new_values)
+    return current != updated
+
+
+def _waitress_trusted_headers_from_proxy_kwargs(proxy_kwargs: dict[str, int]) -> set[str]:
+    trusted_headers: set[str] = set()
+    if int(proxy_kwargs.get("x_for") or 0) > 0:
+        trusted_headers.add("x-forwarded-for")
+    if int(proxy_kwargs.get("x_host") or 0) > 0:
+        trusted_headers.add("x-forwarded-host")
+    if int(proxy_kwargs.get("x_proto") or 0) > 0:
+        trusted_headers.add("x-forwarded-proto")
+    if int(proxy_kwargs.get("x_port") or 0) > 0:
+        trusted_headers.add("x-forwarded-port")
+    return trusted_headers
+
+
+def _waitress_proxy_settings_from_proxy_kwargs(
+    proxy_kwargs: dict[str, int],
+    trusted_proxy: str | None = None,
+) -> dict[str, object]:
+    if not any(int(value or 0) > 0 for value in proxy_kwargs.values()):
+        return {}
+    trusted_proxy_count = max((int(value or 0) for value in proxy_kwargs.values()), default=0)
+    trusted_proxy_count = max(trusted_proxy_count, 1)
+    needs_prefix = int(proxy_kwargs.get("x_prefix") or 0) > 0
+    trusted_headers = _waitress_trusted_headers_from_proxy_kwargs(proxy_kwargs)
+    settings: dict[str, object] = {
+        # Waitress does not support trusting X-Forwarded-Prefix explicitly, so we
+        # must leave untrusted proxy headers intact only when prefix support is
+        # explicitly enabled through custom X-Forwarded-Prefix trust.
+        "clear_untrusted_proxy_headers": not needs_prefix,
+        "log_untrusted_proxy_headers": False,
+    }
+    if trusted_headers:
+        settings.update(
+            {
+                "trusted_proxy": str(trusted_proxy or "").strip() or "*",
+                "trusted_proxy_count": trusted_proxy_count,
+                "trusted_proxy_headers": trusted_headers,
+            }
+        )
+    return settings
+
+
+def _waitress_proxy_settings_from_env() -> dict[str, object]:
+    proxy_kwargs = _proxy_fix_kwargs_from_env()
+    return _waitress_proxy_settings_from_proxy_kwargs(
+        proxy_kwargs,
+        trusted_proxy=_waitress_trusted_proxy_from_env(),
     )
-    if any(str(os.environ.get(key) or "").strip() for key in override_keys):
-        return "custom"
-    hops = _proxy_hops_env("SORTARR_PROXY_HOPS", 0)
-    if hops == 0:
-        return "direct"
-    if hops == 1:
-        return "single"
-    if hops == 2:
-        return "double"
-    return "custom"
+
+
+def _waitress_proxy_settings_summary(settings: dict[str, object] | None) -> dict[str, object]:
+    raw = dict(settings or {})
+    trusted_headers = sorted(str(value) for value in raw.get("trusted_proxy_headers") or [])
+    return {
+        "enabled": bool(raw),
+        "trusted_proxy": str(raw.get("trusted_proxy") or "").strip(),
+        "trusted_proxy_count": int(raw.get("trusted_proxy_count") or 0) if raw else 0,
+        "trusted_proxy_headers": trusted_headers,
+        "clear_untrusted_proxy_headers": bool(raw.get("clear_untrusted_proxy_headers", True)),
+        "log_untrusted_proxy_headers": bool(raw.get("log_untrusted_proxy_headers", False)),
+    }
+
+
+def serve_with_waitress() -> None:
+    host = os.environ.get("HOST", "0.0.0.0")  # nosec
+    port = int(os.environ.get("PORT", "8787"))
+    threads = max(int(os.environ.get("WAITRESS_THREADS", "4") or 4), 1)
+    from waitress import serve  # type: ignore
+
+    waitress_proxy_settings = _waitress_proxy_settings_from_env()
+    if waitress_proxy_settings:
+        trusted_headers = sorted(waitress_proxy_settings.get("trusted_proxy_headers", set()))
+        if trusted_headers:
+            trusted_proxy = str(waitress_proxy_settings.get("trusted_proxy") or "").strip() or "*"
+            logger.info(
+                "Waitress proxy trust enabled for proxied mode: trusted_proxy=%s count=%s clear_untrusted=%s headers=%s.",
+                trusted_proxy,
+                waitress_proxy_settings.get("trusted_proxy_count", 1),
+                "true" if waitress_proxy_settings.get("clear_untrusted_proxy_headers", True) else "false",
+                ",".join(trusted_headers),
+            )
+        else:
+            logger.info(
+                "Waitress proxy-header preservation enabled without trusting forwarded host/proto/port headers: clear_untrusted=%s.",
+                "true" if waitress_proxy_settings.get("clear_untrusted_proxy_headers", True) else "false",
+            )
+    serve(
+        app,
+        host=host,
+        port=port,
+        threads=threads,
+        **waitress_proxy_settings,
+    )
 
 
 
@@ -890,6 +1009,48 @@ def _redact_url_for_log(value: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, query, ""))
 
 
+_UNSUPPORTED_FORWARDED_MULTI_VALUE_HEADERS = {
+    "X-Forwarded-Proto": "x-forwarded-proto",
+    "X-Forwarded-Port": "x-forwarded-port",
+}
+
+
+def _forwarded_header_csv_warnings(
+    headers: dict[str, str],
+    waitress_settings: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
+    trusted_headers = set(str(value) for value in ((waitress_settings or {}).get("trusted_proxy_headers") or set()))
+    warnings: list[dict[str, object]] = []
+    for header_name, trusted_name in _UNSUPPORTED_FORWARDED_MULTI_VALUE_HEADERS.items():
+        raw = str(headers.get(header_name) or "").strip()
+        if not raw:
+            continue
+        values = [part.strip() for part in raw.split(",") if part.strip()]
+        if len(values) <= 1:
+            continue
+        waitress_trusted = trusted_name in trusted_headers
+        if waitress_trusted:
+            message = (
+                f"{header_name} contains multiple values. Waitress 3.x rejects comma-separated {header_name} "
+                "when that header is trusted; normalize it at the immediate proxy so only one value reaches Sortarr."
+            )
+        else:
+            message = (
+                f"{header_name} contains multiple values. Sortarr expects a single {header_name} value at the edge; "
+                "normalize it at the immediate proxy."
+            )
+        warnings.append(
+            {
+                "header": header_name,
+                "value": raw,
+                "reason": "multi_value_not_supported",
+                "waitress_trusted": waitress_trusted,
+                "message": message,
+            }
+        )
+    return warnings
+
+
 def _log_csrf_mismatch(reason: str, extra: dict | None = None):
     details = {
         "reason": reason,
@@ -913,6 +1074,16 @@ def _log_csrf_mismatch(reason: str, extra: dict | None = None):
         },
         "proxy_fix": dict(proxy_fix_kwargs),
     }
+    forwarded_header_warnings = _forwarded_header_csv_warnings(
+        details["headers"],
+        waitress_proxy_runtime_settings,
+    )
+    if forwarded_header_warnings:
+        details["forwarded_header_warnings"] = forwarded_header_warnings
+        details["proxy_hint"] = _append_warning(
+            str(details.get("proxy_hint") or ""),
+            forwarded_header_warnings[0]["message"],
+        )
     origin_header = details["headers"].get("Origin") or ""
     if (
         origin_header.lower().startswith("https://")
@@ -941,6 +1112,7 @@ def _log_csrf_mismatch(reason: str, extra: dict | None = None):
             "headers": dict(details.get("headers") or {}),
             "proxy_fix": dict(details.get("proxy_fix") or {}),
             "proxy_hint": str(details.get("proxy_hint") or ""),
+            "forwarded_header_warnings": list(details.get("forwarded_header_warnings") or []),
         }
     logger.warning(
         "CSRF request rejected at %s: %s",
@@ -1024,6 +1196,10 @@ def _csrf_diagnostics_payload() -> dict:
     else:
         xff = [part.strip() for part in str(current_headers.get("X-Forwarded-For") or "").split(",") if part.strip()]
         suggested_proxy_mode = "double" if len(xff) >= 2 else "single"
+    current_forwarded_header_warnings = _forwarded_header_csv_warnings(
+        current_headers,
+        waitress_proxy_runtime_settings,
+    )
     guidance_message = "No recent CSRF mismatch logged."
     if reason in {"origin", "referer"} or proxy_hint:
         guidance_message = (
@@ -1036,6 +1212,20 @@ def _csrf_diagnostics_payload() -> dict:
             "Recent CSRF session mismatch detected. Verify all replicas use "
             f"{_session_secret_reference_targets(pair=True)} across restarts."
         )
+    runtime_proxy_kwargs = dict(proxy_fix_kwargs)
+    configured_proxy_kwargs = _proxy_fix_kwargs_from_env()
+    runtime_waitress = _waitress_proxy_settings_summary(waitress_proxy_runtime_settings)
+    configured_waitress = _waitress_proxy_settings_summary(_waitress_proxy_settings_from_env())
+    restart_required = runtime_proxy_kwargs != configured_proxy_kwargs or runtime_waitress != configured_waitress
+    if restart_required:
+        guidance_message = (
+            "Saved proxy header trust settings differ from the live runtime. Restart Sortarr for Waitress to apply them."
+        )
+    if current_forwarded_header_warnings:
+        guidance_message = (
+            "Unsupported forwarded header shape detected. Waitress 3.x does not accept comma-separated "
+            "X-Forwarded-Proto/X-Forwarded-Port when those headers are trusted; normalize them at the immediate proxy."
+        )
     trusted_state = _csrf_trusted_origins_runtime_state()
     return {
         "ok": True,
@@ -1044,10 +1234,18 @@ def _csrf_diagnostics_payload() -> dict:
             "is_secure": bool(request.is_secure),
             "host": request.host,
             "host_url": _redact_url_for_log(request.host_url),
-            "proxy_fix": dict(proxy_fix_kwargs),
+            "proxy_fix": runtime_proxy_kwargs,
+            "proxy_fix_runtime": runtime_proxy_kwargs,
+            "proxy_fix_configured": configured_proxy_kwargs,
             "headers": current_headers,
-            "proxy_mode_current": _proxy_preset_from_env(),
+            "proxy_mode_current": _proxy_preset_from_kwargs(runtime_proxy_kwargs),
+            "proxy_mode_runtime": _proxy_preset_from_kwargs(runtime_proxy_kwargs),
+            "proxy_mode_configured": _proxy_preset_from_env(),
             "proxy_mode_suggested": suggested_proxy_mode,
+            "waitress_runtime": runtime_waitress,
+            "waitress_configured": configured_waitress,
+            "restart_required": restart_required,
+            "forwarded_header_warnings": current_forwarded_header_warnings,
             "trusted_origins": {
                 "raw": trusted_state.get("raw", ""),
                 "normalized": trusted_state.get("normalized", []),
@@ -1071,7 +1269,9 @@ def _csrf_diagnostics_payload() -> dict:
         "guidance": {
             "message": guidance_message,
             "recommended_next_step": (
-                "In Setup > Advanced settings > Network & CSRF, set Proxy mode to the detected chain and retry."
+                "Normalize X-Forwarded-Proto/X-Forwarded-Port at the immediate proxy and retry."
+                if current_forwarded_header_warnings
+                else "In Setup > Advanced settings > Network & CSRF, set Proxy mode to the detected chain and retry."
             ),
         },
     }
@@ -1452,6 +1652,7 @@ _DEPRECATED_ENV_REPLACEMENTS = {
     "SORTARR_PROXY_HOPS_PROTO": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
     "SORTARR_PROXY_HOPS_PORT": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
     "SORTARR_PROXY_HOPS_PREFIX": "SORTARR_PROXY_MODE=custom + per-header hops only when needed",
+    "SORTARR_WAITRESS_TRUSTED_PROXY": "explicit immediate proxy IP/host for Waitress header trust",
     "PLEX_HISTORY_LAST_VIEWED_AT": "state-managed cursor (temporary env fallback remains supported)",
     "TAUTULLI_METADATA_LOOKUP_LIMIT": "internal enforced default (remove user override)",
     "TAUTULLI_METADATA_LOOKUP_SECONDS": "internal enforced default (remove user override)",
@@ -1883,6 +2084,10 @@ def _resolve_secret_env(key: str, default: str = "") -> str:
 
 
 proxy_fix_kwargs = _apply_startup_security_config()
+waitress_proxy_runtime_settings = _waitress_proxy_settings_from_proxy_kwargs(
+    proxy_fix_kwargs,
+    trusted_proxy=_waitress_trusted_proxy_from_env(),
+)
 if _EPHEMERAL_APP_SECRET_KEY:
     logger.warning(
         "No persistent session-secret reference was resolved; using an ephemeral Flask secret key. "
@@ -3285,6 +3490,7 @@ def _write_env_file(path: str, values: dict):
         "SORTARR_PROXY_HOPS_PROTO",
         "SORTARR_PROXY_HOPS_PORT",
         "SORTARR_PROXY_HOPS_PREFIX",
+        "SORTARR_WAITRESS_TRUSTED_PROXY",
         "SORTARR_CSRF_TRUSTED_ORIGINS",
         "CACHE_SECONDS",
     ]
@@ -3950,9 +4156,10 @@ def _get_config():
         "sortarr_proxy_hops_prefix": str(
             _proxy_hops_env(
                 "SORTARR_PROXY_HOPS_PREFIX",
-                1 if _proxy_hops_env("SORTARR_PROXY_HOPS", 0) > 0 else 0,
+                0,
             )
         ),
+        "sortarr_waitress_trusted_proxy": _waitress_trusted_proxy_from_env(),
         "sortarr_csrf_trusted_origins": os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "").strip(),
     }
     _emit_startup_config_lints(cfg)
@@ -4226,6 +4433,38 @@ def _emit_startup_config_lints(cfg: dict) -> None:
             "Set SORTARR_PROXY_MODE=custom or clear overrides.",
             mode,
         )
+    waitress_proxy_settings = _waitress_proxy_settings_from_env()
+    if waitress_proxy_settings:
+        trusted_headers = set(waitress_proxy_settings.get("trusted_proxy_headers") or set())
+        trusted_proxy = str(waitress_proxy_settings.get("trusted_proxy") or "").strip()
+        if trusted_headers and (not trusted_proxy or trusted_proxy == "*"):
+            logger.warning(
+                "Waitress proxy trust is using wildcard '*' for proxied mode. "
+                "Set SORTARR_WAITRESS_TRUSTED_PROXY to the immediate proxy IP/host if Sortarr is reachable outside that proxy."
+            )
+        if trusted_headers and mode == "custom":
+            proxy_kwargs = _proxy_fix_kwargs_from_env()
+            trusted_counts = [
+                int(proxy_kwargs.get(key) or 0)
+                for key in ("x_for", "x_host", "x_proto", "x_port")
+                if int(proxy_kwargs.get(key) or 0) > 0
+            ]
+            if len(set(trusted_counts)) > 1:
+                logger.warning(
+                    "Waitress uses a single trusted_proxy_count across trusted forwarded headers. "
+                    "Custom proxy trust counts differ (%s); if your edge emits multi-valued "
+                    "X-Forwarded-Host/Proto/Port headers, normalize them at the immediate proxy.",
+                    ", ".join(
+                        f"{key}={int(proxy_kwargs.get(key) or 0)}"
+                        for key in ("x_for", "x_host", "x_proto", "x_port")
+                        if int(proxy_kwargs.get(key) or 0) > 0
+                    ),
+                )
+        if not bool(waitress_proxy_settings.get("clear_untrusted_proxy_headers", True)):
+            logger.warning(
+                "Waitress proxy-header clearing is disabled because X-Forwarded-Prefix trust is enabled. "
+                "Keep SORTARR_PROXY_HOPS_PREFIX at 0 unless you actually use a path-prefix proxy."
+            )
 
     if not _read_bool_env_early("SORTARR_REQUIRE_PERSISTENT_SECRET_KEY", True):
         logger.warning(
@@ -12167,6 +12406,7 @@ def setup():
         proxy_hops_proto_raw = request.form.get("sortarr_proxy_hops_proto", "").strip()
         proxy_hops_port_raw = request.form.get("sortarr_proxy_hops_port", "").strip()
         proxy_hops_prefix_raw = request.form.get("sortarr_proxy_hops_prefix", "").strip()
+        waitress_trusted_proxy = request.form.get("sortarr_waitress_trusted_proxy", "").strip()
         csrf_trusted_origins_input = request.form.get("sortarr_csrf_trusted_origins", "").strip()
         csrf_trusted_origins = csrf_trusted_origins_input
         trusted_origins_error = ""
@@ -12341,6 +12581,7 @@ def setup():
             "SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY": "1" if unsafe_recovery_enabled else "0",
             "SORTARR_UNSAFE_RECOVERY_ENABLED_AT": str(int(time.time())) if unsafe_recovery_enabled else "",
             "SORTARR_STORE_SECRETS_AS_FILES": "0" if _windows_credstore_enabled() else "1",
+            "SORTARR_WAITRESS_TRUSTED_PROXY": waitress_trusted_proxy,
             "SORTARR_CSRF_TRUSTED_ORIGINS": csrf_trusted_origins,
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
@@ -12600,6 +12841,7 @@ def setup():
                         if connection_errors:
                             field_errors.update(connection_errors)
                             error = "Fix the highlighted connection errors."
+        proxy_trust_settings_changed = _proxy_trust_settings_changed(data)
         if not error:
             try:
                 global _upgrade_setup_required, _EPHEMERAL_APP_SECRET_KEY
@@ -12625,6 +12867,10 @@ def setup():
                     state["app_version"] = APP_VERSION
                     _save_startup_state(state_path, state)
                 _upgrade_setup_required = False
+                if proxy_trust_settings_changed and os.environ.get("SORTARR_USE_WAITRESS", "1").strip() != "0":
+                    setup_warnings.append(
+                        "Proxy header trust settings were saved. Restart Sortarr for Waitress to apply them."
+                    )
                 if setup_warnings:
                     session["sortarr_setup_warning"] = " ".join(setup_warnings)
                 _invalidate_cache()
@@ -15192,7 +15438,6 @@ if __name__ == "__main__":
             logger.warning("Waitress not available; falling back to Flask dev server.")
             app.run(host=host, port=port)
         else:
-            threads = max(int(os.environ.get("WAITRESS_THREADS", "4") or 4), 1)
-            serve(app, host=host, port=port, threads=threads)
+            serve_with_waitress()
     else:
         app.run(host=host, port=port)

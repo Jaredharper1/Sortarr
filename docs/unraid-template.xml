@@ -86,4 +86,28 @@
           Display="advanced"
           Required="false"
           Mask="false">0</Config>
+
+  <Config Name="SORTARR_PROXY_MODE"
+          Target="SORTARR_PROXY_MODE"
+          Default="direct"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">direct</Config>
+
+  <Config Name="SORTARR_WAITRESS_TRUSTED_PROXY"
+          Target="SORTARR_WAITRESS_TRUSTED_PROXY"
+          Default=""
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false"></Config>
+
+  <Config Name="SORTARR_PROXY_HOPS_PREFIX"
+          Target="SORTARR_PROXY_HOPS_PREFIX"
+          Default="0"
+          Type="Variable"
+          Display="advanced"
+          Required="false"
+          Mask="false">0</Config>
 </Container>

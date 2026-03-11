@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-03-11
+
+### Fixes
+- Preserved trusted `X-Forwarded-*` headers when running behind a proxy on Waitress 3.x by mapping Sortarr proxy mode/hops into Waitress trusted-proxy settings before Flask `ProxyFix` runs. This fixes proxied setup/save CSRF origin mismatches where upstream headers reached Traefik but were stripped before Sortarr saw them.
+- Limited Waitress trust to the forwarded headers Sortarr is configured to trust, so custom proxy modes no longer over-trust `X-Forwarded-Host` / `Proto` / `Port` when only `X-Forwarded-For` should be honored.
+- Routed all Waitress entrypoints through the same startup helper so Docker/alternate Waitress launches no longer bypass the proxy-trust fix.
+- Added explicit `SORTARR_WAITRESS_TRUSTED_PROXY` support so proxied deployments can avoid wildcard `*` Waitress trust; proxied wildcard fallback now emits a startup warning.
+- Narrowed `X-Forwarded-Prefix` handling so normal `single` / `double` presets keep strict proxy-header clearing, while prefix trust is now an explicit custom-mode opt-in (`SORTARR_PROXY_HOPS_PREFIX=1`) with a startup warning about the reduced Waitress sanitization.
+- Added `SORTARR_WAITRESS_TRUSTED_PROXY` to the Setup UI under Advanced `Network & CSRF`, so proxied deployments can be fully configured from the app instead of editing env files manually.
+- Setup now warns when proxy header trust changes were saved but a restart is still required, and CSRF diagnostics now show live runtime proxy/Waitress settings separately from the saved config.
+- CSRF diagnostics and mismatch logging now warn explicitly when `X-Forwarded-Proto` or `X-Forwarded-Port` arrive as comma-separated lists, because Waitress 3.x rejects those trusted-header shapes; operators are now told to normalize them at the immediate proxy instead of chasing a generic CSRF failure.
+
 ## [0.8.3.1] - 2026-03-10
 
 ### Security

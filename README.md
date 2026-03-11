@@ -8,6 +8,16 @@
 
 ---
 
+## 0.8.4 Release Notes
+
+`0.8.4` is the proxy/CSRF hardening follow-up to the `0.8.3` security release.
+
+- Preserves trusted `X-Forwarded-*` headers on Waitress 3.x before Flask `ProxyFix` runs, fixing proxied setup/save CSRF origin mismatches.
+- Limits Waitress trust to the forwarded headers Sortarr is actually configured to trust, so custom proxy modes no longer over-trust host/proto/port headers.
+- Routes every Waitress entrypoint, including Docker, through the same startup helper so proxy-trust handling is applied consistently.
+- Adds explicit `SORTARR_WAITRESS_TRUSTED_PROXY` support, startup warnings for wildcard trust, and an Advanced Setup field so proxied deployments can be configured in the UI.
+- Narrows `X-Forwarded-Prefix` handling so normal `single` / `double` presets stay strict while explicit prefix trust remains an advanced custom-mode option.
+
 # Important 0.8.3 Security Upgrade Notice
 
 Starting in **0.8.3**, Sortarr introduces a security-focused setup gate to ensure upgrades remain safe and predictable.
@@ -116,6 +126,7 @@ If you want the least confusing setup, use only this supported surface:
 - Arr path: `SONARR_URL` + `SONARR_API_KEY*` and/or `RADARR_URL` + `RADARR_API_KEY*`
 - Plex path: `PLEX_URL` + `PLEX_TOKEN*`
 - `SORTARR_PROXY_MODE` (`direct|single|double|custom`)
+- `SORTARR_WAITRESS_TRUSTED_PROXY` (recommended for proxied Waitress deployments; otherwise Sortarr falls back to wildcard trust with a startup warning)
 - Required auth: `BASIC_AUTH_USER` + (`BASIC_AUTH_PASS_FILE` or `BASIC_AUTH_PASS_CRED_TARGET`)
 - Optional CSRF escape hatch: `SORTARR_CSRF_TRUSTED_ORIGINS` (exact origins only)
 
@@ -244,9 +255,19 @@ Open the Wiki:
 
 When Sortarr runs behind a reverse proxy, it must trust `X-Forwarded-*` headers so Flask can resolve the correct external scheme/host (for example `https://sortarr.mydomain.com`).
 If trust is misconfigured, setup actions may fail with `CSRF origin mismatch`.
+On Waitress 3.x, Sortarr also configures Waitress proxy-header trust from the same proxy-mode settings so forwarded headers are preserved before Flask sees the request.
+Set `SORTARR_WAITRESS_TRUSTED_PROXY` to the immediate proxy IP/host when possible. If you leave it blank, Sortarr falls back to wildcard `*` trust and emits a startup warning.
+Changing proxy trust settings in Setup saves them immediately, but Waitress applies them only after a Sortarr restart. CSRF diagnostics now show the live runtime values separately from the saved config so pending restarts are visible.
+
+Supported proxy contract on Waitress:
+- `X-Forwarded-For` may contain multiple comma-separated values to reflect hop depth.
+- `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-Port` should be normalized by the immediate proxy so Sortarr receives one value for each.
+- If `X-Forwarded-Proto` or `X-Forwarded-Port` arrive with commas, Sortarr diagnostics now warn explicitly because Waitress 3.x rejects those shapes when the headers are trusted.
 
 Setup includes:
 - **Proxy mode** preset (`Direct`, `Single proxy`, `Two proxies`, `Custom`) under **Advanced settings -> Network & CSRF**
+- **Waitress trusted proxy** field under **Advanced settings -> Network & CSRF** for the immediate upstream proxy IP/host
+- Proxy trust changes saved through Setup require a restart before Waitress applies them
 - **Run proxy/CSRF diagnostics**, which reports current forwarded headers, current vs suggested proxy mode, and latest CSRF mismatch reason from `GET /api/diagnostics/csrf` after the required security setup save completes
 - **Run security self-check diagnostics** from `GET /api/diagnostics/security-self-check` after security setup is complete to get pass/fail signals for persistent secret status, unsafe recovery mode, trusted-origin policy validity, and cookie/CSP guardrails
   - Direct HTTP installs in `Proxy mode = direct` are treated as healthy when cookies are intentionally non-`Secure` on plain HTTP.
@@ -263,6 +284,17 @@ If diagnostics show `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-Fo
 1. Confirm Sortarr traffic actually passes through your proxy/router chain.
 2. Verify proxy middleware is forwarding (not stripping) `X-Forwarded-*` headers.
 3. Retest diagnostics, then set `SORTARR_PROXY_MODE` (and only if needed, `SORTARR_PROXY_HOPS*`) to match observed header values.
+4. If a proxy echo service such as `whoami` shows forwarded headers but Sortarr diagnostics/logs still do not, upgrade to `0.8.4` or later so Waitress trusted-proxy handling preserves those headers before Flask sees them.
+
+If diagnostics warn about comma-separated `X-Forwarded-Proto` or `X-Forwarded-Port`:
+1. Normalize those headers at the immediate proxy so only one value reaches Sortarr.
+2. Keep hop depth in `X-Forwarded-For`; do not mirror the full chain into `Proto` or `Port`.
+3. Retest `/api/diagnostics/csrf` before assuming the problem is a CSRF token or session issue.
+
+Prefix note:
+- `Single proxy` and `Two proxies` no longer assume `X-Forwarded-Prefix`.
+- If your proxy publishes Sortarr under a path prefix, use `SORTARR_PROXY_MODE=custom` and set `SORTARR_PROXY_HOPS_PREFIX=1`.
+- Waitress cannot strictly validate `X-Forwarded-Prefix`, so enabling prefix trust causes Sortarr to preserve untrusted proxy headers for that specific advanced case. Keep prefix trust off unless you actually need it.
 
 ```
 SORTARR_PROXY_MODE=direct|single|double|custom

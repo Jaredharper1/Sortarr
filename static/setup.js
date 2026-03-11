@@ -616,6 +616,16 @@
       toggleButtonDisabled(button, true);
       return;
     }
+    function formatWaitressSettings(settings) {
+      if (!settings || settings.enabled !== true) return "disabled";
+      const trustedProxy = String(settings.trusted_proxy || "").trim() || "*";
+      const headers = Array.isArray(settings.trusted_proxy_headers) && settings.trusted_proxy_headers.length
+        ? settings.trusted_proxy_headers.join(", ")
+        : "(none)";
+      const count = Number(settings.trusted_proxy_count || 0);
+      const clearUntrusted = settings.clear_untrusted_proxy_headers !== false ? "true" : "false";
+      return `trusted_proxy=${trustedProxy}; count=${count}; headers=${headers}; clear_untrusted=${clearUntrusted}`;
+    }
     button.addEventListener("click", async () => {
       if (button.dataset.loading === "1") return;
       button.dataset.loading = "1";
@@ -634,22 +644,52 @@
           credentials: "same-origin",
           headers: withCsrfHeaders({}),
         });
-        const payload = await res.json().catch(() => ({}));
+        const rawBody = await res.text();
+        let payload = {};
+        if (rawBody) {
+          try {
+            payload = JSON.parse(rawBody);
+          } catch {
+            payload = {};
+          }
+        }
         if (!res.ok || !payload || payload.ok !== true) {
-          throw new Error((payload && payload.error) || "diagnostics failed");
+          const rawMessage = String(rawBody || "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 240);
+          throw new Error((payload && payload.error) || rawMessage || `diagnostics failed (${res.status})`);
         }
         const current = payload.current || {};
         const last = payload.last_csrf_event || {};
         const guidance = payload.guidance || {};
+        const runtimeMode = current.proxy_mode_runtime || current.proxy_mode_current || "unknown";
+        const configuredMode = current.proxy_mode_configured || runtimeMode;
+        const forwardedHeaderWarnings = Array.isArray(current.forwarded_header_warnings)
+          ? current.forwarded_header_warnings
+          : [];
         const lines = [
-          `Current proxy mode: ${current.proxy_mode_current || "unknown"}`,
+          `Runtime proxy mode: ${runtimeMode}`,
+          `Configured proxy mode: ${configuredMode}`,
           `Suggested proxy mode: ${current.proxy_mode_suggested || "unknown"}`,
           `Request scheme/host: ${current.scheme || "?"}://${current.host || "?"}`,
+          `Waitress runtime trust: ${formatWaitressSettings(current.waitress_runtime || {})}`,
+          `Waitress configured trust: ${formatWaitressSettings(current.waitress_configured || {})}`,
           `X-Forwarded-Proto: ${((current.headers || {})["X-Forwarded-Proto"] || "").trim() || "(missing)"}`,
           `X-Forwarded-Host: ${((current.headers || {})["X-Forwarded-Host"] || "").trim() || "(missing)"}`,
+          `X-Forwarded-Port: ${((current.headers || {})["X-Forwarded-Port"] || "").trim() || "(missing)"}`,
           `X-Forwarded-For: ${((current.headers || {})["X-Forwarded-For"] || "").trim() || "(missing)"}`,
           `Last CSRF event: ${last.seen ? `${last.reason || "unknown"} (${last.age_seconds ?? "?"}s ago)` : "none recorded"}`,
         ];
+        forwardedHeaderWarnings.forEach((warning) => {
+          if (warning && warning.message) {
+            lines.push(`Warning: ${warning.message}`);
+          }
+        });
+        if (current.restart_required) {
+          lines.push("Restart required: saved proxy header trust differs from the live Waitress runtime.");
+        }
         if (guidance.message) lines.push(`Guidance: ${guidance.message}`);
         setCsrfDiagnosticsOutput(lines);
         setCsrfDiagnosticsInline(

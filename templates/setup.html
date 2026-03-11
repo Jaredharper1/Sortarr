@@ -680,6 +680,15 @@
                 placeholder="{{ _('https://sortarr.example.com,https://sortarr.internal') }}"
                 value="{{ values.sortarr_csrf_trusted_origins }}" />
             </label>
+            <label>
+              {{ _('Waitress trusted proxy (optional)') }}
+              <input name="sortarr_waitress_trusted_proxy"
+                placeholder="{{ _('172.21.0.22 or traefik') }}"
+                value="{{ values.sortarr_waitress_trusted_proxy }}" />
+            </label>
+            <div class="setup-hint">
+              {% trans trimmed %}Set this to the immediate proxy IP/host in front of Sortarr when known. Changes apply after restart. Leave blank only if wildcard proxy trust is intentional.{% endtrans %}
+            </div>
             <div class="setup-inline">
               <button class="setup-action-btn" type="button" id="runCsrfDiagnosticsBtn" {% if setup_required %}disabled aria-disabled="true"{% endif %}>
                 {{ _('Run proxy/CSRF diagnostics') }}

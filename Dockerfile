@@ -11,6 +11,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY app.py /app/app.py
+COPY run_waitress.py /app/run_waitress.py
 COPY templates /app/templates
 COPY static /app/static
 COPY translations /app/translations
@@ -22,4 +23,4 @@ ENV PORT=8787
 EXPOSE 8787
 
 ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
-CMD ["sh", "-c", "python -m waitress --host=0.0.0.0 --port=${PORT:-8787} --threads=4 app:app"]
+CMD ["sh", "-c", "python /app/run_waitress.py"]
