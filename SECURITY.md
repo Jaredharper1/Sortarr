@@ -10,8 +10,8 @@ For Windows users, a convenient portable .exe package is distrubted with each re
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.8.3.1 | :white_check_mark: |
-| 0.8.0 - 0.8.3 | :x:          |
+| 0.8.5 | :white_check_mark: |
+| 0.8.0 - 0.8.4 | :x:          |
 | < 0.8.0 | :x:                |
 
 ## Reporting a Vulnerability

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.8.5] - 2026-03-12
+
+### Fixes
+- Fixed the Docker release packaging regression introduced in `0.8.4` by restoring `run_waitress.py` to the Docker build context, so published images can copy the shared Waitress entrypoint and container releases build successfully again.
+- Reduced Waitress proxy-trust startup logging to coarse state only (`trust_mode`, proxy count, header count) instead of logging exact trusted proxy/header values, resolving the latest CodeQL clear-text logging alerts without losing useful diagnostics.
+
 ## [0.8.4] - 2026-03-11
 
 ### Fixes

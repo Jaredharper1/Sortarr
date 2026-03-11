@@ -36,7 +36,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.4"
+APP_VERSION = "0.8.5"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -938,12 +938,13 @@ def serve_with_waitress() -> None:
         trusted_headers = sorted(waitress_proxy_settings.get("trusted_proxy_headers", set()))
         if trusted_headers:
             trusted_proxy = str(waitress_proxy_settings.get("trusted_proxy") or "").strip() or "*"
+            trust_mode = "wildcard" if trusted_proxy == "*" else "explicit"
             logger.info(
-                "Waitress proxy trust enabled for proxied mode: trusted_proxy=%s count=%s clear_untrusted=%s headers=%s.",
-                trusted_proxy,
+                "Waitress proxy trust enabled for proxied mode: trust_mode=%s count=%s clear_untrusted=%s header_count=%s.",
+                trust_mode,
                 waitress_proxy_settings.get("trusted_proxy_count", 1),
                 "true" if waitress_proxy_settings.get("clear_untrusted_proxy_headers", True) else "false",
-                ",".join(trusted_headers),
+                len(trusted_headers),
             )
         else:
             logger.info(

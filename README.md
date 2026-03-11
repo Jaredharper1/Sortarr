@@ -8,15 +8,13 @@
 
 ---
 
-## 0.8.4 Release Notes
+## 0.8.5 Release Notes
 
-`0.8.4` is the proxy/CSRF hardening follow-up to the `0.8.3` security release.
+`0.8.5` is a packaging and logging follow-up to the `0.8.4` proxy/CSRF release.
 
-- Preserves trusted `X-Forwarded-*` headers on Waitress 3.x before Flask `ProxyFix` runs, fixing proxied setup/save CSRF origin mismatches.
-- Limits Waitress trust to the forwarded headers Sortarr is actually configured to trust, so custom proxy modes no longer over-trust host/proto/port headers.
-- Routes every Waitress entrypoint, including Docker, through the same startup helper so proxy-trust handling is applied consistently.
-- Adds explicit `SORTARR_WAITRESS_TRUSTED_PROXY` support, startup warnings for wildcard trust, and an Advanced Setup field so proxied deployments can be configured in the UI.
-- Narrows `X-Forwarded-Prefix` handling so normal `single` / `double` presets stay strict while explicit prefix trust remains an advanced custom-mode option.
+- Restores `run_waitress.py` to the Docker build context so the published Docker image can build and ship the same Waitress proxy-trust startup path used locally.
+- Keeps the `0.8.4` Waitress proxy-trust runtime fix intact for Docker deployments instead of failing during image publish.
+- Reduces Waitress proxy-trust startup logging to coarse state only, removing exact trusted proxy/header values from logs while preserving useful diagnostics.
 
 # Important 0.8.3 Security Upgrade Notice
 
