@@ -547,9 +547,33 @@
   }
 
   function initSourcePreferenceSelects() {
+    initSetupCustomSelect(document.querySelector('[name="sortarr_auth_method"]'));
     initSetupCustomSelect(document.querySelector('[name="media_source_preference"]'));
     initSetupCustomSelect(document.querySelector('[name="history_source_preference"]'));
     initSetupCustomSelect(document.querySelector('[name="proxy_preset"]'));
+  }
+
+  function updateAuthMethodFields() {
+    const authMethod = document.querySelector('[name="sortarr_auth_method"]');
+    const basicFields = document.getElementById("basicAuthFields");
+    const externalFields = document.getElementById("externalAuthFields");
+    if (!authMethod || !basicFields || !externalFields) return;
+    const isExternal = String(authMethod.value || "").trim().toLowerCase() === "external";
+    basicFields.classList.toggle("hidden", isExternal);
+    externalFields.classList.toggle("hidden", !isExternal);
+    basicFields.querySelectorAll("input, select, textarea, button").forEach((field) => {
+      toggleFieldDisabled(field, isExternal);
+    });
+    externalFields.querySelectorAll("input, select, textarea, button").forEach((field) => {
+      toggleFieldDisabled(field, !isExternal);
+    });
+  }
+
+  function initAuthMethodFields() {
+    const authMethod = document.querySelector('[name="sortarr_auth_method"]');
+    if (!authMethod) return;
+    authMethod.addEventListener("change", updateAuthMethodFields);
+    updateAuthMethodFields();
   }
 
   function updateProxyPresetFields() {
@@ -716,6 +740,7 @@
   initPathMapGroups();
   initHistorySourceLock();
   initSourcePreferenceSelects();
+  initAuthMethodFields();
   initProxyPresetFields();
   initSecretKeyActions();
   initSetupCsrfSync();

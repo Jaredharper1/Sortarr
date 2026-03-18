@@ -16,6 +16,7 @@ import hashlib
 import tempfile
 import threading
 import zlib
+import math
 from urllib.parse import urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
@@ -27,6 +28,7 @@ from flask import Flask, jsonify, render_template, request, Response, redirect, 
 from flask_babel import Babel, _, get_locale
 from flask_compress import Compress
 from flask.sessions import SecureCookieSessionInterface
+from waitress.proxy_headers import proxy_headers_middleware
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 
@@ -36,13 +38,15 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.5.1"
+APP_VERSION = "0.8.6"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
 UNSAFE_RECOVERY_ENABLED_AT_ENV = "SORTARR_UNSAFE_RECOVERY_ENABLED_AT"
 UNSAFE_RECOVERY_MAX_MINUTES_ENV = "SORTARR_UNSAFE_RECOVERY_MAX_MINUTES"
 UNSAFE_RECOVERY_DEFAULT_MAX_MINUTES = 120
+DEFAULT_UPSTREAM_AUTH_HEADER = "X-Forwarded-User"
+UPSTREAM_AUTH_HEADER_RE = re.compile(r"^[A-Za-z0-9-]+$")
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
 SAFE_TAUTULLI_REFRESH_BUCKETS = {
@@ -599,6 +603,21 @@ def _configured_public_host() -> str:
     return ""
 
 
+def _configured_public_cookie_scheme_hint() -> str:
+    for key in ("SORTARR_PUBLIC_HOST", "SORTARR_PUBLIC_URL", "SORTARR_PUBLIC_ORIGIN"):
+        raw = str(os.environ.get(key, "") or "").strip()
+        if "://" not in raw:
+            continue
+        try:
+            parts = urlsplit(raw)
+        except Exception:
+            continue
+        scheme = str(parts.scheme or "").strip().lower()
+        if scheme in {"http", "https"}:
+            return scheme
+    return ""
+
+
 def _effective_csrf_public_host() -> str:
     public_host = _configured_public_host()
     if public_host:
@@ -650,17 +669,92 @@ def _session_cookie_secure_override_early() -> bool | None:
 
 
 def _session_cookie_secure_default() -> bool:
-    return _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", "")) != "direct"
+    return _proxy_preset_from_env() != "direct"
+
+
+def _request_forwarded_proto_hint() -> str:
+    if not has_request_context():
+        return ""
+    if _proxy_preset_from_env() == "direct":
+        return ""
+    forwarded_proto = str(request.headers.get("X-Forwarded-Proto", "") or "").strip().lower()
+    if not forwarded_proto or "," in forwarded_proto:
+        return ""
+    if forwarded_proto in {"http", "https"}:
+        return forwarded_proto
+    return ""
+
+
+def _request_effective_scheme_for_cookie_policy() -> str:
+    if has_request_context():
+        if bool(request.is_secure):
+            return "https"
+        configured_public_scheme = _configured_public_cookie_scheme_hint()
+        if configured_public_scheme == "https":
+            return "https"
+        forwarded_proto = _request_forwarded_proto_hint()
+        if forwarded_proto:
+            return forwarded_proto
+        request_scheme = str(getattr(request, "scheme", "") or "").strip().lower()
+        if request_scheme in {"http", "https"}:
+            return request_scheme
+    configured_public_scheme = _configured_public_cookie_scheme_hint()
+    if configured_public_scheme == "https":
+        return "https"
+    return "https" if _session_cookie_secure_default() else "http"
 
 
 def _session_cookie_secure_for_request() -> bool:
     override = _session_cookie_secure_override_early()
     if override is not None:
         return bool(override)
-    default_secure = _session_cookie_secure_default()
-    if has_request_context():
-        return bool(request.is_secure) or default_secure
-    return default_secure
+    return _request_effective_scheme_for_cookie_policy() == "https"
+
+
+def _cookie_transport_warning_payload() -> dict | None:
+    if not has_request_context():
+        return None
+    effective_scheme = _request_effective_scheme_for_cookie_policy()
+    session_cookie_secure = _session_cookie_secure_for_request()
+    if effective_scheme != "http" or not session_cookie_secure:
+        return None
+    override = _session_cookie_secure_override_early()
+    request_scheme = str(getattr(request, "scheme", "") or "").strip().lower()
+    forwarded_proto_hint = _request_forwarded_proto_hint()
+    configured_public_scheme = _configured_public_cookie_scheme_hint()
+    if override is True:
+        message = (
+            "Plain HTTP detected, but SORTARR_SESSION_COOKIE_SECURE=1 is forcing Secure session/CSRF cookies. "
+            "Browsers will not send them back on the next POST, so setup saves can fail."
+        )
+        recommended_next_step = (
+            "Disable SORTARR_SESSION_COOKIE_SECURE or set SORTARR_SESSION_COOKIE_SECURE=0 for this HTTP deployment, "
+            "then reload Setup and retry."
+        )
+        reason = "secure_override_on_http"
+    else:
+        message = (
+            "Plain HTTP detected, but Sortarr is about to issue Secure session/CSRF cookies on this request. "
+            "Browsers will not send them back on the next POST, so setup saves can fail."
+        )
+        recommended_next_step = (
+            "In Setup > Advanced settings > Network & CSRF, switch Proxy mode to Direct for HTTP deployments, "
+            "or set SORTARR_SESSION_COOKIE_SECURE=0, then reload Setup and retry."
+        )
+        reason = "secure_cookie_on_http"
+    return {
+        "detected": True,
+        "reason": reason,
+        "message": message,
+        "recommended_next_step": recommended_next_step,
+        "request_scheme": request_scheme,
+        "effective_request_scheme": effective_scheme,
+        "request_is_secure": bool(request.is_secure),
+        "configured_public_scheme": configured_public_scheme,
+        "forwarded_proto_hint": forwarded_proto_hint,
+        "session_cookie_secure": session_cookie_secure,
+        "session_cookie_secure_override": override,
+    }
 
 
 def _proxy_fix_kwargs_from_env() -> dict[str, int]:
@@ -927,6 +1021,15 @@ def _waitress_proxy_settings_summary(settings: dict[str, object] | None) -> dict
     }
 
 
+def _preserve_remote_peer_middleware(wsgi_app):
+    def wrapped(environ, start_response):
+        environ.setdefault("sortarr.remote_peer_addr", str(environ.get("REMOTE_ADDR") or ""))
+        environ.setdefault("sortarr.remote_peer_port", str(environ.get("REMOTE_PORT") or ""))
+        return wsgi_app(environ, start_response)
+
+    return wrapped
+
+
 def serve_with_waitress() -> None:
     host = os.environ.get("HOST", "0.0.0.0")  # nosec
     port = int(os.environ.get("PORT", "8787"))
@@ -951,12 +1054,32 @@ def serve_with_waitress() -> None:
                 "Waitress proxy-header preservation enabled without trusting forwarded host/proto/port headers: clear_untrusted=%s.",
                 "true" if waitress_proxy_settings.get("clear_untrusted_proxy_headers", True) else "false",
             )
+    if waitress_proxy_settings:
+        served_app = proxy_headers_middleware(
+            app,
+            trusted_proxy=waitress_proxy_settings.get("trusted_proxy"),
+            trusted_proxy_count=waitress_proxy_settings.get("trusted_proxy_count", 1),
+            trusted_proxy_headers=waitress_proxy_settings.get("trusted_proxy_headers"),
+            clear_untrusted=waitress_proxy_settings.get("clear_untrusted_proxy_headers", True),
+            log_untrusted=waitress_proxy_settings.get("log_untrusted_proxy_headers", False),
+        )
+        # Disable Waitress' built-in pre-clearing for proxied runs so our
+        # middleware can preserve the raw socket peer before it translates
+        # trusted forwarded headers into the request environ.
+        serve_kwargs = {
+            "clear_untrusted_proxy_headers": False,
+            "log_untrusted_proxy_headers": False,
+        }
+    else:
+        served_app = app
+        serve_kwargs = {}
+    served_app = _preserve_remote_peer_middleware(served_app)
     serve(
-        app,
+        served_app,
         host=host,
         port=port,
         threads=threads,
-        **waitress_proxy_settings,
+        **serve_kwargs,
     )
 
 
@@ -1166,6 +1289,8 @@ def _consume_setup_csrf_warning() -> str:
 
 
 def _csrf_diagnostics_payload() -> dict:
+    cfg = _get_config()
+    auth_context = dict(getattr(g, "request_auth_context", {}) or {})
     with _csrf_event_lock:
         ts = int(_csrf_last_event.get("ts") or 0)
         reason = str(_csrf_last_event.get("reason") or "").strip().lower()
@@ -1201,7 +1326,13 @@ def _csrf_diagnostics_payload() -> dict:
         current_headers,
         waitress_proxy_runtime_settings,
     )
+    configured_public_scheme = _configured_public_cookie_scheme_hint()
+    effective_request_scheme = _request_effective_scheme_for_cookie_policy()
+    session_cookie_secure = _session_cookie_secure_for_request()
+    session_cookie_secure_override = _session_cookie_secure_override_early()
+    cookie_transport_warning = _cookie_transport_warning_payload()
     guidance_message = "No recent CSRF mismatch logged."
+    recommended_next_step = "In Setup > Advanced settings > Network & CSRF, set Proxy mode to the detected chain and retry."
     if reason in {"origin", "referer"} or proxy_hint:
         guidance_message = (
             "Recent CSRF origin/referer mismatch detected. Check reverse proxy forwarded headers and Proxy mode."
@@ -1227,12 +1358,20 @@ def _csrf_diagnostics_payload() -> dict:
             "Unsupported forwarded header shape detected. Waitress 3.x does not accept comma-separated "
             "X-Forwarded-Proto/X-Forwarded-Port when those headers are trusted; normalize them at the immediate proxy."
         )
+        recommended_next_step = "Normalize X-Forwarded-Proto/X-Forwarded-Port at the immediate proxy and retry."
+    if cookie_transport_warning:
+        guidance_message = str(cookie_transport_warning.get("message") or guidance_message)
+        recommended_next_step = str(
+            cookie_transport_warning.get("recommended_next_step") or recommended_next_step
+        )
     trusted_state = _csrf_trusted_origins_runtime_state()
     return {
         "ok": True,
         "current": {
             "scheme": request.scheme,
             "is_secure": bool(request.is_secure),
+            "effective_request_scheme": effective_request_scheme,
+            "configured_public_scheme": configured_public_scheme,
             "host": request.host,
             "host_url": _redact_url_for_log(request.host_url),
             "proxy_fix": runtime_proxy_kwargs,
@@ -1243,9 +1382,12 @@ def _csrf_diagnostics_payload() -> dict:
             "proxy_mode_runtime": _proxy_preset_from_kwargs(runtime_proxy_kwargs),
             "proxy_mode_configured": _proxy_preset_from_env(),
             "proxy_mode_suggested": suggested_proxy_mode,
+            "session_cookie_secure": session_cookie_secure,
+            "session_cookie_secure_override": session_cookie_secure_override,
             "waitress_runtime": runtime_waitress,
             "waitress_configured": configured_waitress,
             "restart_required": restart_required,
+            "cookie_transport_warning": cookie_transport_warning,
             "forwarded_header_warnings": current_forwarded_header_warnings,
             "trusted_origins": {
                 "raw": trusted_state.get("raw", ""),
@@ -1258,6 +1400,9 @@ def _csrf_diagnostics_payload() -> dict:
                 "allow_cross_host": trusted_state.get("allow_cross_host", False),
                 "cross_host_mismatches": trusted_state.get("cross_host_mismatches", []),
             },
+            "auth_method": _auth_method(cfg),
+            "upstream_auth_header": _upstream_auth_header(cfg),
+            "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
         },
         "last_csrf_event": {
             "seen": bool(ts > 0 and reason),
@@ -1269,16 +1414,14 @@ def _csrf_diagnostics_payload() -> dict:
         },
         "guidance": {
             "message": guidance_message,
-            "recommended_next_step": (
-                "Normalize X-Forwarded-Proto/X-Forwarded-Port at the immediate proxy and retry."
-                if current_forwarded_header_warnings
-                else "In Setup > Advanced settings > Network & CSRF, set Proxy mode to the detected chain and retry."
-            ),
+            "recommended_next_step": recommended_next_step,
         },
     }
 
 
 def _security_self_check_payload() -> dict:
+    cfg = _get_config()
+    auth_context = dict(getattr(g, "request_auth_context", {}) or {})
     trusted_state = _csrf_trusted_origins_runtime_state()
     recovery_enabled, recovery_reason = _effective_unsafe_recovery_runtime()
     persistent_secret_resolved = bool(
@@ -1305,7 +1448,11 @@ def _security_self_check_payload() -> dict:
     session_cookie_secure_default = _session_cookie_secure_default()
     session_cookie_secure_override = _session_cookie_secure_override_early()
     request_is_secure = bool(request.is_secure)
-    secure_required_for_request = bool(session_cookie_secure_default or request_is_secure)
+    configured_public_scheme = _configured_public_cookie_scheme_hint()
+    forwarded_proto_hint = _request_forwarded_proto_hint()
+    effective_request_scheme = _request_effective_scheme_for_cookie_policy()
+    cookie_transport_warning = _cookie_transport_warning_payload()
+    secure_required_for_request = effective_request_scheme == "https"
     effective_headers = _security_response_headers(
         csp_nonce=str(getattr(g, "csp_nonce", "") or ""),
         request_is_secure=request_is_secure,
@@ -1320,7 +1467,11 @@ def _security_self_check_payload() -> dict:
         "script-src 'self'",
     }
     csp_effective_flags_ok = all(token in effective_csp for token in csp_expected)
-    cookie_secure_policy_ok = bool(session_cookie_secure) if secure_required_for_request else True
+    cookie_secure_policy_ok = (
+        bool(session_cookie_secure)
+        if secure_required_for_request
+        else not bool(cookie_transport_warning)
+    )
     cookie_csp_flags_ok = bool(
         session_cookie_httponly
         and cookie_secure_policy_ok
@@ -1329,6 +1480,16 @@ def _security_self_check_payload() -> dict:
     )
 
     checks = {
+        "authentication_boundary_configured": {
+            "pass": _auth_configuration_ready(cfg),
+            "details": {
+                "auth_method": _auth_method(cfg),
+                "upstream_auth_header": _upstream_auth_header(cfg),
+                "external_auth_config_issues": _external_auth_config_issues(cfg),
+                "basic_auth_configured": _basic_auth_configured(cfg),
+                "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
+            },
+        },
         "persistent_secret_resolved": {
             "pass": persistent_secret_resolved,
             "details": {
@@ -1367,10 +1528,14 @@ def _security_self_check_payload() -> dict:
                 "session_cookie_secure_override": session_cookie_secure_override,
                 "session_cookie_samesite": session_cookie_samesite,
                 "request_is_secure": request_is_secure,
+                "configured_public_scheme": configured_public_scheme,
+                "effective_request_scheme": effective_request_scheme,
+                "forwarded_proto_hint": forwarded_proto_hint,
                 "secure_required_for_request": secure_required_for_request,
                 "direct_http_cookie_exception_applied": bool(
                     not secure_required_for_request and not session_cookie_secure
                 ),
+                "cookie_transport_warning": cookie_transport_warning,
                 "hsts_expected_on_this_request": "Strict-Transport-Security" in effective_headers,
                 "csp_template_contains_required_directives": csp_effective_flags_ok,
                 "response_security_headers": dict(effective_headers),
@@ -1596,6 +1761,10 @@ RADARR_LITE_FIELDS = {
     "VideoBitrateMbps",
     "AudioBitrateMbps",
     "BitrateEstimated",
+    "FrameRateFps",
+    "FrameRateEstimated",
+    "BitsPerPixelPerFrame",
+    "BitsPerPixelPerFrameEstimated",
     "Airing",
     "Scene",
     "RootFolder",
@@ -3469,6 +3638,8 @@ def _write_env_file(path: str, values: dict):
         "ARR_BACKOFF_MAX_RETRIES",
         "ARR_CIRCUIT_FAIL_THRESHOLD",
         "ARR_CIRCUIT_OPEN_SECONDS",
+        "SORTARR_AUTH_METHOD",
+        "SORTARR_UPSTREAM_AUTH_HEADER",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
         "BASIC_AUTH_PASS_FILE",
@@ -4109,6 +4280,11 @@ def _get_config():
         "arr_circuit_fail_threshold": _read_int_env("ARR_CIRCUIT_FAIL_THRESHOLD", 3),
         "arr_circuit_open_seconds": _read_int_env("ARR_CIRCUIT_OPEN_SECONDS", 30),
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
+        "sortarr_auth_method": _normalize_auth_method(os.environ.get("SORTARR_AUTH_METHOD", "basic")),
+        "sortarr_upstream_auth_header": str(
+            os.environ.get("SORTARR_UPSTREAM_AUTH_HEADER", DEFAULT_UPSTREAM_AUTH_HEADER) or ""
+        ).strip()
+        or DEFAULT_UPSTREAM_AUTH_HEADER,
         "basic_auth_user": os.environ.get("BASIC_AUTH_USER", ""),
         "basic_auth_pass": _resolve_secret_env("BASIC_AUTH_PASS", ""),
         "sortarr_secret_key": _resolve_secret_env("SORTARR_SECRET_KEY", ""),
@@ -4172,6 +4348,58 @@ def _config_complete(cfg: dict) -> bool:
     return bool(_effective_media_source(cfg))
 
 
+def _normalize_auth_method(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"basic", "external"}:
+        return normalized
+    return "basic"
+
+
+def _auth_method(cfg: dict | None = None) -> str:
+    source = cfg if cfg is not None else _get_config()
+    return _normalize_auth_method(source.get("sortarr_auth_method", "basic"))
+
+
+def _upstream_auth_header(cfg: dict | None = None) -> str:
+    source = cfg if cfg is not None else _get_config()
+    raw = str(source.get("sortarr_upstream_auth_header") or "").strip()
+    return raw or DEFAULT_UPSTREAM_AUTH_HEADER
+
+
+def _valid_upstream_auth_header(value: str) -> bool:
+    return bool(UPSTREAM_AUTH_HEADER_RE.fullmatch(str(value or "").strip()))
+
+
+def _explicit_trusted_proxy_configured(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    trusted_proxy = str(source.get("sortarr_waitress_trusted_proxy") or "").strip()
+    return bool(trusted_proxy and trusted_proxy != "*")
+
+
+def _external_auth_config_issues(cfg: dict | None = None) -> list[str]:
+    source = cfg if cfg is not None else _get_config()
+    if _auth_method(source) != "external":
+        return []
+    issues: list[str] = []
+    header = _upstream_auth_header(source)
+    if not header:
+        issues.append("missing_upstream_auth_header")
+    elif not _valid_upstream_auth_header(header):
+        issues.append("invalid_upstream_auth_header")
+    if str(source.get("proxy_preset") or "direct").strip().lower() == "direct":
+        issues.append("external_auth_requires_proxy_mode")
+    if not _explicit_trusted_proxy_configured(source):
+        issues.append("explicit_trusted_proxy_required")
+    return issues
+
+
+def _auth_configuration_ready(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    if _auth_method(source) == "external":
+        return not _external_auth_config_issues(source)
+    return _basic_auth_configured(source)
+
+
 def _basic_auth_configured(cfg: dict | None = None) -> bool:
     source = cfg if cfg is not None else _get_config()
     user = str(source.get("basic_auth_user") or "").strip()
@@ -4192,7 +4420,9 @@ def _security_setup_reasons(cfg: dict | None = None) -> list[str]:
     if not _config_complete(cfg):
         return []
     reasons: list[str] = []
-    if not _basic_auth_configured(cfg):
+    if _auth_method(cfg) == "external":
+        reasons.extend(_external_auth_config_issues(cfg))
+    elif not _basic_auth_configured(cfg):
         reasons.append("missing_basic_auth")
     if not _allow_unsafe_ephemeral_recovery() and _require_persistent_secret_key() and _EPHEMERAL_APP_SECRET_KEY:
         reasons.append("missing_persistent_secret")
@@ -4212,7 +4442,7 @@ def _security_setup_required(cfg: dict | None = None) -> bool:
 
 def _setup_connection_test_enabled(cfg: dict | None = None) -> bool:
     source = cfg if cfg is not None else _get_config()
-    return _basic_auth_configured(source) and not _security_setup_required(source)
+    return _auth_configuration_ready(source) and not _security_setup_required(source)
 
 
 def _setup_test_slot_secret(cfg: dict, slot: str) -> tuple[str, str, str]:
@@ -4411,6 +4641,21 @@ def _emit_startup_config_lints(cfg: dict) -> None:
             history_preference,
             ",".join(history_available) or "(none)",
         )
+
+    auth_method = _auth_method(cfg)
+    raw_auth_method = str(os.environ.get("SORTARR_AUTH_METHOD") or "").strip()
+    if raw_auth_method and raw_auth_method.lower() not in {"basic", "external"}:
+        logger.warning(
+            "Invalid SORTARR_AUTH_METHOD=%r. Valid values: basic|external.",
+            os.environ.get("SORTARR_AUTH_METHOD"),
+        )
+    if auth_method == "external":
+        external_issues = _external_auth_config_issues(cfg)
+        if external_issues:
+            logger.warning(
+                "External authentication is enabled but not fully configured: %s.",
+                ", ".join(external_issues),
+            )
 
     mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
     if not mode and str(os.environ.get("SORTARR_PROXY_MODE") or "").strip():
@@ -4800,42 +5045,204 @@ def _get_basic_auth():
     return cfg["basic_auth_user"], cfg["basic_auth_pass"]
 
 
+def _request_remote_peer_addr() -> str:
+    environ = getattr(request, "environ", {}) or {}
+    return str(environ.get("sortarr.remote_peer_addr") or environ.get("REMOTE_ADDR") or "").strip()
+
+
+def _request_from_explicit_trusted_proxy(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    trusted_proxy = str(source.get("sortarr_waitress_trusted_proxy") or "").strip()
+    if not trusted_proxy or trusted_proxy == "*":
+        return False
+    return _request_remote_peer_addr() == trusted_proxy
+
+
+def _normalize_upstream_identity(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized or "," in normalized:
+        return ""
+    if any(ord(ch) < 32 for ch in normalized):
+        return ""
+    return normalized
+
+
+def _request_external_identity(cfg: dict | None = None) -> str:
+    source = cfg if cfg is not None else _get_config()
+    if _auth_method(source) != "external" or _external_auth_config_issues(source):
+        return ""
+    if not _request_from_explicit_trusted_proxy(source):
+        return ""
+    header = _upstream_auth_header(source)
+    if not _valid_upstream_auth_header(header):
+        return ""
+    return _normalize_upstream_identity(request.headers.get(header) or "")
+
+
+def _auth_response(auth_context: dict):
+    return Response(
+        str(auth_context.get("message") or "Unauthorized Access"),
+        int(auth_context.get("status_code") or 401),
+        dict(auth_context.get("headers") or {}),
+    )
+
+
+def _bootstrap_setup_api_allowed(endpoint: str, cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    if _config_complete(source):
+        return False
+    return endpoint in {
+        "api_config",
+        "api_setup_test",
+        "api_setup_secret_key",
+        "api_csrf_diagnostics",
+    }
+
+
+def _request_auth_context(cfg: dict | None = None, *, allow_setup_repair: bool = False) -> dict:
+    source = cfg if cfg is not None else _get_config()
+    endpoint = str(request.endpoint or "").strip()
+    method = _auth_method(source)
+    default_context = {
+        "authorized": False,
+        "auth_source": "none",
+        "identity": "",
+        "method": method,
+        "failure_reason": "unauthorized",
+        "status_code": 401,
+        "message": "Unauthorized Access",
+        "headers": {},
+    }
+
+    if _bootstrap_setup_api_allowed(endpoint, source):
+        return {
+            **default_context,
+            "authorized": True,
+            "auth_source": "bootstrap_setup",
+            "failure_reason": "",
+            "status_code": 200,
+            "message": "",
+        }
+
+    if method == "external":
+        issues = _external_auth_config_issues(source)
+        if issues:
+            if allow_setup_repair or not _config_complete(source):
+                return {
+                    **default_context,
+                    "authorized": True,
+                    "failure_reason": "external_auth_repair_allowed",
+                    "status_code": 200,
+                    "message": "",
+                }
+            return {
+                **default_context,
+                "failure_reason": "invalid_external_auth",
+                "status_code": 503,
+                "message": "External authentication is enabled but not fully configured.",
+            }
+        identity = _request_external_identity(source)
+        if identity:
+            return {
+                **default_context,
+                "authorized": True,
+                "auth_source": "external",
+                "identity": identity,
+                "failure_reason": "",
+                "status_code": 200,
+                "message": "",
+            }
+        header = _upstream_auth_header(source)
+        if not _request_from_explicit_trusted_proxy(source):
+            return {
+                **default_context,
+                "failure_reason": "untrusted_upstream_auth",
+                "status_code": 403,
+                "message": "External authentication requires access through the configured trusted reverse proxy.",
+            }
+        return {
+            **default_context,
+            "failure_reason": "missing_upstream_auth",
+            "status_code": 403,
+            "message": f"External authentication is enabled, but {header} was not provided by the trusted reverse proxy.",
+        }
+
+    user = str(source.get("basic_auth_user") or "").strip()
+    passwd = str(source.get("basic_auth_pass") or "").strip()
+    if not user and not passwd:
+        return {
+            **default_context,
+            "authorized": True,
+            "failure_reason": "",
+            "status_code": 200,
+            "message": "",
+        }
+    if user and not passwd:
+        if allow_setup_repair or endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(source):
+            return {
+                **default_context,
+                "authorized": True,
+                "failure_reason": "basic_auth_repair_allowed",
+                "status_code": 200,
+                "message": "",
+            }
+        logger.warning("Basic auth is misconfigured: BASIC_AUTH_USER is set but password is empty.")
+        return {
+            **default_context,
+            "failure_reason": "basic_auth_missing_password",
+            "status_code": 503,
+            "message": "Basic auth misconfigured: password is required.",
+        }
+    if passwd and not user:
+        if allow_setup_repair or endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(source):
+            return {
+                **default_context,
+                "authorized": True,
+                "failure_reason": "basic_auth_repair_allowed",
+                "status_code": 200,
+                "message": "",
+            }
+        logger.warning("Basic auth is misconfigured: BASIC_AUTH_PASS is set but username is empty.")
+        return {
+            **default_context,
+            "failure_reason": "basic_auth_missing_username",
+            "status_code": 503,
+            "message": "Basic auth misconfigured: username is required.",
+        }
+
+    auth = request.authorization
+    if (
+        auth
+        and secrets.compare_digest(str(auth.username or ""), str(user or ""))
+        and secrets.compare_digest(str(auth.password or ""), str(passwd or ""))
+    ):
+        return {
+            **default_context,
+            "authorized": True,
+            "auth_source": "basic",
+            "identity": user,
+            "failure_reason": "",
+            "status_code": 200,
+            "message": "",
+        }
+
+    return {
+        **default_context,
+        "failure_reason": "bad_basic_auth",
+        "status_code": 401,
+        "headers": {"WWW-Authenticate": 'Basic realm="Authentication Required"'},
+    }
+
+
 def _auth_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         cfg = _get_config()
-        user = str(cfg.get("basic_auth_user") or "").strip()
-        passwd = str(cfg.get("basic_auth_pass") or "").strip()
-        if not user and not passwd:
+        auth_context = _request_auth_context(cfg)
+        if auth_context.get("authorized"):
+            g.request_auth_context = auth_context
             return fn(*args, **kwargs)
-        if user and not passwd:
-            endpoint = str(request.endpoint or "").strip()
-            if endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(cfg):
-                # Allow bootstrap/remediation flows to reach Setup helpers instead of
-                # failing early with a hard 503 when only one Basic Auth field exists.
-                return fn(*args, **kwargs)
-            logger.warning("Basic auth is misconfigured: BASIC_AUTH_USER is set but password is empty.")
-            return Response("Basic auth misconfigured: password is required.", 503)
-        if passwd and not user:
-            endpoint = str(request.endpoint or "").strip()
-            if endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(cfg):
-                return fn(*args, **kwargs)
-            logger.warning("Basic auth is misconfigured: BASIC_AUTH_PASS is set but username is empty.")
-            return Response("Basic auth misconfigured: username is required.", 503)
-
-        auth = request.authorization
-        if (
-            auth
-            and secrets.compare_digest(str(auth.username or ""), str(user or ""))
-            and secrets.compare_digest(str(auth.password or ""), str(passwd or ""))
-        ):
-            return fn(*args, **kwargs)
-
-        return Response(
-            "Unauthorized Access",
-            401,
-            {"WWW-Authenticate": 'Basic realm="Authentication Required"'},
-        )
+        return _auth_response(auth_context)
 
     return wrapper
 
@@ -10229,6 +10636,57 @@ def _resolution_from_file(f: dict) -> str:
     return res
 
 
+def _resolution_dimensions(value) -> tuple[int | None, int | None]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return None, None
+    match = re.search(r"(\d{3,4})\s*x\s*(\d{3,4})", raw)
+    if not match:
+        return None, None
+    width = _safe_int(match.group(1))
+    height = _safe_int(match.group(2))
+    if width <= 0 or height <= 0:
+        return None, None
+    return width, height
+
+
+def _normalize_frame_rate_fps(value) -> float:
+    if value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        num = float(value)
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return 0.0
+        frac = re.fullmatch(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", raw)
+        if frac:
+            denom = float(frac.group(2))
+            if denom <= 0:
+                return 0.0
+            num = float(frac.group(1)) / denom
+        else:
+            match = re.search(r"\d+(?:\.\d+)?", raw)
+            if not match:
+                return 0.0
+            try:
+                num = float(match.group(0))
+            except (TypeError, ValueError):
+                return 0.0
+    if not math.isfinite(num) or num <= 0 or num > 240:
+        return 0.0
+    return round(num, 3)
+
+
+def _frame_rate_fps_from_file(f: dict) -> float:
+    media = f.get("mediaInfo") or {}
+    for key in ["videoFps", "videoFrameRate", "frameRate", "videoFrameRateRaw"]:
+        num = _normalize_frame_rate_fps(media.get(key) or f.get(key))
+        if num > 0:
+            return num
+    return 0.0
+
+
 def _audio_format_from_file(f: dict) -> str:
     return (f.get("mediaInfo") or {}).get("audioCodec", "") or ""
 
@@ -10371,6 +10829,21 @@ def _video_audio_bitrate_mbps_from_file(f: dict) -> tuple[float, float]:
     video_mbps = round(video / 1_000_000, 2) if video > 0 else 0.0
     audio_mbps = round(audio / 1_000_000, 2) if audio > 0 else 0.0
     return video_mbps, audio_mbps
+
+
+def _bits_per_pixel_per_frame(bitrate_mbps, resolution: str, frame_rate_fps) -> float:
+    try:
+        bitrate = float(bitrate_mbps or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    fps = _normalize_frame_rate_fps(frame_rate_fps)
+    width, height = _resolution_dimensions(resolution)
+    if not math.isfinite(bitrate) or bitrate <= 0 or fps <= 0 or not width or not height:
+        return 0.0
+    denom = width * height * fps
+    if denom <= 0:
+        return 0.0
+    return round((bitrate * 1_000_000.0) / denom, 5)
 
 
 def _build_sonarr_row(
@@ -10628,6 +11101,12 @@ def _build_sonarr_episode_payload(
         "audioChannels": "",
         "audioLanguages": "",
         "subtitleLanguages": "",
+        "bitrateMbps": "",
+        "bitrateEstimated": False,
+        "frameRateFps": "",
+        "frameRateEstimated": False,
+        "bitsPerPixelPerFrame": "",
+        "bitsPerPixelPerFrameEstimated": False,
         "customFormats": _format_custom_formats(episode.get("customFormats") or []),
         "customFormatScore": custom_format_score,
         "qualityCutoffNotMet": quality_cutoff,
@@ -10635,7 +11114,8 @@ def _build_sonarr_episode_payload(
         "path": "",
     }
     if not fast_mode and file:
-        payload["fileSizeGiB"] = _bytes_to_gib(_safe_int(file.get("size")))
+        file_size_bytes = _safe_int(file.get("size"))
+        payload["fileSizeGiB"] = _bytes_to_gib(file_size_bytes)
         payload["quality"] = _quality_from_file(file)
         payload["resolution"] = _resolution_from_file(file)
         payload["videoCodec"] = _video_codec_from_file(file)
@@ -10653,6 +11133,29 @@ def _build_sonarr_episode_payload(
             payload["qualityCutoffNotMet"] = bool(file.get("qualityCutoffNotMet"))
         payload["releaseGroup"] = file.get("releaseGroup") or ""
         payload["path"] = file.get("path") or ""
+        bitrate_mbps = _bitrate_mbps_from_file(file)
+        bitrate_estimated = False
+        runtime_mins = _safe_int(payload.get("runtimeMins"))
+        if bitrate_mbps <= 0 and runtime_mins > 0 and file_size_bytes > 0:
+            bitrate_bps = (file_size_bytes * 8) / (runtime_mins * 60)
+            bitrate_mbps = round(bitrate_bps / 1_000_000, 2)
+            bitrate_estimated = bitrate_mbps > 0
+        frame_rate_fps = _frame_rate_fps_from_file(file)
+        bits_per_pixel_per_frame = _bits_per_pixel_per_frame(
+            bitrate_mbps,
+            payload.get("resolution") or "",
+            frame_rate_fps,
+        )
+        payload["bitrateMbps"] = bitrate_mbps if bitrate_mbps else ""
+        payload["bitrateEstimated"] = bitrate_estimated if bitrate_mbps else False
+        payload["frameRateFps"] = frame_rate_fps if frame_rate_fps else ""
+        payload["frameRateEstimated"] = False
+        payload["bitsPerPixelPerFrame"] = (
+            bits_per_pixel_per_frame if bits_per_pixel_per_frame else ""
+        )
+        payload["bitsPerPixelPerFrameEstimated"] = (
+            bool(bits_per_pixel_per_frame and bitrate_estimated)
+        )
     return payload
 
 
@@ -11246,6 +11749,10 @@ def _build_radarr_row(
     video_bitrate_mbps = 0.0
     audio_bitrate_mbps = 0.0
     bitrate_estimated = False
+    frame_rate_fps = 0.0
+    frame_rate_estimated = False
+    bits_per_pixel_per_frame = 0.0
+    bits_per_pixel_per_frame_estimated = False
     release_group = ""
     edition = ""
     custom_formats = ""
@@ -11273,6 +11780,7 @@ def _build_radarr_row(
         video_hdr = _video_hdr_from_file(primary)
         video_bitrate_mbps, audio_bitrate_mbps = _video_audio_bitrate_mbps_from_file(primary)
         bitrate_mbps = _bitrate_mbps_from_file(primary)
+        frame_rate_fps = _frame_rate_fps_from_file(primary)
         release_group = str(primary.get("releaseGroup") or "")
         edition = str(primary.get("edition") or "")
         scene_name = str(primary.get("sceneName") or "")
@@ -11297,6 +11805,12 @@ def _build_radarr_row(
         bitrate_bps = (file_size_bytes * 8) / (runtime * 60)
         bitrate_mbps = round(bitrate_bps / 1_000_000, 2)
         bitrate_estimated = True
+    bits_per_pixel_per_frame = _bits_per_pixel_per_frame(
+        bitrate_mbps,
+        resolution,
+        frame_rate_fps,
+    )
+    bits_per_pixel_per_frame_estimated = bool(bits_per_pixel_per_frame and bitrate_estimated)
 
     gb_per_hour = 0.0
     if runtime > 0 and size_gib > 0:
@@ -11343,6 +11857,12 @@ def _build_radarr_row(
         "VideoBitrateMbps": video_bitrate_mbps if video_bitrate_mbps else "",
         "AudioBitrateMbps": audio_bitrate_mbps if audio_bitrate_mbps else "",
         "BitrateEstimated": bitrate_estimated if bitrate_mbps else False,
+        "FrameRateFps": frame_rate_fps if frame_rate_fps else "",
+        "FrameRateEstimated": frame_rate_estimated if frame_rate_fps else False,
+        "BitsPerPixelPerFrame": bits_per_pixel_per_frame if bits_per_pixel_per_frame else "",
+        "BitsPerPixelPerFrameEstimated": (
+            bits_per_pixel_per_frame_estimated if bits_per_pixel_per_frame else False
+        ),
         "VideoQuality": video_quality,
         "Resolution": resolution,
         "AudioCodec": audio_format,
@@ -12185,8 +12705,103 @@ def index():
     )
 
 
-def _setup_form_values(cfg: dict) -> dict:
+def _setup_form_values(cfg: dict, form=None) -> dict:
     values = dict(cfg)
+    values.setdefault("sortarr_auth_method", "basic")
+    values.setdefault("sortarr_upstream_auth_header", DEFAULT_UPSTREAM_AUTH_HEADER)
+    values.setdefault("clear_basic_auth_pass", False)
+    if form is not None:
+        def form_value(name: str, default: str = "") -> str:
+            return str(form.get(name, default) or "").strip()
+
+        for key in (
+            "sonarr_name",
+            "sonarr_name_2",
+            "sonarr_name_3",
+            "radarr_name",
+            "radarr_name_2",
+            "radarr_name_3",
+            "plex_client_id",
+            "plex_section_filters",
+            "tautulli_url",
+            "jellystat_library_ids_sonarr",
+            "jellystat_library_ids_radarr",
+            "basic_auth_user",
+            "sortarr_upstream_auth_header",
+            "sortarr_proxy_hops",
+            "sortarr_proxy_hops_for",
+            "sortarr_proxy_hops_host",
+            "sortarr_proxy_hops_proto",
+            "sortarr_proxy_hops_port",
+            "sortarr_proxy_hops_prefix",
+            "sortarr_waitress_trusted_proxy",
+            "sortarr_csrf_trusted_origins",
+            "tautulli_timeout_seconds",
+            "tautulli_fetch_seconds",
+            "tautulli_metadata_workers",
+            "sonarr_timeout_seconds",
+            "radarr_timeout_seconds",
+            "sonarr_episodefile_workers",
+            "radarr_wanted_workers",
+            "radarr_instance_workers",
+            "plex_history_page_size",
+        ):
+            values[key] = form_value(key, str(values.get(key) or ""))
+
+        for key in (
+            "sonarr_url",
+            "sonarr_url_api",
+            "sonarr_url_external",
+            "sonarr_url_2",
+            "sonarr_url_api_2",
+            "sonarr_url_external_2",
+            "sonarr_url_3",
+            "sonarr_url_api_3",
+            "sonarr_url_external_3",
+            "radarr_url",
+            "radarr_url_api",
+            "radarr_url_external",
+            "radarr_url_2",
+            "radarr_url_api_2",
+            "radarr_url_external_2",
+            "radarr_url_3",
+            "radarr_url_api_3",
+            "radarr_url_external_3",
+            "plex_url",
+            "jellystat_url",
+        ):
+            values[key] = _normalize_url(form_value(key, str(values.get(key) or "")))
+
+        values["media_source_preference"] = _normalize_media_source_preference(
+            form_value("media_source_preference", str(values.get("media_source_preference") or "arr"))
+        )
+        values["history_source_preference"] = _normalize_history_source_preference(
+            form_value("history_source_preference", str(values.get("history_source_preference") or "auto"))
+        )
+        values["sortarr_auth_method"] = _normalize_auth_method(
+            form_value("sortarr_auth_method", str(values.get("sortarr_auth_method") or "basic"))
+        )
+        proxy_preset = form_value("proxy_preset", str(values.get("proxy_preset") or "single")).lower()
+        if proxy_preset not in {"direct", "single", "double", "custom"}:
+            proxy_preset = "single"
+        values["proxy_preset"] = proxy_preset
+        values["sortarr_proxy_mode"] = proxy_preset
+        values["sortarr_allow_unsafe_ephemeral_recovery"] = form.get("sortarr_allow_unsafe_ephemeral_recovery") == "1"
+        values["clear_basic_auth_pass"] = form.get("clear_basic_auth_pass") == "1"
+
+        for field_name, list_key in (
+            ("sonarr_path_map", "sonarr_path_maps"),
+            ("sonarr_path_map_2", "sonarr_path_maps_2"),
+            ("sonarr_path_map_3", "sonarr_path_maps_3"),
+            ("radarr_path_map", "radarr_path_maps"),
+            ("radarr_path_map_2", "radarr_path_maps_2"),
+            ("radarr_path_map_3", "radarr_path_maps_3"),
+        ):
+            entries = [str(value or "").strip() for value in form.getlist(field_name)]
+            entries = [entry for entry in entries if entry]
+            values[field_name] = " | ".join(entries)
+            values[list_key] = entries
+
     for key in (
         "sonarr_api_key",
         "sonarr_api_key_2",
@@ -12205,6 +12820,15 @@ def _setup_form_values(cfg: dict) -> dict:
 
 
 def _setup_advanced_summary(cfg: dict) -> dict:
+    def has_non_default_int(key: str, default: int) -> bool:
+        raw = str(cfg.get(key) or "").strip()
+        if not raw:
+            return False
+        try:
+            return int(raw) != default
+        except (TypeError, ValueError):
+            return True
+
     items: list[str] = []
     if str(cfg.get("proxy_preset") or "single") != "single":
         items.append("Proxy mode")
@@ -12212,25 +12836,27 @@ def _setup_advanced_summary(cfg: dict) -> dict:
         items.append("CSRF trusted origins")
     if bool(cfg.get("sortarr_allow_unsafe_ephemeral_recovery")):
         items.append("Unsafe recovery mode")
-    if int(cfg.get("sonarr_timeout_seconds") or 90) != 90:
+    if has_non_default_int("sonarr_timeout_seconds", 90):
         items.append("Sonarr timeout")
-    if int(cfg.get("radarr_timeout_seconds") or 90) != 90:
+    if has_non_default_int("radarr_timeout_seconds", 90):
         items.append("Radarr timeout")
-    if int(cfg.get("sonarr_episodefile_workers") or 8) != 8:
+    if has_non_default_int("sonarr_episodefile_workers", 8):
         items.append("Episode file workers")
-    if int(cfg.get("radarr_wanted_workers") or 2) != 2:
+    if has_non_default_int("radarr_wanted_workers", 2):
         items.append("Radarr wanted workers")
-    if int(cfg.get("radarr_instance_workers") or 1) != 1:
+    if has_non_default_int("radarr_instance_workers", 1):
         items.append("Radarr instance workers")
-    if int(cfg.get("tautulli_timeout_seconds") or 60) != 60:
+    if has_non_default_int("tautulli_timeout_seconds", 60):
         items.append("Tautulli timeout")
-    if int(cfg.get("tautulli_fetch_seconds") or 0) != 0:
+    if has_non_default_int("tautulli_fetch_seconds", 0):
         items.append("Tautulli fetch interval")
-    if int(cfg.get("tautulli_metadata_workers") or 4) != 4:
+    if has_non_default_int("tautulli_metadata_workers", 4):
         items.append("Tautulli metadata workers")
-    if int(cfg.get("plex_history_page_size") or 200) != 200:
+    if has_non_default_int("plex_history_page_size", 200):
         items.append("Plex history page size")
-    if bool(cfg.get("basic_auth_user")):
+    if _auth_method(cfg) == "external":
+        items.append("External auth")
+    elif bool(cfg.get("basic_auth_user")):
         items.append("Basic auth")
     count = len(items)
     preview = ", ".join(items[:3])
@@ -12264,29 +12890,26 @@ def setup():
     setup_connection_test_enabled = _setup_connection_test_enabled(cfg)
     setup_warnings: list[str] = []
     if configured:
-        user, passwd = _get_basic_auth()
-        if _basic_auth_partially_configured(cfg):
+        auth_context = _request_auth_context(cfg, allow_setup_repair=True)
+        if auth_context.get("failure_reason") == "basic_auth_repair_allowed" and _basic_auth_partially_configured(cfg):
             logger.warning(
                 "Basic auth is partially configured; allowing Setup access so credentials can be repaired."
             )
             setup_warnings.append(
                 "Basic Auth is partially configured. Complete both username and password in Setup to restore protected access."
             )
-        else:
-            auth = request.authorization
-            authorized = (
-                auth
-                and secrets.compare_digest(str(auth.username or ""), str(user or ""))
-                and secrets.compare_digest(str(auth.password or ""), str(passwd or ""))
+        elif auth_context.get("failure_reason") == "external_auth_repair_allowed":
+            setup_warnings.append(
+                "External authentication is incomplete. Complete Setup to restore trusted reverse-proxy login."
             )
-            if (user or passwd) and not authorized:
-                return Response(
-                    "Unauthorized Access",
-                    401,
-                    {"WWW-Authenticate": 'Basic realm="Authentication Required"'},
-                )
-            if request.method == "GET" and request.args.get("force") != "1" and not setup_required:
-                return redirect(url_for("index"))
+        elif not auth_context.get("authorized"):
+            return _auth_response(auth_context)
+        g.request_auth_context = auth_context
+        if request.method == "GET" and request.args.get("force") != "1" and not setup_required:
+            return redirect(url_for("index"))
+    cookie_transport_warning = _cookie_transport_warning_payload()
+    if cookie_transport_warning:
+        setup_warnings.append(str(cookie_transport_warning.get("message") or "").strip())
 
     error = ""
     field_errors: dict[str, str] = {}
@@ -12381,22 +13004,38 @@ def setup():
         tautulli_lookup_limit = str(REQUIRED_TAUTULLI_LOOKUP_LIMIT)
         tautulli_lookup_seconds = str(REQUIRED_TAUTULLI_LOOKUP_SECONDS)
 
-        basic_auth_user = request.form.get("basic_auth_user", "").strip()
-        basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
-        clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
-        if not basic_auth_user:
-            basic_auth_pass = ""  # nosec
-        elif clear_basic_auth_pass:
-            basic_auth_pass = ""  # nosec
-        elif basic_auth_pass_raw:
-            basic_auth_pass = basic_auth_pass_raw
-        else:
-            basic_auth_pass = cfg["basic_auth_pass"]
+        auth_method = _normalize_auth_method(
+            request.form.get("sortarr_auth_method", cfg.get("sortarr_auth_method", "basic"))
+        )
+        upstream_auth_header = (
+            request.form.get("sortarr_upstream_auth_header", cfg.get("sortarr_upstream_auth_header", DEFAULT_UPSTREAM_AUTH_HEADER))
+            or ""
+        ).strip() or DEFAULT_UPSTREAM_AUTH_HEADER
         auth_error = ""
-        if not basic_auth_user:
-            auth_error = "Basic auth username is required."
-        elif not basic_auth_pass:
-            auth_error = "Basic auth password is required."
+        clear_basic_auth_pass = False
+        if auth_method == "basic":
+            basic_auth_user = request.form.get("basic_auth_user", "").strip()
+            basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
+            clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
+            if not basic_auth_user:
+                basic_auth_pass = ""  # nosec
+            elif clear_basic_auth_pass:
+                basic_auth_pass = ""  # nosec
+            elif basic_auth_pass_raw:
+                basic_auth_pass = basic_auth_pass_raw
+            else:
+                basic_auth_pass = cfg["basic_auth_pass"]
+            if not basic_auth_user:
+                auth_error = "Basic auth username is required."
+            elif not basic_auth_pass:
+                auth_error = "Basic auth password is required."
+        else:
+            basic_auth_user = str(cfg.get("basic_auth_user") or "").strip()
+            basic_auth_pass = str(cfg.get("basic_auth_pass") or "").strip()
+            if not upstream_auth_header:
+                auth_error = "External authentication header is required."
+            elif not _valid_upstream_auth_header(upstream_auth_header):
+                auth_error = "External authentication header must contain only letters, numbers, and hyphens."
 
         proxy_preset = str(request.form.get("proxy_preset", cfg.get("proxy_preset", "single")) or "").strip().lower()
         if proxy_preset not in {"direct", "single", "double", "custom"}:
@@ -12453,6 +13092,15 @@ def setup():
                     "Setup saved with cross-host CSRF trusted origins (public_host=%s, mismatched=%s).",
                     setup_public_host,
                     ",".join(setup_mismatches),
+                )
+
+        external_auth_error = ""
+        if auth_method == "external":
+            if proxy_preset == "direct":
+                external_auth_error = "External authentication requires Proxy mode to be Single, Double, or Custom."
+            elif not waitress_trusted_proxy or waitress_trusted_proxy == "*":
+                external_auth_error = (
+                    "External authentication requires Waitress trusted proxy to be set to the immediate proxy IP/host."
                 )
 
         sortarr_secret_key_raw = request.form.get("sortarr_secret_key", "").strip()
@@ -12574,6 +13222,8 @@ def setup():
             "SONARR_EPISODEFILE_WORKERS": sonarr_episodefile_workers,
             "RADARR_WANTED_WORKERS": radarr_wanted_workers,
             "RADARR_INSTANCE_WORKERS": radarr_instance_workers,
+            "SORTARR_AUTH_METHOD": auth_method,
+            "SORTARR_UPSTREAM_AUTH_HEADER": upstream_auth_header,
             "BASIC_AUTH_USER": basic_auth_user,
             "BASIC_AUTH_PASS": basic_auth_pass,
             "SORTARR_SECRET_KEY": sortarr_secret_key,
@@ -12587,7 +13237,7 @@ def setup():
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
         _normalize_setup_secret_payload(data)
-        if not basic_auth_user or clear_basic_auth_pass:
+        if auth_method == "basic" and (not basic_auth_user or clear_basic_auth_pass):
             data["BASIC_AUTH_PASS"] = ""
             data["BASIC_AUTH_PASS_FILE"] = ""
             data["BASIC_AUTH_PASS_CRED_TARGET"] = ""
@@ -12681,8 +13331,10 @@ def setup():
             or proxy_error
             or trusted_origins_error
             or auth_error
+            or external_auth_error
         )
 
+        redirect_endpoint = "index"
         if cache_seconds is None:
             error = "Cache seconds must be a whole number."
         elif cache_seconds < 30:
@@ -12744,104 +13396,106 @@ def setup():
                 (data.get("PLEX_URL") and has_secret_value("PLEX_TOKEN"))
                 or (cfg.get("plex_url") and cfg.get("plex_token"))
             )
-            media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
-            if media_preference == "arr" and not has_arr_media:
-                error = "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured."
-            elif media_preference == "plex" and not has_plex_media:
-                error = "Preferred media source is Plex, but Plex is not fully configured."
-                field_errors.setdefault(
-                    "plex",
-                    "Provide URL and token or change preferred media source.",
+            if not (has_arr_media or has_plex_media):
+                redirect_endpoint = "setup"
+                setup_warnings.append(
+                    "Security settings saved. Continue Setup to add a media source."
                 )
-            elif media_preference == "auto" and not (has_arr_media or has_plex_media):
-                error = "Provide at least one media source: Sonarr, Radarr, or Plex."
-            elif not has_arr_media and not has_plex_media:
-                error = "Provide at least one media source: Sonarr, Radarr, or Plex."
             else:
-                sonarr2 = instance_url("SONARR", "_2") and has_secret_value("SONARR_API_KEY_2")
-                sonarr3 = instance_url("SONARR", "_3") and has_secret_value("SONARR_API_KEY_3")
-                radarr2 = instance_url("RADARR", "_2") and has_secret_value("RADARR_API_KEY_2")
-                radarr3 = instance_url("RADARR", "_3") and has_secret_value("RADARR_API_KEY_3")
-
-                if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
-                    error = "Sonarr instance 1 name is required when additional instances are configured."
-                elif sonarr2 and not data.get("SONARR_NAME_2"):
-                    error = "Sonarr instance 2 name is required when it is configured."
-                elif sonarr3 and not data.get("SONARR_NAME_3"):
-                    error = "Sonarr instance 3 name is required when it is configured."
-                elif (radarr2 or radarr3) and not data.get("RADARR_NAME"):
-                    error = "Radarr instance 1 name is required when additional instances are configured."
-                elif radarr2 and not data.get("RADARR_NAME_2"):
-                    error = "Radarr instance 2 name is required when it is configured."
-                elif radarr3 and not data.get("RADARR_NAME_3"):
-                    error = "Radarr instance 3 name is required when it is configured."
+                media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
+                if media_preference == "arr" and not has_arr_media:
+                    error = "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured."
+                elif media_preference == "plex" and not has_plex_media:
+                    error = "Preferred media source is Plex, but Plex is not fully configured."
+                    field_errors.setdefault(
+                        "plex",
+                        "Provide URL and token or change preferred media source.",
+                    )
                 else:
-                    tautulli_url = data.get("TAUTULLI_URL") or ""
-                    tautulli_api_key = resolve_secret_value("TAUTULLI_API_KEY")
-                    jellystat_url = data.get("JELLYSTAT_URL") or ""
-                    jellystat_api_key = resolve_secret_value("JELLYSTAT_API_KEY")
-                    history_preference = data.get("HISTORY_SOURCE_PREFERENCE", "auto")
-                    if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
-                        error = "Preferred history source is Tautulli, but Tautulli is not fully configured."
-                        field_errors.setdefault(
-                            "tautulli",
-                            "Provide URL and API key or change preferred history source.",
-                        )
-                    elif history_preference == "jellystat" and not (jellystat_url and jellystat_api_key):
-                        error = "Preferred history source is Jellystat, but Jellystat is not fully configured."
-                        field_errors.setdefault(
-                            "jellystat",
-                            "Provide URL and API key or change preferred history source.",
-                        )
-                    elif history_preference == "plex" and not (data.get("PLEX_URL") and resolve_secret_value("PLEX_TOKEN")):
-                        error = "Preferred history source is Plex, but Plex is not fully configured."
-                        field_errors.setdefault(
-                            "plex",
-                            "Provide URL and token or change preferred history source.",
-                        )
+                    sonarr2 = instance_url("SONARR", "_2") and has_secret_value("SONARR_API_KEY_2")
+                    sonarr3 = instance_url("SONARR", "_3") and has_secret_value("SONARR_API_KEY_3")
+                    radarr2 = instance_url("RADARR", "_2") and has_secret_value("RADARR_API_KEY_2")
+                    radarr3 = instance_url("RADARR", "_3") and has_secret_value("RADARR_API_KEY_3")
+
+                    if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
+                        error = "Sonarr instance 1 name is required when additional instances are configured."
+                    elif sonarr2 and not data.get("SONARR_NAME_2"):
+                        error = "Sonarr instance 2 name is required when it is configured."
+                    elif sonarr3 and not data.get("SONARR_NAME_3"):
+                        error = "Sonarr instance 3 name is required when it is configured."
+                    elif (radarr2 or radarr3) and not data.get("RADARR_NAME"):
+                        error = "Radarr instance 1 name is required when additional instances are configured."
+                    elif radarr2 and not data.get("RADARR_NAME_2"):
+                        error = "Radarr instance 2 name is required when it is configured."
+                    elif radarr3 and not data.get("RADARR_NAME_3"):
+                        error = "Radarr instance 3 name is required when it is configured."
                     else:
-                        connection_errors: dict[str, str] = {}
-                        for label, prefix, idx in [
-                            ("Sonarr", "SONARR", 1),
-                            ("Sonarr", "SONARR", 2),
-                            ("Sonarr", "SONARR", 3),
-                            ("Radarr", "RADARR", 1),
-                            ("Radarr", "RADARR", 2),
-                            ("Radarr", "RADARR", 3),
-                        ]:
-                            suffix = "" if idx == 1 else f"_{idx}"
-                            url = instance_url(prefix, suffix)
-                            api_key = resolve_secret_value(f"{prefix}_API_KEY{suffix}")
-                            name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
-                            if not (url and api_key):
-                                continue
-                            failure = _arr_test_connection(url, api_key, timeout=10)
-                            if failure:
-                                key = _instance_error_key(prefix, idx)
-                                if name:
-                                    failure = f"{name}: {failure}"
-                                connection_errors[key] = failure
-                        if tautulli_url and tautulli_api_key:
-                            failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
-                            if failure:
-                                connection_errors["tautulli"] = failure
-                        if jellystat_url and jellystat_api_key:
-                            failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
-                            if failure:
-                                connection_errors["jellystat"] = failure
-                        plex_url = data.get("PLEX_URL") or ""
-                        plex_token = resolve_secret_value("PLEX_TOKEN")
-                        plex_client_id = data.get("PLEX_CLIENT_ID") or ""
-                        if plex_url and plex_token:
-                            if not plex_client_id:
-                                plex_client_id = secrets.token_hex(12)
-                                data["PLEX_CLIENT_ID"] = plex_client_id
-                            failure = _plex_test_connection(plex_url, plex_token, plex_client_id, timeout=10)
-                            if failure:
-                                connection_errors["plex"] = failure
-                        if connection_errors:
-                            field_errors.update(connection_errors)
-                            error = "Fix the highlighted connection errors."
+                        tautulli_url = data.get("TAUTULLI_URL") or ""
+                        tautulli_api_key = resolve_secret_value("TAUTULLI_API_KEY")
+                        jellystat_url = data.get("JELLYSTAT_URL") or ""
+                        jellystat_api_key = resolve_secret_value("JELLYSTAT_API_KEY")
+                        history_preference = data.get("HISTORY_SOURCE_PREFERENCE", "auto")
+                        if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
+                            error = "Preferred history source is Tautulli, but Tautulli is not fully configured."
+                            field_errors.setdefault(
+                                "tautulli",
+                                "Provide URL and API key or change preferred history source.",
+                            )
+                        elif history_preference == "jellystat" and not (jellystat_url and jellystat_api_key):
+                            error = "Preferred history source is Jellystat, but Jellystat is not fully configured."
+                            field_errors.setdefault(
+                                "jellystat",
+                                "Provide URL and API key or change preferred history source.",
+                            )
+                        elif history_preference == "plex" and not (data.get("PLEX_URL") and resolve_secret_value("PLEX_TOKEN")):
+                            error = "Preferred history source is Plex, but Plex is not fully configured."
+                            field_errors.setdefault(
+                                "plex",
+                                "Provide URL and token or change preferred history source.",
+                            )
+                        else:
+                            connection_errors: dict[str, str] = {}
+                            for label, prefix, idx in [
+                                ("Sonarr", "SONARR", 1),
+                                ("Sonarr", "SONARR", 2),
+                                ("Sonarr", "SONARR", 3),
+                                ("Radarr", "RADARR", 1),
+                                ("Radarr", "RADARR", 2),
+                                ("Radarr", "RADARR", 3),
+                            ]:
+                                suffix = "" if idx == 1 else f"_{idx}"
+                                url = instance_url(prefix, suffix)
+                                api_key = resolve_secret_value(f"{prefix}_API_KEY{suffix}")
+                                name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
+                                if not (url and api_key):
+                                    continue
+                                failure = _arr_test_connection(url, api_key, timeout=10)
+                                if failure:
+                                    key = _instance_error_key(prefix, idx)
+                                    if name:
+                                        failure = f"{name}: {failure}"
+                                    connection_errors[key] = failure
+                            if tautulli_url and tautulli_api_key:
+                                failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
+                                if failure:
+                                    connection_errors["tautulli"] = failure
+                            if jellystat_url and jellystat_api_key:
+                                failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
+                                if failure:
+                                    connection_errors["jellystat"] = failure
+                            plex_url = data.get("PLEX_URL") or ""
+                            plex_token = resolve_secret_value("PLEX_TOKEN")
+                            plex_client_id = data.get("PLEX_CLIENT_ID") or ""
+                            if plex_url and plex_token:
+                                if not plex_client_id:
+                                    plex_client_id = secrets.token_hex(12)
+                                    data["PLEX_CLIENT_ID"] = plex_client_id
+                                failure = _plex_test_connection(plex_url, plex_token, plex_client_id, timeout=10)
+                                if failure:
+                                    connection_errors["plex"] = failure
+                            if connection_errors:
+                                field_errors.update(connection_errors)
+                                error = "Fix the highlighted connection errors."
         proxy_trust_settings_changed = _proxy_trust_settings_changed(data)
         if not error:
             try:
@@ -12875,7 +13529,7 @@ def setup():
                 if setup_warnings:
                     session["sortarr_setup_warning"] = " ".join(setup_warnings)
                 _invalidate_cache()
-                return redirect(url_for("index"))
+                return redirect(url_for(redirect_endpoint))
             except RuntimeError as exc:
                 error = str(exc)
             except OSError:
@@ -12885,17 +13539,25 @@ def setup():
         should_rotate_setup_token = setup_required or request.args.get("force") == "1"
         csrf_token = _rotate_csrf_token() if should_rotate_setup_token else _get_csrf_token()
         setup_csrf_warning = _consume_setup_csrf_warning()
+        setup_notice = str(session.pop("sortarr_setup_warning", "") or "").strip()
     else:
         csrf_token = _get_csrf_token()
         setup_csrf_warning = ""
-    setup_values = _setup_form_values(cfg)
-    advanced_summary = _setup_advanced_summary(cfg)
-    optional_section_open = _setup_optional_section_open(cfg, field_errors)
+        setup_notice = ""
+    if cookie_transport_warning:
+        setup_csrf_warning = _append_warning(
+            setup_csrf_warning,
+            str(cookie_transport_warning.get("message") or "").strip(),
+        )
+    setup_values = _setup_form_values(cfg, request.form if request.method == "POST" else None)
+    advanced_summary = _setup_advanced_summary(setup_values)
+    optional_section_open = _setup_optional_section_open(setup_values, field_errors)
     advanced_section_open = bool(advanced_summary.get("count"))
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
         error=error,
+        setup_notice=setup_notice,
         setup_csrf_warning=setup_csrf_warning,
         field_errors=field_errors,
         values=setup_values,
@@ -12963,6 +13625,7 @@ def api_config():
     cfg = _get_config()
     setup_reasons = _security_setup_reasons(cfg)
     payload = _frontend_bootstrap_config(cfg)
+    auth_context = dict(getattr(g, "request_auth_context", {}) or {})
     payload.update(
         {
             "app_name": APP_NAME,
@@ -12970,6 +13633,10 @@ def api_config():
             "configured": _config_complete(cfg),
             "setup_required": bool(setup_reasons),
             "setup_reasons": setup_reasons,
+            "auth_method": _auth_method(cfg),
+            "upstream_auth_header": _upstream_auth_header(cfg),
+            "external_auth_config_valid": not _external_auth_config_issues(cfg),
+            "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
         }
     )
     return jsonify(payload)
@@ -13136,11 +13803,11 @@ def api_version():
 @_auth_required
 def api_setup_test():
     cfg = _get_config()
-    if not _basic_auth_configured(cfg):
+    if not _auth_configuration_ready(cfg):
         return jsonify(
             {
                 "ok": False,
-                "error": "Setup connection testing is unavailable until Basic Auth is configured and saved.",
+                "error": "Setup connection testing is unavailable until authentication is configured and saved.",
             }
         ), 409
     setup_reasons = _security_setup_reasons(cfg)
@@ -15378,6 +16045,8 @@ def movies_csv():
             "FileSizeGB",
             "GBPerHour",
             "BitrateMbps",
+            "FrameRateFps",
+            "BitsPerPixelPerFrame",
             "VideoQuality",
             "Resolution",
             "VideoCodec",

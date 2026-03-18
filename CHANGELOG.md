@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.8.6] - 2026-03-18
+
+### Fixes
+- Added a simple Sonarr-style authentication choice in Setup and config: `Basic` or `External`. Direct installs and transparent reverse proxies keep the existing `Basic` default, while `External` is now an explicit opt-in for trusted reverse proxies that already handle login.
+- Centralized route and `/setup` auth evaluation so both flows use the same auth boundary, and added local regression coverage for trusted-upstream auth, spoof rejection, and external-mode setup access.
+- Added `SORTARR_AUTH_METHOD` and `SORTARR_UPSTREAM_AUTH_HEADER`, plus diagnostics/self-check reporting for the active auth source. `External` mode now requires an explicit `SORTARR_WAITRESS_TRUSTED_PROXY` and no longer falls back to a browser Basic Auth challenge.
+- Fixed setup/session cookie transport policy so plain HTTP setup/save flows no longer force `Secure` cookies just because proxy mode is configured or still unset during bootstrap. Session and CSRF cookies now follow the effective request scheme by default, with `SORTARR_SESSION_COOKIE_SECURE=1|0` still available as an explicit override.
+- Fixed proxied HTTPS setup/save CSRF origin mismatches on Waitress by stopping Waitress from stripping trusted `X-Forwarded-*` headers before Sortarr's own proxy middleware can translate them. Sortarr now preserves the raw proxy peer first, then applies trusted forwarded host/proto/port handling for proxied requests.
+- Setup now preserves submitted non-secret values after failed validation or connection testing so operators do not have to re-enter proxy settings, URLs, path maps, and other advanced fields on every failed save attempt.
+- Setup, CSRF diagnostics, and the security self-check now warn explicitly when plain HTTP would still receive `Secure` session/CSRF cookies, including the forced-override case that would cause the next POST to drop those cookies.
+- Cookie security now also honors an explicit `https://...` public URL/origin hint from `SORTARR_PUBLIC_HOST` / `SORTARR_PUBLIC_URL` / `SORTARR_PUBLIC_ORIGIN`, preventing accidental cookie downgrades when an HTTPS deployment still has incomplete proxy trust.
+- Upgrade note: if `SORTARR_PUBLIC_HOST`, `SORTARR_PUBLIC_URL`, or `SORTARR_PUBLIC_ORIGIN` is set to `https://...`, Sortarr now treats that as an HTTPS hint for cookie security. If your actual deployment is still plain HTTP, remove that `https://...` value or set `SORTARR_SESSION_COOKIE_SECURE=0` so browsers will return the setup/session cookies on the next POST.
+
 ## [0.8.5.1] - 2026-03-12
 
 ### Fixes

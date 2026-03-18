@@ -8,13 +8,13 @@
 
 ---
 
-## 0.8.5.1 Release Notes
+## 0.8.6 Release Notes
 
-`0.8.5.1` is a hotfix for the `0.8.5` Docker publish failure.
+`0.8.6` hardens setup, auth, and reverse-proxy handling for the current GitHub CSRF/auth issue set.
 
-- Removes `run_waitress.py` from `.gitignore` and adds the file to the repository so release builds actually include the shared Waitress entrypoint.
-- Fixes the `Dockerfile` copy step for published images, allowing the container release pipeline to build the same Waitress proxy-trust startup path used locally.
-- Keeps the `0.8.5` packaging/logging changes intact while correcting the missing tracked-file regression.
+- Fixes setup/save CSRF failures across direct HTTP, LAN proxy, and trusted HTTPS proxy deployments by making cookie security request-aware and preserving trusted forwarded headers through Waitress.
+- Adds a simple Sonarr-style auth choice: `Basic` or `External`. Direct installs keep `Basic`, while reverse proxies that already handle login can now opt into trusted upstream auth cleanly.
+- Preserves submitted setup values after failed saves and adds clearer diagnostics when cookie transport or proxy trust would break the next POST.
 
 # Important 0.8.3 Security Upgrade Notice
 
@@ -22,7 +22,7 @@ Starting in **0.8.3**, Sortarr introduces a security-focused setup gate to ensur
 
 Existing installations with plaintext secrets will be automatically migrated toward external secret references during startup.
 
-If you are upgrading an installation from a version prior to **0.8.3**, you will be required to complete a one-time migration step. During this process, you will need to re-enter your API keys and configure a **Basic Auth username and password**. This action only occurs once and will not be required again in future upgrades.
+If you are upgrading an installation from a version prior to **0.8.3**, you will be required to complete a one-time migration step. During this process, you will need to re-enter your API keys, choose an **Authentication Method** (`Basic` or `External`), and configure the required auth settings for that method. This action only occurs once and will not be required again in future upgrades.
 
 ### Why is this necessary?
 
@@ -39,7 +39,7 @@ Because of this, the project’s approach has shifted from treating security as 
 
 2. After upgrading, you will be redirected to the **Setup screen**.
 
-3. Enter your previously configured service details (URLs, API keys, Basic Auth username and password), and generate a **secret key**.
+3. Enter your previously configured service details (URLs, API keys), choose who handles login (`Basic` or `External`), and generate a **secret key**.
 
 4. If no session secret key is entered, Setup automatically generates one before saving.
 
@@ -57,7 +57,7 @@ or
 
 ### Migration notes
 
-- If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_persistent_secret`, or `upgrade_resave_required`), only **Setup**, static assets, and language switching remain available until Setup is saved again.
+- If any post-bootstrap security requirement is still pending (`missing_basic_auth`, `missing_upstream_auth_header`, `invalid_upstream_auth_header`, `external_auth_requires_proxy_mode`, `explicit_trusted_proxy_required`, `missing_persistent_secret`, or `upgrade_resave_required`), only **Setup**, static assets, and language switching remain available until Setup is saved again.
 - If Basic Auth is partially configured (username without password or password without username), Sortarr allows Setup access so credentials can be repaired instead of returning a hard server error.
 - In this remediation state:
   - HTML routes redirect to `/setup?force=1`
@@ -88,6 +88,7 @@ Sortarr does not modify, move, or rename your media. It can analyse Sonarr and R
 * Support multiple Sonarr and Radarr instances
 * Highlight duplicate titles across instances and filter them quickly
 * Support global quick text filtering across row data (for example `aac`)
+* Show exact FPS and BPPF for Radarr movie rows, plus exact FPS/BPPF in Sonarr episode expansions when Arr reports frame-rate metadata
 * Fully read-only operation for safety
 
 ---
@@ -125,7 +126,8 @@ If you want the least confusing setup, use only this supported surface:
 - Plex path: `PLEX_URL` + `PLEX_TOKEN*`
 - `SORTARR_PROXY_MODE` (`direct|single|double|custom`)
 - `SORTARR_WAITRESS_TRUSTED_PROXY` (recommended for proxied Waitress deployments; otherwise Sortarr falls back to wildcard trust with a startup warning)
-- Required auth: `BASIC_AUTH_USER` + (`BASIC_AUTH_PASS_FILE` or `BASIC_AUTH_PASS_CRED_TARGET`)
+- Authentication boundary `Basic`: `SORTARR_AUTH_METHOD=basic` plus `BASIC_AUTH_USER` + (`BASIC_AUTH_PASS_FILE` or `BASIC_AUTH_PASS_CRED_TARGET`)
+- Authentication boundary `External`: `SORTARR_AUTH_METHOD=external` plus `SORTARR_UPSTREAM_AUTH_HEADER` and an explicit `SORTARR_WAITRESS_TRUSTED_PROXY`
 - Optional CSRF escape hatch: `SORTARR_CSRF_TRUSTED_ORIGINS` (exact origins only)
 
 Copy and adapt: `Sortarr.minimal.env.example`
@@ -249,6 +251,27 @@ Open the Wiki:
 
 ## Reverse Proxy and Security Notes
 
+### Authentication Method
+
+Sortarr now follows one simple rule:
+
+- `Basic`
+  Sortarr handles login itself
+- `External`
+  your trusted reverse proxy handles login
+
+Use `Basic` for:
+
+- direct installs
+- reverse proxies that only forward traffic / TLS
+
+Use `External` for:
+
+- reverse proxies that already do login for the Sortarr route
+- external auth systems such as proxy-managed Basic Auth or forward-auth
+
+Do not try to run two independent login layers on the same route with different credentials. If your reverse proxy already handles login, switch Sortarr to `External` instead of stacking a second Sortarr Basic Auth prompt behind it.
+
 ### Reverse proxy / HTTPS (Traefik, Nginx, Cloudflare, etc.)
 
 When Sortarr runs behind a reverse proxy, it must trust `X-Forwarded-*` headers so Flask can resolve the correct external scheme/host (for example `https://sortarr.mydomain.com`).
@@ -263,20 +286,31 @@ Supported proxy contract on Waitress:
 - If `X-Forwarded-Proto` or `X-Forwarded-Port` arrive with commas, Sortarr diagnostics now warn explicitly because Waitress 3.x rejects those shapes when the headers are trusted.
 
 Setup includes:
+- **Authentication Method** (`Basic` or `External`) under **Security**
 - **Proxy mode** preset (`Direct`, `Single proxy`, `Two proxies`, `Custom`) under **Advanced settings -> Network & CSRF**
 - **Waitress trusted proxy** field under **Advanced settings -> Network & CSRF** for the immediate upstream proxy IP/host
+- **Upstream auth header** under **Security** when `Authentication Method = External`
 - Proxy trust changes saved through Setup require a restart before Waitress applies them
 - **Run proxy/CSRF diagnostics**, which reports current forwarded headers, current vs suggested proxy mode, and latest CSRF mismatch reason from `GET /api/diagnostics/csrf` after the required security setup save completes
 - **Run security self-check diagnostics** from `GET /api/diagnostics/security-self-check` after security setup is complete to get pass/fail signals for persistent secret status, unsafe recovery mode, trusted-origin policy validity, and cookie/CSP guardrails
   - Direct HTTP installs in `Proxy mode = direct` are treated as healthy when cookies are intentionally non-`Secure` on plain HTTP.
+  - Setup, CSRF diagnostics, and the security self-check now warn explicitly if plain HTTP is detected but Sortarr would still issue `Secure` cookies, because the browser would drop them on the next POST.
   - The default CSP now keeps `connect-src` same-origin only, so browser API calls remain limited to Sortarr itself unless you intentionally broaden policy in code later.
 
 While Setup is security-locked, the remediation path is intentionally narrow: finish the required Setup save first, then run diagnostics if you still need them.
 
+Authentication boundary notes:
+- `Basic` remains the secure default for direct installs and transparent reverse proxies.
+- `External` is opt-in and only supported when `SORTARR_WAITRESS_TRUSTED_PROXY` is set to the immediate proxy IP/host.
+- In `External`, Sortarr trusts only the configured upstream identity header from that trusted proxy and does not emit a browser Basic Auth challenge of its own.
+
 Cookie policy:
-- `Proxy mode = direct` keeps session/CSRF cookies usable on plain HTTP LAN installs by default.
-- Proxied modes keep `Secure` cookies by default.
+- Session/CSRF cookies follow the effective browser-facing request scheme by default.
+- Plain HTTP requests, including first-time Setup on LAN HTTP installs, keep cookies non-`Secure` so the next setup/save POST can return the CSRF/session cookies successfully.
+- HTTPS requests, and proxied requests that still present `X-Forwarded-Proto: https`, keep `Secure` cookies by default.
+- If proxy trust is still incomplete, an explicit `https://...` value in `SORTARR_PUBLIC_HOST`, `SORTARR_PUBLIC_URL`, or `SORTARR_PUBLIC_ORIGIN` is treated as an HTTPS hint for cookie security only so Sortarr does not accidentally downgrade cookies on an HTTPS deployment.
 - `SORTARR_SESSION_COOKIE_SECURE=1|0` can still override that behavior explicitly if needed.
+- If Setup or diagnostics warn that plain HTTP would still receive `Secure` cookies, switch `Proxy mode` to `Direct` for that deployment or set `SORTARR_SESSION_COOKIE_SECURE=0`.
 
 If diagnostics show `X-Forwarded-Proto`, `X-Forwarded-Host`, and `X-Forwarded-For` as blank:
 1. Confirm Sortarr traffic actually passes through your proxy/router chain.

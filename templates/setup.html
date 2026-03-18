@@ -46,12 +46,15 @@
       {% if error %}
       <div class="setup-error">{{ _(error) }}</div>
       {% endif %}
+      {% if setup_notice %}
+      <div class="setup-hint setup-hint--warn">{{ _(setup_notice) }}</div>
+      {% endif %}
       {% if setup_csrf_warning %}
       <div class="setup-error">{{ _(setup_csrf_warning) }}</div>
       {% endif %}
       {% if setup_required %}
       <div class="setup-error">
-        {% trans trimmed %}Security update required: finish Setup to save a persistent Session secret key and required Basic Auth credentials before continuing to the app.{% endtrans %}
+        {% trans trimmed %}Security update required: finish Setup to save a persistent Session secret key and required authentication settings before continuing to the app.{% endtrans %}
       </div>
       {% endif %}
 
@@ -565,6 +568,17 @@
 
         <div class="setup-section-title">{{ _('Security') }}</div>
         <label>
+          {{ _('Authentication Method') }}
+          <select name="sortarr_auth_method" id="authMethod">
+            <option value="basic" {% if (values.sortarr_auth_method or 'basic') == 'basic' %}selected{% endif %}>{{ _('Basic') }}</option>
+            <option value="external" {% if (values.sortarr_auth_method or '') == 'external' %}selected{% endif %}>{{ _('External') }}</option>
+          </select>
+        </label>
+        <div class="setup-hint">
+          {% trans trimmed %}Pick who handles login. Use Basic when Sortarr should prompt for credentials. Use External only when your trusted reverse proxy already handles login.{% endtrans %}
+        </div>
+        <div id="basicAuthFields" class="{% if (values.sortarr_auth_method or 'basic') != 'basic' %}hidden{% endif %}">
+        <label>
           {{ _('Basic auth username') }}
           <input name="basic_auth_user" placeholder="{{ _('required') }}" value="{{ values.basic_auth_user }}" />
         </label>
@@ -574,16 +588,30 @@
             autocomplete="new-password" />
         </label>
         <label class="setup-checkbox">
-          <input type="checkbox" name="clear_basic_auth_pass" value="1" />
+          <input type="checkbox" name="clear_basic_auth_pass" value="1" {% if values.clear_basic_auth_pass %}checked{% endif %} />
           <span>{{ _('Clear existing password') }}</span>
         </label>
         <div class="setup-hint">{{ _('Leave blank to keep current password when a password is already configured.') }}</div>
         <div class="setup-hint">
           {% trans trimmed %}Credentials are stored via the configured secret backend. Protect your config directory and credential store.{% endtrans %}
         </div>
+        </div>
+        <div id="externalAuthFields" class="{% if (values.sortarr_auth_method or 'basic') != 'external' %}hidden{% endif %}">
+          <label>
+            {{ _('Upstream auth header') }}
+            <input name="sortarr_upstream_auth_header" placeholder="X-Forwarded-User"
+              value="{{ values.sortarr_upstream_auth_header or 'X-Forwarded-User' }}" />
+          </label>
+          <div class="setup-hint">
+            {% trans trimmed %}Sortarr will trust this identity header only when the request comes through the configured trusted reverse proxy below.{% endtrans %}
+          </div>
+          <div class="setup-hint setup-hint--warn">
+            {% trans trimmed %}External mode is for reverse proxies that already handle login. Do not expose Sortarr directly when using this mode.{% endtrans %}
+          </div>
+        </div>
         {% if not setup_connection_test_enabled %}
         <div class="setup-hint setup-hint--warn">
-          {% trans trimmed %}Connection test buttons stay disabled until Basic Auth is configured and security setup is complete. Saving settings still validates configured connections.{% endtrans %}
+          {% trans trimmed %}Connection test buttons stay disabled until authentication is configured and security setup is complete. Saving settings still validates configured connections.{% endtrans %}
         </div>
         {% endif %}
         <label>

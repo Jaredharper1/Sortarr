@@ -1893,6 +1893,26 @@ html[data-theme="dark"] .column-panel {
 
 }
 
+.metric-est-wrap {
+
+  display: inline-flex;
+
+  align-items: baseline;
+
+  gap: 6px;
+
+  white-space: nowrap;
+
+}
+
+.metric-est-wrap .bitrate-est {
+
+  margin-left: 0;
+
+  flex: 0 0 auto;
+
+}
+
 
 
 .match-pill {

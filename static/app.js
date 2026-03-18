@@ -2437,6 +2437,8 @@ const RADARR_COLUMNS = new Set([
   "FileSizeGB",
   "GBPerHour",
   "BitrateMbps",
+  "FrameRateFps",
+  "BitsPerPixelPerFrame",
   "Status",
   "Monitored",
   "Tags",
@@ -3041,6 +3043,20 @@ const FILTER_BUILDER_FIELDS = [
     placeholder: "5",
   },
   {
+    id: "fps",
+    label: t("Frame Rate (FPS)"),
+    type: "number",
+    app: "radarr",
+    placeholder: "23.976",
+  },
+  {
+    id: "bppf",
+    label: t("BPPF"),
+    type: "number",
+    app: "radarr",
+    placeholder: "0.04000",
+  },
+  {
     id: "instance",
     label: t("Instance"),
     type: "string",
@@ -3258,6 +3274,8 @@ const HEADER_CAP_MIN_TEXT = {
   AudioLanguages: "Audio Languages v",
   SubtitleLanguages: "Subtitle Languages v",
   VideoHDR: "Dolby Vision v",
+  FrameRateFps: "Frame Rate (FPS) v",
+  BitsPerPixelPerFrame: "BPPF v",
 };
 const HEADER_CAP_TARGET_WIDTH_BY_APP = {
   sonarr: {
@@ -3280,6 +3298,8 @@ const HEADER_CAP_TARGET_WIDTH_BY_APP = {
     FileSizeGB: 108,
     GBPerHour: 120,
     BitrateMbps: 154,
+    FrameRateFps: 150,
+    BitsPerPixelPerFrame: 128,
     Monitored: 96,
     Tags: 240,
     Studio: 320,
@@ -6839,6 +6859,21 @@ function formatEpisodeHtmlCell(value) {
   return text;
 }
 
+function formatEpisodeMetricCell(value, digits, estimated = false) {
+  if (value === "" || value === null || value === undefined) return EPISODE_NOT_REPORTED_HTML;
+  const num = Number(value);
+  let content = "";
+  if (Number.isFinite(num)) {
+    content = escapeHtml(num.toFixed(digits));
+  } else {
+    const text = String(value ?? "");
+    if (!text.trim()) return EPISODE_NOT_REPORTED_HTML;
+    content = escapeHtml(text);
+  }
+  if (!estimated) return content;
+  return formatEstimatedMetricValue(content);
+}
+
 const EPISODE_GRID_MAIN_WIDTH = "minmax(120px, 18vw)";
 const EPISODE_GRID_COLUMNS = [
   {
@@ -6879,6 +6914,30 @@ const EPISODE_GRID_COLUMNS = [
     width: "120px",
     extra: false,
     render: episode => formatEpisodeTextCell(episode.resolution || ""),
+  },
+  {
+    key: "fps",
+    label: t("FPS"),
+    className: "series-episode-frame-rate",
+    width: "100px",
+    extra: true,
+    render: episode => formatEpisodeHtmlCell(
+      formatEpisodeMetricCell(episode.frameRateFps, 3, episode.frameRateEstimated)
+    ),
+  },
+  {
+    key: "bppf",
+    label: t("BPPF"),
+    className: "series-episode-bppf",
+    width: "110px",
+    extra: true,
+    render: episode => formatEpisodeHtmlCell(
+      formatEpisodeMetricCell(
+        episode.bitsPerPixelPerFrame,
+        5,
+        episode.bitsPerPixelPerFrameEstimated
+      )
+    ),
   },
   {
     key: "videoCodec",
@@ -8725,6 +8784,8 @@ const NUMERIC_DISPLAY_COLUMNS = {
     "FileSizeGB",
     "GBPerHour",
     "BitrateMbps",
+    "FrameRateFps",
+    "BitsPerPixelPerFrame",
     "MissingCount",
     "CutoffUnmetCount",
     "CustomFormatScore",
@@ -9143,7 +9204,7 @@ function formatBitrateCell(row, app) {
   const value = formatNumericCell(raw, getNumericWidths(app, "BitrateMbps"));
   if (app !== "radarr") {
     if (row?.BitrateEstimated) {
-      return `${value} <span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span>`;
+      return formatEstimatedMetricValue(value);
     }
     return value;
   }
@@ -9163,9 +9224,29 @@ function formatBitrateCell(row, app) {
   const valueHtml = `<span title="${escapeHtml(partsTitle)}">${value}</span>`;
 
   if (showEst) {
-    return `${valueHtml} <span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span>`;
+    return formatEstimatedMetricValue(valueHtml);
   }
   return valueHtml;
+}
+
+function formatEstimatedMetricValue(valueHtml) {
+  return `<span class="metric-est-wrap">${valueHtml}<span class="bitrate-est" title="${t('Estimated from file size and runtime')}">${t('est')}</span></span>`;
+}
+
+function formatFrameRateCell(row, app) {
+  const raw = row?.FrameRateFps;
+  if (raw === "" || raw === null || raw === undefined) return "";
+  return formatNumericCell(raw, getNumericWidths(app, "FrameRateFps"));
+}
+
+function formatBitsPerPixelPerFrameCell(row, app) {
+  const raw = row?.BitsPerPixelPerFrame;
+  if (raw === "" || raw === null || raw === undefined) return "";
+  const value = formatNumericCell(raw, getNumericWidths(app, "BitsPerPixelPerFrame"));
+  if (row?.BitsPerPixelPerFrameEstimated) {
+    return formatEstimatedMetricValue(value);
+  }
+  return value;
 }
 
 const FIELD_MAP = {
@@ -9245,6 +9326,12 @@ const FIELD_MAP = {
   gbperhour: "GBPerHour",
   bitrate: "BitrateMbps",
   bitratembps: "BitrateMbps",
+  fps: "FrameRateFps",
+  framerate: "FrameRateFps",
+  frameratefps: "FrameRateFps",
+  bppf: "BitsPerPixelPerFrame",
+  bitsperpixelperframe: "BitsPerPixelPerFrame",
+  bitsperpixel: "BitsPerPixelPerFrame",
 };
 
 const NUMERIC_FIELDS = new Set([
@@ -9261,6 +9348,12 @@ const NUMERIC_FIELDS = new Set([
   "gbperhour",
   "bitrate",
   "bitratembps",
+  "fps",
+  "framerate",
+  "frameratefps",
+  "bppf",
+  "bitsperpixelperframe",
+  "bitsperpixel",
   "audiochannels",
   "playcount",
   "dayssincewatched",
@@ -9985,6 +10078,8 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "SubtitleLanguagesMixed",
   "VideoHDR",
   "BitrateMbps",
+  "FrameRateFps",
+  "BitsPerPixelPerFrame",
   "Diagnostics",
   "PlayCount",
   "LastWatched",
@@ -10004,6 +10099,8 @@ const RADARR_VIRTUAL_EAGER_COLUMNS = new Set([
   "FileSizeGB",
   "GBPerHour",
   "BitrateMbps",
+  "FrameRateFps",
+  "BitsPerPixelPerFrame",
 ]);
 const RADARR_VIRTUAL_DEFER_COLUMNS = new Set(
   LAZY_COLUMNS_ARRAY.filter(col => !RADARR_VIRTUAL_EAGER_COLUMNS.has(col))
@@ -11482,6 +11579,8 @@ function buildRow(row, app, options = {}) {
   const rowPath = pathState.value;
   const rootFolder = rootFolderState.value;
   const bitrateCell = formatBitrateCell(row, app);
+  const frameRateCell = formatFrameRateCell(row, app);
+  const bitsPerPixelPerFrameCell = formatBitsPerPixelPerFrameCell(row, app);
   const audioCodecAttr = audioCodecState.lazy ? ' data-lazy-value="1"' : "";
   const contentHoursAttr = contentHoursState.lazy ? ' data-lazy-value="1"' : "";
   const videoQualityAttr = videoQualityState.lazy ? ' data-lazy-value="1"' : "";
@@ -11628,6 +11727,8 @@ function buildRow(row, app, options = {}) {
     <td class="right" data-col="FileSizeGB" data-app="radarr">${fileSize}</td>
     <td class="right" data-col="GBPerHour" data-app="radarr">${gbPerHour}</td>
     <td class="right" data-col="BitrateMbps" data-app="radarr">${bitrateCell}</td>
+    <td class="right" data-col="FrameRateFps" data-app="radarr">${frameRateCell}</td>
+    <td class="right" data-col="BitsPerPixelPerFrame" data-app="radarr">${bitsPerPixelPerFrameCell}</td>
     <td data-col="Status">${status}</td>
     <td data-col="Monitored">${monitored}</td>
     <td data-col="Tags">${tags}</td>
