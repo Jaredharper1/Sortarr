@@ -80,6 +80,10 @@
             <label class="column-row"
               title="{{ _('Season count excludes specials and only counts seasons with files.') }}"><input
                 type="checkbox" data-col="SeasonCount" /> {{ _('Seasons') }}</label>
+            <label class="column-row" title="{{ _('Lowest episode custom format score across non-special files.') }}"><input
+                type="checkbox" data-col="LowestCustomFormatScore" /> {{ _('Lowest CF Score') }}</label>
+            <label class="column-row" title="{{ _('Highest episode custom format score across non-special files.') }}"><input
+                type="checkbox" data-col="HighestCustomFormatScore" /> {{ _('Highest CF Score') }}</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> {{ _('Avg / Ep (GiB)')
               }}</label>
             <label class="column-row" title="{{ _('Total size includes specials.') }}"><input type="checkbox"
@@ -498,6 +502,14 @@
                 <th class="right" data-sort="SeasonCount" data-app="sonarr" data-col="SeasonCount"
                   title="{{ _('Season count excludes specials and only counts seasons with files.') }}">{{ _('Seasons')
                   }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="LowestCustomFormatScore" data-app="sonarr" data-col="LowestCustomFormatScore"
+                  title="{{ _('Lowest episode custom format score across non-special files.') }}">{{ _('Lowest CF Score') }}
+                  <span class="sort-indicator"></span>
+                </th>
+                <th class="right" data-sort="HighestCustomFormatScore" data-app="sonarr" data-col="HighestCustomFormatScore"
+                  title="{{ _('Highest episode custom format score across non-special files.') }}">{{ _('Highest CF Score') }}
                   <span class="sort-indicator"></span>
                 </th>
                 <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg /

@@ -8,13 +8,14 @@
 
 ---
 
-## 0.8.6 Release Notes
+## 0.8.7 Release Notes
 
-`0.8.6` hardens setup, auth, and reverse-proxy handling for the current GitHub CSRF/auth issue set.
+`0.8.7` finishes the remaining open issue work for the current release.
 
-- Fixes setup/save CSRF failures across direct HTTP, LAN proxy, and trusted HTTPS proxy deployments by making cookie security request-aware and preserving trusted forwarded headers through Waitress.
-- Adds a simple Sonarr-style auth choice: `Basic` or `External`. Direct installs keep `Basic`, while reverse proxies that already handle login can now opt into trusted upstream auth cleanly.
-- Preserves submitted setup values after failed saves and adds clearer diagnostics when cookie transport or proxy trust would break the next POST.
+- Adds Sonarr `Lowest Custom Format Score` and `Highest Custom Format Score` columns, sorting, filtering, CSV export, and season summary rollups for score-based analysis.
+- Fixes the remaining setup/save CSRF bootstrap failure for same-host reverse-proxy deployments that terminate HTTPS but forward setup POSTs to Sortarr over HTTP without usable forwarded scheme headers.
+- Fixes Plex data-route enrichment so existing Plex rows fill stream and metadata details more consistently instead of partially missing fields.
+- Includes the current issue fixes in one release so the shipped behavior is aligned for 0.8.7.
 
 # Important 0.8.3 Security Upgrade Notice
 

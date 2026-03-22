@@ -20,7 +20,6 @@ import math
 from urllib.parse import urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
-from ctypes import wintypes
 
 import requests
 # Session hinzugefügt für die dauerhafte Sprachwahl
@@ -38,7 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.6"
+APP_VERSION = "0.8.7"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -80,7 +79,6 @@ app.config["BABEL_TRANSLATION_DIRECTORIES"] = os.path.join(app.root_path, "trans
 # Make get_locale() available in Jinja templates
 app.jinja_env.globals["get_locale"] = get_locale
 
-from babel import Locale
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from flask_babel import gettext as _
 
@@ -318,6 +316,7 @@ def _persist_env_updates_atomic(path: str, updates: dict[str, str]) -> None:
             try:
                 os.remove(tmp_path)
             except OSError:
+                # Best-effort temp-file cleanup.
                 pass
 
 
@@ -375,18 +374,21 @@ def _migrate_plaintext_app_secret_key_if_needed() -> bool:
                     try:
                         os.chmod(tmp_path, 0o600)
                     except OSError:
+                        # Best-effort hardening on platforms that support chmod.
                         pass
                 os.replace(tmp_path, secret_path)
                 if os.name != "nt":
                     try:
                         os.chmod(secret_path, 0o600)
                     except OSError:
+                        # Best-effort hardening on platforms that support chmod.
                         pass
             finally:
                 if os.path.exists(tmp_path):
                     try:
                         os.remove(tmp_path)
                     except OSError:
+                        # Best-effort temp-file cleanup.
                         pass
             updates["SORTARR_SECRET_KEY_FILE"] = secret_path
             storage_label = "file-backed secret storage"
@@ -442,18 +444,21 @@ def _persist_generated_app_secret_key(secret_value: str) -> str:
                 try:
                     os.chmod(tmp_path, 0o600)
                 except OSError:
+                    # Best-effort hardening on platforms that support chmod.
                     pass
             os.replace(tmp_path, secret_path)
             if os.name != "nt":
                 try:
                     os.chmod(secret_path, 0o600)
                 except OSError:
+                    # Best-effort hardening on platforms that support chmod.
                     pass
         finally:
             if os.path.exists(tmp_path):
                 try:
                     os.remove(tmp_path)
                 except OSError:
+                    # Best-effort temp-file cleanup.
                     pass
         updates["SORTARR_SECRET_KEY_FILE"] = secret_path
         storage_label = "file-backed secret storage"
@@ -470,15 +475,14 @@ def _auto_provision_app_secret_key_if_needed() -> bool:
         return False
     generated_secret = secrets.token_hex(32)
     try:
-        storage_label = _persist_generated_app_secret_key(generated_secret)
+        _persist_generated_app_secret_key(generated_secret)
     except OSError as exc:
         raise RuntimeError(
             "No persistent session secret key was configured, and Sortarr could not auto-provision one. "
             f"Fix ENV_FILE_PATH permissions or set {_session_secret_reference_targets()} before startup."
         ) from exc
     logging.getLogger("sortarr").warning(
-        "Auto-provisioned a persistent session secret in %s during startup because this configured install had no session-secret reference.",
-        storage_label,
+        "Auto-provisioned a persistent session secret during startup because this configured install had no session-secret reference.",
     )
     return True
 
@@ -843,8 +847,7 @@ def _apply_startup_security_config() -> dict[str, int]:
         raise RuntimeError(" ".join(trusted_origin_errors))
     if trusted_origins:
         logging.getLogger("sortarr").warning(
-            "CSRF trusted origins active at startup: count=%s.",
-            trusted_state.get("count", 0),
+            "CSRF trusted origins are active at startup.",
         )
     recovery_enabled, recovery_reason = _effective_unsafe_recovery_early()
     if _read_bool_env_early("SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY", False) and not recovery_enabled:
@@ -908,13 +911,7 @@ def _apply_startup_security_config() -> dict[str, int]:
         SESSION_COOKIE_SECURE=bool(default_secure if secure_override is None else secure_override),
     )
     logging.getLogger("sortarr").info(
-        "Security mode active: persistent-secret enforcement on, startup-fail enforcement on, "
-        "unsafe-recovery=%s, csrf-trusted-origins=%s, session-cookie={secure-default:%s,secure-override:%s,samesite:%s,httponly:true}.",
-        "enabled" if recovery_enabled else "disabled",
-        trusted_state.get("count", 0),
-        "true" if default_secure else "false",
-        "auto" if secure_override is None else ("true" if secure_override else "false"),
-        normalized_samesite,
+        "Security mode active: persistent-secret enforcement and session-cookie hardening are enabled.",
     )
     proxy_kwargs = _proxy_fix_kwargs_from_env()
     if any(proxy_kwargs.values()):
@@ -1040,14 +1037,8 @@ def serve_with_waitress() -> None:
     if waitress_proxy_settings:
         trusted_headers = sorted(waitress_proxy_settings.get("trusted_proxy_headers", set()))
         if trusted_headers:
-            trusted_proxy = str(waitress_proxy_settings.get("trusted_proxy") or "").strip() or "*"
-            trust_mode = "wildcard" if trusted_proxy == "*" else "explicit"
             logger.info(
-                "Waitress proxy trust enabled for proxied mode: trust_mode=%s count=%s clear_untrusted=%s header_count=%s.",
-                trust_mode,
-                waitress_proxy_settings.get("trusted_proxy_count", 1),
-                "true" if waitress_proxy_settings.get("clear_untrusted_proxy_headers", True) else "false",
-                len(trusted_headers),
+                "Waitress proxy trust enabled for proxied mode.",
             )
         else:
             logger.info(
@@ -1238,11 +1229,7 @@ def _log_csrf_mismatch(reason: str, extra: dict | None = None):
             "proxy_hint": str(details.get("proxy_hint") or ""),
             "forwarded_header_warnings": list(details.get("forwarded_header_warnings") or []),
         }
-    logger.warning(
-        "CSRF request rejected at %s: %s",
-        detected_at_utc,
-        json.dumps(details, sort_keys=True),
-    )
+    logger.warning("CSRF request rejected at %s.", detected_at_utc)
 
 
 def _csrf_status_payload() -> dict:
@@ -1783,23 +1770,15 @@ try:
         with open(ENV_FILE_PATH, "a", encoding="utf-8"):
             pass
 except OSError:
+    # Frozen builds can keep running even if the placeholder env file cannot be created.
     pass
-_env_loaded = False
-_env_mtime = None
+_env_state = {"loaded": False, "mtime": None}
 _env_lock = threading.Lock()
-_startup_migrated = False
 _upgrade_setup_required = False
-_tautulli_refresh_seen = None
-_jellystat_refresh_seen = None
-_plex_refresh_seen = None
+_startup_state = {"migrated": False, "lints_emitted": False}
+_playback_refresh_state = {"tautulli_seen": None, "jellystat_seen": None, "plex_seen": None}
 _plex_insights_cache: dict[str, dict] = {}
 _PLEX_INSIGHTS_CACHE_SECONDS = 30
-_jellystat_refresh_state = {
-    "lock": threading.Lock(),
-    "in_progress": False,
-    "history_in_progress": False,
-    "started_ts": 0,
-}
 _arr_refresh_state = {
     "sonarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
     "radarr": {"lock": threading.Lock(), "in_progress": False, "started_ts": 0},
@@ -1811,9 +1790,8 @@ _arr_cache_save_state = {
 _arr_instance_fetch_locks: dict[str, threading.Lock] = {}
 _arr_instance_fetch_locks_lock = threading.Lock()
 _perf_sink_module = None
-_perf_sink_checked = False
-_startup_lints_emitted = False
-_trusted_origins_runtime_warning_emitted = False
+_perf_sink_state = {"checked": False}
+_csrf_runtime_state = {"trusted_origins_warning_emitted": False}
 
 _DEPRECATED_ENV_REPLACEMENTS = {
     "SORTARR_PROXY_HOPS": "SORTARR_PROXY_MODE (or keep hops only for custom mode)",
@@ -1834,10 +1812,10 @@ _ENFORCED_SECRET_POLICY_FLAGS = {
 
 
 def _get_perf_sink():
-    global _perf_sink_module, _perf_sink_checked
-    if _perf_sink_checked:
+    global _perf_sink_module
+    if _perf_sink_state["checked"]:
         return _perf_sink_module
-    _perf_sink_checked = True
+    _perf_sink_state["checked"] = True
     tests_dir = os.path.join(os.path.dirname(__file__), "tests")
     if os.path.isdir(tests_dir) and tests_dir not in sys.path:
         sys.path.insert(0, tests_dir)
@@ -1914,19 +1892,18 @@ def _append_warning(existing: str, warning: str) -> str:
 
 
 def _ensure_env_loaded():
-    global _env_loaded, _env_mtime
     with _env_lock:
         try:
             mtime = os.path.getmtime(ENV_FILE_PATH)
         except OSError:
             mtime = None
-        if _env_loaded and mtime is None:
+        if _env_state["loaded"] and mtime is None:
             return
-        if _env_loaded and _env_mtime is not None and mtime == _env_mtime:
+        if _env_state["loaded"] and _env_state["mtime"] is not None and mtime == _env_state["mtime"]:
             return
         _load_env_file(ENV_FILE_PATH, override=True)
-        _env_loaded = True
-        _env_mtime = mtime
+        _env_state["loaded"] = True
+        _env_state["mtime"] = mtime
 
 
 @app.before_request
@@ -1975,7 +1952,12 @@ def _csrf_protect():
     origin = request.headers.get("Origin")
     referer = request.headers.get("Referer")
     if origin and not _origin_matches_request(origin):
-        if _origin_trusted_fallback_allowed(origin, token_valid):
+        if _setup_same_host_scheme_fallback_allowed(origin, token_valid):
+            _log_csrf_mismatch(
+                "origin-setup-scheme-fallback-accepted",
+                {"csrf_valid": True},
+            )
+        elif _origin_trusted_fallback_allowed(origin, token_valid):
             _log_csrf_mismatch(
                 "origin-trusted-fallback-accepted",
                 {"csrf_valid": True},
@@ -1984,7 +1966,12 @@ def _csrf_protect():
             _log_csrf_mismatch("origin", {"csrf_valid": token_valid})
             return jsonify({"error": "CSRF origin mismatch."}), 403
     if referer and not _origin_matches_request(referer):
-        if _origin_trusted_fallback_allowed(referer, token_valid):
+        if _setup_same_host_scheme_fallback_allowed(referer, token_valid):
+            _log_csrf_mismatch(
+                "referer-setup-scheme-fallback-accepted",
+                {"csrf_valid": True},
+            )
+        elif _origin_trusted_fallback_allowed(referer, token_valid):
             _log_csrf_mismatch(
                 "referer-trusted-fallback-accepted",
                 {"csrf_valid": True},
@@ -2138,36 +2125,36 @@ if os.name == "nt":
 
     class _CREDENTIAL_ATTRIBUTEW(ctypes.Structure):
         _fields_ = [
-            ("Keyword", wintypes.LPWSTR),
-            ("Flags", wintypes.DWORD),
-            ("ValueSize", wintypes.DWORD),
+            ("Keyword", ctypes.wintypes.LPWSTR),
+            ("Flags", ctypes.wintypes.DWORD),
+            ("ValueSize", ctypes.wintypes.DWORD),
             ("Value", ctypes.POINTER(ctypes.c_ubyte)),
         ]
 
     class _CREDENTIALW(ctypes.Structure):
         _fields_ = [
-            ("Flags", wintypes.DWORD),
-            ("Type", wintypes.DWORD),
-            ("TargetName", wintypes.LPWSTR),
-            ("Comment", wintypes.LPWSTR),
-            ("LastWritten", wintypes.FILETIME),
-            ("CredentialBlobSize", wintypes.DWORD),
+            ("Flags", ctypes.wintypes.DWORD),
+            ("Type", ctypes.wintypes.DWORD),
+            ("TargetName", ctypes.wintypes.LPWSTR),
+            ("Comment", ctypes.wintypes.LPWSTR),
+            ("LastWritten", ctypes.wintypes.FILETIME),
+            ("CredentialBlobSize", ctypes.wintypes.DWORD),
             ("CredentialBlob", ctypes.POINTER(ctypes.c_ubyte)),
-            ("Persist", wintypes.DWORD),
-            ("AttributeCount", wintypes.DWORD),
+            ("Persist", ctypes.wintypes.DWORD),
+            ("AttributeCount", ctypes.wintypes.DWORD),
             ("Attributes", ctypes.POINTER(_CREDENTIAL_ATTRIBUTEW)),
-            ("TargetAlias", wintypes.LPWSTR),
-            ("UserName", wintypes.LPWSTR),
+            ("TargetAlias", ctypes.wintypes.LPWSTR),
+            ("UserName", ctypes.wintypes.LPWSTR),
         ]
 
     _PCREDENTIALW = ctypes.POINTER(_CREDENTIALW)
     _advapi32 = ctypes.WinDLL("Advapi32", use_last_error=True)
-    _advapi32.CredReadW.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(_PCREDENTIALW)]
-    _advapi32.CredReadW.restype = wintypes.BOOL
-    _advapi32.CredWriteW.argtypes = [_PCREDENTIALW, wintypes.DWORD]
-    _advapi32.CredWriteW.restype = wintypes.BOOL
-    _advapi32.CredDeleteW.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
-    _advapi32.CredDeleteW.restype = wintypes.BOOL
+    _advapi32.CredReadW.argtypes = [ctypes.wintypes.LPWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.POINTER(_PCREDENTIALW)]
+    _advapi32.CredReadW.restype = ctypes.wintypes.BOOL
+    _advapi32.CredWriteW.argtypes = [_PCREDENTIALW, ctypes.wintypes.DWORD]
+    _advapi32.CredWriteW.restype = ctypes.wintypes.BOOL
+    _advapi32.CredDeleteW.argtypes = [ctypes.wintypes.LPWSTR, ctypes.wintypes.DWORD, ctypes.wintypes.DWORD]
+    _advapi32.CredDeleteW.restype = ctypes.wintypes.BOOL
     _advapi32.CredFree.argtypes = [ctypes.c_void_p]
     _advapi32.CredFree.restype = None
 else:
@@ -2235,7 +2222,22 @@ def _wincred_delete_secret(target: str) -> bool:
 
 
 def _read_secret_from_file(secret_path: str) -> str:
-    path = str(secret_path or "").strip()
+    raw_path = str(secret_path or "").strip()
+    if not raw_path or "://" in raw_path:
+        return ""
+    base_dir = os.path.realpath(os.path.dirname(ENV_FILE_PATH) or os.getcwd())
+    secrets_dir = os.path.realpath(os.path.join(base_dir, "secrets"))
+    expanded_path = os.path.expandvars(os.path.expanduser(raw_path))
+    secret_name = os.path.basename(expanded_path).strip()
+    if not secret_name or secret_name in {".", ".."}:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", secret_name):
+        return ""
+    candidate_paths = (
+        os.path.join(secrets_dir, secret_name),
+        os.path.join(base_dir, secret_name),
+    )
+    path = next((candidate for candidate in candidate_paths if os.path.isfile(candidate)), "")
     if not path:
         return ""
     try:
@@ -2261,8 +2263,7 @@ waitress_proxy_runtime_settings = _waitress_proxy_settings_from_proxy_kwargs(
 if _EPHEMERAL_APP_SECRET_KEY:
     logger.warning(
         "No persistent session-secret reference was resolved; using an ephemeral Flask secret key. "
-        "Sessions/CSRF can break across restarts or multi-replica deployments until %s is configured.",
-        _session_secret_reference_targets(),
+        "Sessions/CSRF can break across restarts or multi-replica deployments until a persistent secret reference is configured.",
     )
 
 
@@ -2405,18 +2406,21 @@ def _write_secret_file_atomic(path: str, secret: str) -> None:
             try:
                 os.chmod(tmp_path, 0o600)
             except OSError:
+                # Best-effort hardening on platforms that support chmod.
                 pass
         os.replace(tmp_path, path)
         if os.name != "nt":
             try:
                 os.chmod(path, 0o600)
             except OSError:
+                # Best-effort hardening on platforms that support chmod.
                 pass
     finally:
         if os.path.exists(tmp_path):
             try:
                 os.remove(tmp_path)
             except OSError:
+                # Best-effort temp-file cleanup.
                 pass
 
 
@@ -3363,19 +3367,35 @@ def _sanitize_url_for_log(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
-_URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\]\"'<>]+")
 _SECRET_PAIR_RE = re.compile(r"(?i)(api[_-]?key|token|password)=([^&\s]+)")
+_CONTROL_CHARS_RE = re.compile(r"[\r\n\t]+")
+_URL_PUNCTUATION = ".,;:!?)]}\"'"
 
 
 def _sanitize_error_text(text: str) -> str:
     if not text:
         return ""
-    redacted = _SECRET_PAIR_RE.sub(r"\1=<redacted>", text)
+    normalized = str(text)
+    if len(normalized) > 2048:
+        normalized = normalized[:2048]
 
-    def _replace_url(match: re.Match) -> str:
-        return _sanitize_url_for_log(match.group(0)) or "<redacted>"
+    sanitized_tokens: list[str] = []
+    for raw_token in normalized.split(" "):
+        token = _SECRET_PAIR_RE.sub(r"\1=<redacted>", raw_token)
+        if "://" in token:
+            core = token.rstrip(_URL_PUNCTUATION)
+            suffix = token[len(core) :]
+            sanitized = _sanitize_url_for_log(core)
+            token = (sanitized if sanitized and sanitized != "<redacted>" else "<redacted>") + suffix
+        sanitized_tokens.append(token)
+    return " ".join(sanitized_tokens)
 
-    return _URL_RE.sub(_replace_url, redacted)
+
+def _sanitize_log_text(text: str, max_length: int = 200) -> str:
+    normalized = _CONTROL_CHARS_RE.sub(" ", _sanitize_error_text(str(text or ""))).strip()
+    if len(normalized) <= max_length:
+        return normalized
+    return normalized[: max_length - 3].rstrip() + "..."
 
 
 def _safe_exception_message(exc: Exception | None) -> str:
@@ -3412,6 +3432,26 @@ def _origin_matches_request(origin: str) -> bool:
     )
 
 
+def _setup_same_host_scheme_fallback_allowed(origin: str, token_valid: bool) -> bool:
+    if not origin or not token_valid:
+        return False
+    endpoint = str(request.endpoint or "").strip()
+    if endpoint not in {"setup", "api_setup_test", "api_setup_secret_key"}:
+        return False
+    try:
+        origin_parts = urlsplit(origin)
+        host_parts = urlsplit(request.host_url)
+    except Exception:
+        return False
+    if origin_parts.netloc != host_parts.netloc:
+        return False
+    origin_scheme = str(origin_parts.scheme or "").lower()
+    host_scheme = str(host_parts.scheme or "").lower()
+    if not origin_scheme or not host_scheme or origin_scheme == host_scheme:
+        return False
+    return {origin_scheme, host_scheme} == {"http", "https"}
+
+
 def _csrf_token_ttl_seconds() -> int:
     return max(_int_env("SORTARR_CSRF_TOKEN_TTL_SECONDS", 7200), 60)
 
@@ -3439,16 +3479,15 @@ def _parse_trusted_origins(raw: str, strict: bool = False) -> set[str]:
 
 
 def _csrf_trusted_origins() -> set[str]:
-    global _trusted_origins_runtime_warning_emitted
     raw = os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "")
     try:
         trusted = _parse_trusted_origins(raw, strict=True)
-        _trusted_origins_runtime_warning_emitted = False
+        _csrf_runtime_state["trusted_origins_warning_emitted"] = False
         return trusted
     except ValueError as exc:
-        if not _trusted_origins_runtime_warning_emitted:
+        if not _csrf_runtime_state["trusted_origins_warning_emitted"]:
             logger.warning("Ignoring invalid SORTARR_CSRF_TRUSTED_ORIGINS at runtime: %s", exc)
-            _trusted_origins_runtime_warning_emitted = True
+            _csrf_runtime_state["trusted_origins_warning_emitted"] = True
         return set()
 
 
@@ -3852,6 +3891,7 @@ def _enforce_tautulli_lookup_defaults(path: str) -> bool:
         try:
             _write_env_file(path, desired)
         except OSError:
+            # Keep runtime defaults even when persisting them fails.
             pass
     return changed
 
@@ -3868,6 +3908,7 @@ def _ensure_plex_client_id(path: str) -> bool:
         try:
             _write_env_file(path, {"PLEX_CLIENT_ID": client_id})
         except OSError:
+            # Keep the generated client id in-memory if the env file cannot be updated.
             pass
     return True
 
@@ -3948,10 +3989,10 @@ def _enforce_secret_policy_flags(path: str) -> bool:
 
 
 def _apply_startup_migrations() -> None:
-    global _startup_migrated, _env_mtime, _upgrade_setup_required
-    if _startup_migrated:
+    global _upgrade_setup_required
+    if _startup_state["migrated"]:
         return
-    _startup_migrated = True
+    _startup_state["migrated"] = True
 
     state_path = _startup_state_path()
     state = _load_startup_state(state_path)
@@ -3981,9 +4022,9 @@ def _apply_startup_migrations() -> None:
         or secret_policy_flags_enforced
     ):
         try:
-            _env_mtime = os.path.getmtime(ENV_FILE_PATH)
+            _env_state["mtime"] = os.path.getmtime(ENV_FILE_PATH)
         except OSError:
-            _env_mtime = None
+            _env_state["mtime"] = None
     if (
         not version_changed
         and not enforced
@@ -4003,9 +4044,9 @@ def _apply_startup_migrations() -> None:
             os.environ.pop(key, None)
         if removed:
             try:
-                _env_mtime = os.path.getmtime(ENV_FILE_PATH)
+                _env_state["mtime"] = os.path.getmtime(ENV_FILE_PATH)
             except OSError:
-                _env_mtime = None
+                _env_state["mtime"] = None
 
     _cache.clear_all()
     _wipe_cache_files()
@@ -4163,7 +4204,7 @@ def _get_config():
     jellystat_stats_page_size = _read_int_env("JELLYSTAT_STATS_PAGE_SIZE", 500)
     jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
     plex_history_page_size = _read_int_env("PLEX_HISTORY_PAGE_SIZE", 200)
-    return {
+    cfg = {
         "sonarr_url": _normalize_url(os.environ.get("SONARR_URL", "")),
         "sonarr_url_api": _normalize_url(os.environ.get("SONARR_URL_API", "")),
         "sonarr_url_external": _normalize_url(os.environ.get("SONARR_URL_EXTERNAL", "")),
@@ -4572,10 +4613,9 @@ def _provider_option_set(cfg: dict) -> dict:
 
 
 def _emit_startup_config_lints(cfg: dict) -> None:
-    global _startup_lints_emitted
-    if _startup_lints_emitted:
+    if _startup_state["lints_emitted"]:
         return
-    _startup_lints_emitted = True
+    _startup_state["lints_emitted"] = True
 
     for key, replacement in _DEPRECATED_ENV_REPLACEMENTS.items():
         if str(os.environ.get(key) or "").strip():
@@ -4615,8 +4655,7 @@ def _emit_startup_config_lints(cfg: dict) -> None:
             deprecated_inline_wincred_count += 1
     if multi_source_secret_count:
         logger.warning(
-            "Multiple secret-source definitions detected for %s secret setting(s); keep exactly one source per secret.",
-            multi_source_secret_count,
+            "Multiple secret-source definitions detected; keep exactly one source per secret.",
         )
     if deprecated_inline_wincred_count:
         logger.warning(
@@ -4628,18 +4667,16 @@ def _emit_startup_config_lints(cfg: dict) -> None:
     media_available = _configured_media_sources(cfg)
     if media_preference != "auto" and media_preference not in media_available:
         logger.warning(
-            "MEDIA_SOURCE_PREFERENCE=%s but configured media sources are %s; runtime will fall back.",
-            media_preference,
-            ",".join(media_available) or "(none)",
+            "MEDIA_SOURCE_PREFERENCE is not available in the current config (%s source(s) available); runtime will fall back.",
+            len(media_available),
         )
 
     history_preference = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
     history_available = _configured_history_sources(cfg)
     if history_preference != "auto" and history_preference not in history_available:
         logger.warning(
-            "HISTORY_SOURCE_PREFERENCE=%s but configured history sources are %s; runtime will fall back.",
-            history_preference,
-            ",".join(history_available) or "(none)",
+            "HISTORY_SOURCE_PREFERENCE is not available in the current config (%s source(s) available); runtime will fall back.",
+            len(history_available),
         )
 
     auth_method = _auth_method(cfg)
@@ -4807,6 +4844,7 @@ def _invalidate_cache():
         try:
             os.remove(path)
         except OSError:
+            # Cache cleanup is best-effort.
             pass
     _history_cache_clear()
 
@@ -5084,6 +5122,7 @@ def _auth_response(auth_context: dict):
         str(auth_context.get("message") or "Unauthorized Access"),
         int(auth_context.get("status_code") or 401),
         dict(auth_context.get("headers") or {}),
+        content_type="text/plain; charset=utf-8",
     )
 
 
@@ -5152,7 +5191,6 @@ def _request_auth_context(cfg: dict | None = None, *, allow_setup_repair: bool =
                 "status_code": 200,
                 "message": "",
             }
-        header = _upstream_auth_header(source)
         if not _request_from_explicit_trusted_proxy(source):
             return {
                 **default_context,
@@ -5164,7 +5202,7 @@ def _request_auth_context(cfg: dict | None = None, *, allow_setup_repair: bool =
             **default_context,
             "failure_reason": "missing_upstream_auth",
             "status_code": 403,
-            "message": f"External authentication is enabled, but {header} was not provided by the trusted reverse proxy.",
+            "message": "External authentication is enabled, but the configured upstream auth header was not provided by the trusted reverse proxy.",
         }
 
     user = str(source.get("basic_auth_user") or "").strip()
@@ -5323,6 +5361,7 @@ def _arr_get(
                 time.sleep(backoff_base * (2 ** attempt))
                 continue
             raise
+    raise RuntimeError("Arr request failed without a response payload.")
 
 
 def _fetch_arr_tag_map(base_url: str, api_key: str, app_name: str) -> dict[int, str]:
@@ -7118,23 +7157,233 @@ def _plex_item_total_bytes(item: dict) -> int:
     return total
 
 
+def _plex_tag_names(value) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = ""
+        if isinstance(item, dict):
+            text = str(item.get("tag") or item.get("title") or "").strip()
+        else:
+            text = str(item or "").strip()
+        if text:
+            out.append(text)
+    return out
+
+
+def _plex_quality_label(value) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    match = re.search(r"(\d{3,4})", text)
+    if not match:
+        return text
+    return f"{match.group(1)}p"
+
+
+def _plex_audio_channels_label(value) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else str(value)
+    text = str(value).strip()
+    if not text:
+        return ""
+    try:
+        num = float(text)
+    except (TypeError, ValueError):
+        return text
+    return str(int(num)) if num.is_integer() else str(num)
+
+
+def _plex_stream_language_values(item: dict, stream_type: int) -> list[str]:
+    values: list[str] = []
+    for media in item.get("Media") or []:
+        if not isinstance(media, dict):
+            continue
+        for part in media.get("Part") or []:
+            if not isinstance(part, dict):
+                continue
+            for stream in part.get("Stream") or []:
+                if not isinstance(stream, dict):
+                    continue
+                if _safe_int(stream.get("streamType")) != stream_type:
+                    continue
+                text = str(
+                    stream.get("language")
+                    or stream.get("title")
+                    or stream.get("displayTitle")
+                    or ""
+                ).strip()
+                if text and text.lower() != "unknown":
+                    values.append(text)
+    return values
+
+
+def _plex_media_summary_from_item(item: dict) -> dict:
+    media_list = item.get("Media")
+    if not isinstance(media_list, list):
+        return {}
+    primary = next((media for media in media_list if isinstance(media, dict)), None)
+    if not primary:
+        return {}
+    width = _safe_int(primary.get("width"))
+    height = _safe_int(primary.get("height"))
+    if width > 0 and height > 0:
+        resolution = f"{width}x{height}p"
+    else:
+        resolution = _plex_quality_label(primary.get("videoResolution"))
+    video_quality = _plex_quality_label(primary.get("videoResolution") or resolution)
+    bitrate_raw = _safe_int(primary.get("bitrate"))
+    audio_languages = _format_language_list(
+        _plex_stream_language_values(item, 2)
+        or primary.get("audioLanguage")
+        or primary.get("audioLanguages")
+        or primary.get("language")
+        or ""
+    )
+    subtitle_languages = _format_language_list(
+        _plex_stream_language_values(item, 3)
+        or primary.get("subtitleLanguage")
+        or primary.get("subtitleLanguages")
+        or ""
+    )
+    return {
+        "videoQuality": video_quality,
+        "resolution": resolution,
+        "videoCodec": str(primary.get("videoCodec") or "").strip(),
+        "audioCodec": str(primary.get("audioCodec") or "").strip(),
+        "audioChannels": _plex_audio_channels_label(primary.get("audioChannels")),
+        "audioLanguages": audio_languages,
+        "subtitleLanguages": subtitle_languages,
+        "videoHDR": str(
+            primary.get("DOVIPresent")
+            or primary.get("displayTitle")
+            or primary.get("videoDynamicRange")
+            or primary.get("videoDynamicRangeType")
+            or ""
+        ).strip(),
+        "bitrateMbps": round(bitrate_raw / 1000.0, 2) if bitrate_raw > 0 else 0.0,
+        "frameRateFps": _normalize_frame_rate_fps(primary.get("videoFrameRate")),
+    }
+
+
+def _plex_meta_list_values(meta: dict, key: str) -> list[str]:
+    values = meta.get(key)
+    if not isinstance(values, list):
+        return []
+    return [str(value).strip() for value in values if str(value or "").strip()]
+
+
+def _plex_merge_meta(target_meta: dict | None, raw_meta: dict | None) -> dict:
+    target = dict(target_meta) if isinstance(target_meta, dict) else {}
+    raw = raw_meta if isinstance(raw_meta, dict) else {}
+    if not raw:
+        return target
+
+    for key in (
+        "ratingKey",
+        "sectionId",
+        "guid",
+        "type",
+        "title",
+        "year",
+        "studio",
+        "originalLanguage",
+        "releaseGroup",
+    ):
+        if raw.get(key) and not target.get(key):
+            target[key] = raw.get(key)
+
+    raw_ids = raw.get("ids") if isinstance(raw.get("ids"), dict) else {}
+    target_ids = target.get("ids") if isinstance(target.get("ids"), dict) else {}
+    if raw_ids or target_ids:
+        merged_ids = dict(target_ids)
+        for key, value in raw_ids.items():
+            if value and not merged_ids.get(key):
+                merged_ids[key] = value
+        target["ids"] = merged_ids
+
+    target_files = target.get("files") if isinstance(target.get("files"), list) else []
+    for path in raw.get("files") or []:
+        if path and path not in target_files:
+            target_files.append(path)
+    if target_files:
+        target["files"] = target_files
+
+    target["fileBytes"] = _safe_int(target.get("fileBytes")) + _safe_int(raw.get("fileBytes"))
+    added_values = [_safe_int(value) for value in (target.get("addedAt"), raw.get("addedAt")) if _safe_int(value) > 0]
+    target["addedAt"] = min(added_values) if added_values else 0
+    target["leafCount"] = max(_safe_int(target.get("leafCount")), _safe_int(raw.get("leafCount")))
+    target["childCount"] = max(_safe_int(target.get("childCount")), _safe_int(raw.get("childCount")))
+    target["originallyAvailableAt"] = max(
+        str(target.get("originallyAvailableAt") or "").strip(),
+        str(raw.get("originallyAvailableAt") or "").strip(),
+    )
+
+    target_genres = target.get("genres") if isinstance(target.get("genres"), list) else []
+    for genre in raw.get("genres") or []:
+        text = str(genre or "").strip()
+        if text and text not in target_genres:
+            target_genres.append(text)
+    if target_genres:
+        target["genres"] = target_genres
+
+    for key in (
+        "videoQualities",
+        "resolutions",
+        "videoCodecs",
+        "audioCodecs",
+        "audioChannelsValues",
+        "audioLanguagesValues",
+        "subtitleLanguagesValues",
+        "videoHDRValues",
+    ):
+        target_values = target.get(key) if isinstance(target.get(key), list) else []
+        for value in raw.get(key) or []:
+            text = str(value or "").strip()
+            if text:
+                target_values.append(text)
+        if target_values:
+            target[key] = target_values
+
+    target["bitrateMbps"] = max(float(target.get("bitrateMbps") or 0), float(raw.get("bitrateMbps") or 0))
+    target["frameRateFps"] = max(float(target.get("frameRateFps") or 0), float(raw.get("frameRateFps") or 0))
+    return target
+
+
 def _plex_raw_stats_from_item(item: dict, ids: dict) -> dict:
-    rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+    item_type = str(item.get("type") or "").strip().lower()
+    is_episode = item_type == "episode"
+    if is_episode:
+        rating_key_value = item.get("grandparentRatingKey") or item.get("grandparent_rating_key") or ""
+        title_value = item.get("grandparentTitle") or item.get("title") or item.get("parentTitle") or ""
+        year_value = item.get("grandparentYear") or item.get("year") or item.get("parentYear") or ""
+        guid_value = item.get("grandparentGuid") or item.get("guid") or ""
+    else:
+        rating_key_value = item.get("ratingKey") or item.get("rating_key") or ""
+        title_value = item.get("title") or item.get("grandparentTitle") or item.get("parentTitle") or ""
+        year_value = item.get("year") or item.get("grandparentYear") or item.get("parentYear") or ""
+        guid_value = item.get("guid") or ""
+    rating_key = str(rating_key_value).strip()
     section_id = str(
         item.get("librarySectionID")
         or item.get("section_id")
         or item.get("_plex_section_id")
         or ""
     ).strip()
-    item_type = str(item.get("type") or "").strip().lower()
-    title = item.get("title") or item.get("grandparentTitle") or item.get("parentTitle") or ""
-    year = str(item.get("year") or item.get("grandparentYear") or item.get("parentYear") or "").strip()
-    guid = item.get("guid") or ""
+    title = str(title_value or "").strip()
+    year = str(year_value or "").strip()
+    guid = str(guid_value or "").strip()
+    media_summary = _plex_media_summary_from_item(item)
     plex_meta = {
         "ratingKey": rating_key,
         "sectionId": section_id,
         "guid": guid,
-        "type": item_type,
+        "type": "show" if is_episode else item_type,
         "title": title,
         "year": year,
         "ids": ids or {},
@@ -7143,6 +7392,21 @@ def _plex_raw_stats_from_item(item: dict, ids: dict) -> dict:
         "leafCount": _safe_int(item.get("leafCount") or item.get("leaf_count")),
         "childCount": _safe_int(item.get("childCount") or item.get("child_count")),
         "addedAt": _normalize_epoch(item.get("addedAt") or item.get("added_at")),
+        "originallyAvailableAt": str(item.get("originallyAvailableAt") or "").strip(),
+        "studio": str(item.get("studio") or "").strip(),
+        "originalLanguage": str(item.get("originalLanguage") or item.get("language") or "").strip(),
+        "genres": _plex_tag_names(item.get("Genre")),
+        "releaseGroup": str(item.get("releaseGroup") or "").strip(),
+        "videoQualities": [media_summary["videoQuality"]] if media_summary.get("videoQuality") else [],
+        "resolutions": [media_summary["resolution"]] if media_summary.get("resolution") else [],
+        "videoCodecs": [media_summary["videoCodec"]] if media_summary.get("videoCodec") else [],
+        "audioCodecs": [media_summary["audioCodec"]] if media_summary.get("audioCodec") else [],
+        "audioChannelsValues": [media_summary["audioChannels"]] if media_summary.get("audioChannels") else [],
+        "audioLanguagesValues": [media_summary["audioLanguages"]] if media_summary.get("audioLanguages") else [],
+        "subtitleLanguagesValues": [media_summary["subtitleLanguages"]] if media_summary.get("subtitleLanguages") else [],
+        "videoHDRValues": [media_summary["videoHDR"]] if media_summary.get("videoHDR") else [],
+        "bitrateMbps": media_summary.get("bitrateMbps") or 0.0,
+        "frameRateFps": media_summary.get("frameRateFps") or 0.0,
     }
     return {
         "play_count": 0,
@@ -7198,10 +7462,13 @@ def _plex_merge_into(store: dict, key, raw: dict):
     if key not in store:
         store[key] = raw
         return
-    _tautulli_merge_raw(store[key], raw)
+    target = store[key]
+    _tautulli_merge_raw(target, raw)
+    target["duration_seconds"] = _safe_int(target.get("duration_seconds")) + _safe_int(raw.get("duration_seconds"))
+    target["plex_meta"] = _plex_merge_meta(target.get("plex_meta"), raw.get("plex_meta"))
 
 
-def _plex_build_index(items: list[dict], media_type: str) -> dict:
+def _plex_build_index(items: list[dict], media_type: str, meta_items: list[dict] | None = None) -> dict:
     index = {
         "tvdb": {},
         "tmdb": {},
@@ -7213,6 +7480,8 @@ def _plex_build_index(items: list[dict], media_type: str) -> dict:
         "title_year_variant": {},
         "title_variant": {},
     }
+    if meta_items:
+        index["_meta_items"] = [item for item in meta_items if isinstance(item, dict)]
     episode_agg = {
         "tvdb": {},
         "tmdb": {},
@@ -7247,7 +7516,7 @@ def _plex_build_index(items: list[dict], media_type: str) -> dict:
                 _plex_merge_into(episode_agg["imdb"], str(ids["imdb"]), raw)
             seen = set()
             for title in title_candidates:
-                _merge_title_keys_cached(episode_agg, raw, title, year, title_key_cache, seen)
+                _plex_merge_title_keys_cached(episode_agg, raw, title, year, title_key_cache, seen)
             continue
 
         if item_type:
@@ -7273,7 +7542,7 @@ def _plex_build_index(items: list[dict], media_type: str) -> dict:
         year = str(item.get("year") or "").strip()
         seen = set()
         for title in title_candidates:
-            _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
+            _plex_merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
 
     for bucket in [
         "tvdb",
@@ -7287,7 +7556,9 @@ def _plex_build_index(items: list[dict], media_type: str) -> dict:
         "title_variant",
     ]:
         for key, raw in episode_agg[bucket].items():
-            if key not in index[bucket]:
+            if key in index[bucket]:
+                _plex_merge_into(index[bucket], key, raw)
+            else:
                 index[bucket][key] = raw
 
     return index
@@ -7415,6 +7686,8 @@ def _plex_title_slug(value: str) -> str:
 def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
     media_type = "shows" if app_name == "sonarr" else "movies"
     raws = _plex_collect_unique_raw_entries(index, media_type)
+    media_index = index.get(media_type) if isinstance(index, dict) else {}
+    meta_items = media_index.get("_meta_items") if isinstance(media_index, dict) else []
     rows: list[dict] = []
     instance_id = f"plex-{app_name}"
     for raw in raws:
@@ -7439,6 +7712,18 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
         tvdb_id = str(ids.get("tvdb") or "").strip()
         tmdb_id = str(ids.get("tmdb") or "").strip()
         imdb_id = str(ids.get("imdb") or "").strip()
+        studio = str(plex_meta.get("studio") or "").strip()
+        original_language = str(plex_meta.get("originalLanguage") or "").strip()
+        genres = ", ".join(_plex_meta_list_values(plex_meta, "genres"))
+        release_group = str(plex_meta.get("releaseGroup") or "").strip()
+        video_quality_values = _plex_meta_list_values(plex_meta, "videoQualities")
+        resolution_values = _plex_meta_list_values(plex_meta, "resolutions")
+        video_codec_values = _plex_meta_list_values(plex_meta, "videoCodecs")
+        audio_codec_values = _plex_meta_list_values(plex_meta, "audioCodecs")
+        audio_channel_values = _plex_meta_list_values(plex_meta, "audioChannelsValues")
+        audio_language_values = _plex_meta_list_values(plex_meta, "audioLanguagesValues")
+        subtitle_language_values = _plex_meta_list_values(plex_meta, "subtitleLanguagesValues")
+        video_hdr_values = _plex_meta_list_values(plex_meta, "videoHDRValues")
         base_row = {
             "Title": title,
             "DateAdded": date_added,
@@ -7451,30 +7736,51 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
             "Monitored": True,
             "QualityProfile": "",
             "Tags": "",
-            "ReleaseGroup": "",
-            "VideoQuality": "",
-            "Resolution": "",
-            "VideoCodec": "",
-            "VideoHDR": "",
-            "AudioCodec": "",
-            "AudioChannels": "",
-            "AudioLanguages": "",
-            "SubtitleLanguages": "",
-            "AudioCodecMixed": False,
-            "AudioCodecAll": "",
-            "AudioLanguagesAll": "",
-            "SubtitleLanguagesAll": "",
-            "AudioLanguagesMixed": False,
-            "SubtitleLanguagesMixed": False,
+            "ReleaseGroup": release_group,
+            "VideoQuality": _most_common(video_quality_values),
+            "Resolution": _most_common(resolution_values),
+            "VideoCodec": _most_common(video_codec_values),
+            "VideoHDR": _most_common(video_hdr_values),
+            "AudioCodec": _most_common(audio_codec_values),
+            "AudioChannels": _most_common(audio_channel_values),
+            "AudioLanguages": _most_common(audio_language_values),
+            "SubtitleLanguages": _most_common(subtitle_language_values),
+            "AudioCodecMixed": _is_mixed(audio_codec_values),
+            "AudioCodecAll": _format_unique_values(audio_codec_values),
+            "AudioLanguagesAll": _merge_language_values(audio_language_values),
+            "SubtitleLanguagesAll": _merge_language_values(subtitle_language_values),
+            "AudioLanguagesMixed": _languages_mixed(audio_language_values),
+            "SubtitleLanguagesMixed": _languages_mixed(subtitle_language_values),
             "TmdbId": tmdb_id,
             "ImdbId": imdb_id,
             "TautulliMeta": {"Plex": plex_meta} if plex_meta else {},
         }
         if app_name == "sonarr":
+            meta_item = None
+            if isinstance(meta_items, list):
+                for item in meta_items:
+                    if not isinstance(item, dict):
+                        continue
+                    item_title = str(item.get("title") or "").strip()
+                    item_year = str(item.get("year") or "").strip()
+                    if item_title == title and item_year == year:
+                        meta_item = item
+                        break
+            if isinstance(meta_item, dict):
+                studio = str(meta_item.get("studio") or studio).strip()
+                if not genres:
+                    genres = ", ".join(_plex_tag_names(meta_item.get("Genre")))
+                original_language = str(
+                    meta_item.get("originalLanguage") or meta_item.get("language") or original_language
+                ).strip()
             episodes_counted = _safe_int(plex_meta.get("leafCount"))
+            if episodes_counted <= 0 and isinstance(meta_item, dict):
+                episodes_counted = _safe_int(meta_item.get("leafCount"))
             if episodes_counted <= 0 and file_path:
                 episodes_counted = 1
             season_count = _safe_int(plex_meta.get("childCount"))
+            if season_count <= 0 and isinstance(meta_item, dict):
+                season_count = _safe_int(meta_item.get("childCount"))
             series_id = (
                 _safe_int(tvdb_id)
                 or _safe_int(tmdb_id)
@@ -7495,10 +7801,14 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
                 "TitleSlug": _plex_title_slug(title),
                 "TvdbId": tvdb_id,
                 "SeriesType": "",
-                "Studio": "",
-                "OriginalLanguage": "",
-                "Genres": "",
-                "LastAired": "",
+                "Studio": studio,
+                "OriginalLanguage": original_language,
+                "Genres": genres,
+                "LastAired": str(
+                    plex_meta.get("originallyAvailableAt")
+                    or (meta_item.get("originallyAvailableAt") if isinstance(meta_item, dict) else "")
+                    or ""
+                ).strip(),
                 "MissingCount": 0,
                 "CutoffUnmetCount": 0,
                 "RecentlyGrabbed": False,
@@ -7512,14 +7822,14 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
                 "BitrateMbps": bitrate_mbps or "",
                 "BitrateEstimated": bool(bitrate_mbps),
                 "ContentHours": content_hours or "",
-                "VideoQualityMixed": False,
-                "VideoQualityAll": "",
-                "ResolutionMixed": False,
-                "ResolutionAll": "",
-                "VideoCodecMixed": False,
-                "VideoCodecAll": "",
-                "AudioChannelsMixed": False,
-                "AudioChannelsAll": "",
+                "VideoQualityMixed": _is_mixed(video_quality_values),
+                "VideoQualityAll": _format_unique_values(video_quality_values),
+                "ResolutionMixed": _is_mixed(resolution_values),
+                "ResolutionAll": _format_unique_values(resolution_values),
+                "VideoCodecMixed": _is_mixed(video_codec_values),
+                "VideoCodecAll": _format_unique_values(video_codec_values),
+                "AudioChannelsMixed": _is_mixed(audio_channel_values),
+                "AudioChannelsAll": _format_unique_values(audio_channel_values),
             }
         else:
             movie_id = (
@@ -7528,17 +7838,24 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
             )
             runtime_mins = int(round(duration_seconds / 60.0)) if duration_seconds > 0 else 0
             file_size_gb = _bytes_to_gib(file_bytes) if file_bytes > 0 else 0
-            bitrate_mbps = (
+            media_bitrate_mbps = float(plex_meta.get("bitrateMbps") or 0)
+            bitrate_mbps = media_bitrate_mbps or (
                 round(((file_bytes * 8.0) / max(duration_seconds, 1)) / 1_000_000, 2)
                 if file_bytes > 0 and duration_seconds > 0
                 else 0
             )
+            frame_rate_fps = _normalize_frame_rate_fps(plex_meta.get("frameRateFps"))
+            bits_per_pixel_per_frame = _bits_per_pixel_per_frame(
+                bitrate_mbps,
+                _most_common(resolution_values),
+                frame_rate_fps,
+            )
             row = {
                 **base_row,
                 "MovieId": movie_id,
-                "Studio": "",
-                "OriginalLanguage": "",
-                "Genres": "",
+                "Studio": studio,
+                "OriginalLanguage": original_language,
+                "Genres": genres,
                 "MissingCount": 0,
                 "CutoffUnmetCount": 0,
                 "RecentlyGrabbed": False,
@@ -7558,7 +7875,11 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
                 "FileSizeGB": file_size_gb or "",
                 "GBPerHour": round(file_size_gb / content_hours, 2) if content_hours > 0 and file_size_gb > 0 else "",
                 "BitrateMbps": bitrate_mbps or "",
-                "BitrateEstimated": bool(bitrate_mbps),
+                "BitrateEstimated": bool(bitrate_mbps and not media_bitrate_mbps),
+                "FrameRateFps": frame_rate_fps or "",
+                "FrameRateEstimated": False,
+                "BitsPerPixelPerFrame": bits_per_pixel_per_frame or "",
+                "BitsPerPixelPerFrameEstimated": False,
             }
         rows.append(row)
     rows.sort(key=lambda row: (str(row.get("Title") or "").lower(), str(row.get("Year") or "")))
@@ -7615,7 +7936,7 @@ def _get_plex_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple
                 playback_index, _ = _get_playback_index(cfg, provider, force=force)
             except Exception as exc:
                 warning = _append_warning(warning, f"{provider_label} data unavailable.")
-                logger.warning("%s playback index fetch failed (%s).", provider, type(exc).__name__)
+                logger.warning("Configured playback index fetch failed (%s).", type(exc).__name__)
                 playback_index = None
         _apply_tautulli_stats(rows, playback_index or {}, media_type, provider_label=provider_label)
         refresh_needed = force or not playback_index
@@ -7639,6 +7960,7 @@ def _plex_fetch_section_items(
     client_id: str,
     section_id: str,
     page_size: int,
+    route: str = "all",
     timeout: int | float | None = None,
     session: requests.Session | None = None,
 ) -> list[dict]:
@@ -7660,7 +7982,8 @@ def _plex_fetch_section_items(
             "duration",
         ]
     )
-    params = {"includeFields": include_fields, "includeElements": "Guid,Media"}
+    include_elements = "Guid,Media,Stream" if str(route or "").strip() == "allLeaves" else "Guid,Media"
+    params = {"includeFields": include_fields, "includeElements": include_elements}
     while True:
         headers = {
             "X-Plex-Container-Start": str(start),
@@ -7670,7 +7993,7 @@ def _plex_fetch_section_items(
             base_url,
             token,
             client_id,
-            f"/library/sections/{section_id}/all",
+            f"/library/sections/{section_id}/{route}",
             params=params,
             headers=headers,
             timeout=timeout,
@@ -7689,6 +8012,132 @@ def _plex_fetch_section_items(
         if total_size and start >= total_size:
             break
     return items
+
+
+def _plex_fetch_metadata_items(
+    base_url: str,
+    token: str,
+    client_id: str,
+    rating_keys: list[str],
+    batch_size: int = 100,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> dict[str, dict]:
+    cleaned_keys: list[str] = []
+    seen: set[str] = set()
+    for value in rating_keys or []:
+        key = str(value or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned_keys.append(key)
+    if not cleaned_keys:
+        return {}
+
+    include_fields = ",".join(
+        [
+            "ratingKey",
+            "guid",
+            "type",
+            "title",
+            "year",
+            "originalTitle",
+            "parentTitle",
+            "grandparentTitle",
+            "parentYear",
+            "grandparentYear",
+            "librarySectionID",
+            "duration",
+            "addedAt",
+            "originallyAvailableAt",
+            "studio",
+            "originalLanguage",
+            "releaseGroup",
+        ]
+    )
+    payload_params = {"includeFields": include_fields, "includeElements": "Guid,Media,Stream"}
+    results: dict[str, dict] = {}
+    chunk_size = max(1, min(_safe_int(batch_size) or 100, 250))
+    for start in range(0, len(cleaned_keys), chunk_size):
+        chunk = cleaned_keys[start : start + chunk_size]
+        payload = _plex_request(
+            base_url,
+            token,
+            client_id,
+            f"/library/metadata/{','.join(chunk)}",
+            params=payload_params,
+            timeout=timeout,
+            session=session,
+        )
+        container = payload.get("MediaContainer") if isinstance(payload, dict) else None
+        metadata = container.get("Metadata") if isinstance(container, dict) else None
+        if not isinstance(metadata, list):
+            continue
+        for item in metadata:
+            if not isinstance(item, dict):
+                continue
+            rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+            if rating_key:
+                results[rating_key] = item
+    return results
+
+
+def _plex_enrich_movie_items_with_streams(
+    base_url: str,
+    token: str,
+    client_id: str,
+    items: list[dict],
+    batch_size: int = 100,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    if not items:
+        return []
+
+    missing_keys: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+        if not rating_key:
+            continue
+        if _plex_stream_language_values(item, 2) and _plex_stream_language_values(item, 3):
+            continue
+        missing_keys.append(rating_key)
+
+    if not missing_keys:
+        return items
+
+    try:
+        detailed_items = _plex_fetch_metadata_items(
+            base_url,
+            token,
+            client_id,
+            missing_keys,
+            batch_size=batch_size,
+            timeout=timeout,
+            session=session,
+        )
+    except Exception as exc:
+        logger.warning("Plex movie metadata enrichment failed; continuing without stream languages: %s", exc)
+        return items
+
+    enriched: list[dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            enriched.append(item)
+            continue
+        rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+        detailed = detailed_items.get(rating_key)
+        if not isinstance(detailed, dict):
+            enriched.append(item)
+            continue
+        merged = dict(item)
+        merged.update(detailed)
+        if item.get("_plex_section_id") and not merged.get("_plex_section_id"):
+            merged["_plex_section_id"] = item.get("_plex_section_id")
+        enriched.append(merged)
+    return enriched
 
 
 def _plex_fetch_history(
@@ -7983,6 +8432,7 @@ def _get_plex_index(
 
         section_filters = _plex_section_filter_ids(cfg.get("plex_section_filters") or "")
         show_items: list[dict] = []
+        show_episode_items: list[dict] = []
         movie_items: list[dict] = []
         section_meta: list[dict] = []
 
@@ -8017,11 +8467,34 @@ def _get_plex_index(
                 if isinstance(item, dict):
                     item["_plex_section_id"] = section_id
             if section_type == "show":
+                episode_items = _plex_fetch_section_items(
+                    base_url,
+                    token,
+                    client_id,
+                    section_id,
+                    page_size=page_size,
+                    route="allLeaves",
+                    timeout=request_timeout,
+                    session=session,
+                )
+                for item in episode_items:
+                    if isinstance(item, dict):
+                        item["_plex_section_id"] = section_id
                 show_items.extend(items)
+                show_episode_items.extend(episode_items)
             else:
+                items = _plex_enrich_movie_items_with_streams(
+                    base_url,
+                    token,
+                    client_id,
+                    items,
+                    batch_size=max(25, min(page_size, 100)),
+                    timeout=request_timeout,
+                    session=session,
+                )
                 movie_items.extend(items)
 
-    shows_index = _plex_build_index(show_items, "show")
+    shows_index = _plex_build_index(show_episode_items or show_items, "show", meta_items=show_items)
     movies_index = _plex_build_index(movie_items, "movie")
 
     meta: dict = {
@@ -8655,6 +9128,57 @@ def _merge_title_keys_cached(
     if variant_keys:
         for key in variant_keys:
             _merge_title_key(store, "title_variant", key, raw, seen)
+
+
+def _plex_merge_title_key(store: dict, bucket: str, key, raw: dict, seen: set | None = None) -> None:
+    if key in (None, "", ()):
+        return
+    if seen is not None:
+        token = (bucket, repr(key))
+        if token in seen:
+            return
+        seen.add(token)
+    _plex_merge_into(store[bucket], key, raw)
+
+
+def _plex_merge_title_keys_cached(
+    store: dict,
+    raw: dict,
+    title: str,
+    year: str,
+    cache: dict[str, tuple[str, str, list[str]]],
+    seen: set | None = None,
+) -> None:
+    if not title:
+        return
+    title_value = str(title or "")
+    if not title_value:
+        return
+    cached = cache.get(title_value)
+    if cached is None:
+        title_key = _normalize_title_key(title_value)
+        if not title_key:
+            cache[title_value] = ("", "", [])
+            return
+        relaxed_key = _relaxed_title_key(title_value)
+        variant_keys = _title_variant_keys(title_value)
+        cache[title_value] = (title_key, relaxed_key, variant_keys)
+    else:
+        title_key, relaxed_key, variant_keys = cached
+        if not title_key:
+            return
+    if year:
+        _plex_merge_title_key(store, "title_year", (title_key, year), raw, seen)
+    _plex_merge_title_key(store, "title", title_key, raw, seen)
+    if year:
+        _plex_merge_title_key(store, "title_year_relaxed", (relaxed_key, year), raw, seen)
+    _plex_merge_title_key(store, "title_relaxed", relaxed_key, raw, seen)
+    if variant_keys and year:
+        for key in variant_keys:
+            _plex_merge_title_key(store, "title_year_variant", (key, year), raw, seen)
+    if variant_keys:
+        for key in variant_keys:
+            _plex_merge_title_key(store, "title_variant", key, raw, seen)
 
 
 def _tautulli_build_index(
@@ -9394,40 +9918,37 @@ def _touch_plex_refresh_marker() -> None:
 
 
 def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
-    global _tautulli_refresh_seen
     marker_path = _tautulli_refresh_marker_path()
     try:
         mtime = os.path.getmtime(marker_path)
     except OSError:
         return
-    if _tautulli_refresh_seen is None or mtime > _tautulli_refresh_seen:
-        _tautulli_refresh_seen = mtime
+    if _playback_refresh_state["tautulli_seen"] is None or mtime > _playback_refresh_state["tautulli_seen"]:
+        _playback_refresh_state["tautulli_seen"] = mtime
         _cache.clear_app("sonarr")
         _cache.clear_app("radarr")
 
 
 def _maybe_bust_arr_cache_on_jellystat_refresh() -> None:
-    global _jellystat_refresh_seen
     marker_path = _jellystat_refresh_marker_path()
     try:
         mtime = os.path.getmtime(marker_path)
     except OSError:
         return
-    if _jellystat_refresh_seen is None or mtime > _jellystat_refresh_seen:
-        _jellystat_refresh_seen = mtime
+    if _playback_refresh_state["jellystat_seen"] is None or mtime > _playback_refresh_state["jellystat_seen"]:
+        _playback_refresh_state["jellystat_seen"] = mtime
         _cache.clear_app("sonarr")
         _cache.clear_app("radarr")
 
 
 def _maybe_bust_arr_cache_on_plex_refresh() -> None:
-    global _plex_refresh_seen
     marker_path = _plex_refresh_marker_path()
     try:
         mtime = os.path.getmtime(marker_path)
     except OSError:
         return
-    if _plex_refresh_seen is None or mtime > _plex_refresh_seen:
-        _plex_refresh_seen = mtime
+    if _playback_refresh_state["plex_seen"] is None or mtime > _playback_refresh_state["plex_seen"]:
+        _playback_refresh_state["plex_seen"] = mtime
         _cache.clear_app("sonarr")
         _cache.clear_app("radarr")
 
@@ -9546,10 +10067,12 @@ def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
     except OSError:
         return None
     try:
-        os.write(fd, str(os.getpid()).encode("utf-8"))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
     except OSError:
+        # The lock file itself is sufficient; a missing pid payload is non-fatal.
         pass
-    return fd
+    return lock_path
 
 
 def _acquire_jellystat_refresh_lock(lock_path: str, stale_seconds: int = 0):
@@ -9561,10 +10084,12 @@ def _acquire_jellystat_refresh_lock(lock_path: str, stale_seconds: int = 0):
     except OSError:
         return None
     try:
-        os.write(fd, str(os.getpid()).encode("utf-8"))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
     except OSError:
+        # The lock file itself is sufficient; a missing pid payload is non-fatal.
         pass
-    return fd
+    return lock_path
 
 
 def _acquire_plex_refresh_lock(lock_path: str, stale_seconds: int = 0):
@@ -9576,45 +10101,35 @@ def _acquire_plex_refresh_lock(lock_path: str, stale_seconds: int = 0):
     except OSError:
         return None
     try:
-        os.write(fd, str(os.getpid()).encode("utf-8"))
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
     except OSError:
+        # The lock file itself is sufficient; a missing pid payload is non-fatal.
         pass
-    return fd
+    return lock_path
 
 
-def _release_tautulli_refresh_lock(lock_path: str, fd) -> None:
-    try:
-        if fd is not None:
-            os.close(fd)
-    except OSError:
-        pass
+def _release_tautulli_refresh_lock(lock_path: str, _lock_token=None) -> None:
     try:
         os.remove(lock_path)
     except OSError:
+        # Best-effort lock cleanup.
         pass
 
 
-def _release_jellystat_refresh_lock(lock_path: str, fd) -> None:
-    try:
-        if fd is not None:
-            os.close(fd)
-    except OSError:
-        pass
+def _release_jellystat_refresh_lock(lock_path: str, _lock_token=None) -> None:
     try:
         os.remove(lock_path)
     except OSError:
+        # Best-effort lock cleanup.
         pass
 
 
-def _release_plex_refresh_lock(lock_path: str, fd) -> None:
-    try:
-        if fd is not None:
-            os.close(fd)
-    except OSError:
-        pass
+def _release_plex_refresh_lock(lock_path: str, _lock_token=None) -> None:
     try:
         os.remove(lock_path)
     except OSError:
+        # Best-effort lock cleanup.
         pass
 
 
@@ -9716,7 +10231,11 @@ def _start_tautulli_background_apply(cfg: dict, index: dict | None) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-tautulli-apply", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_tautulli_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -9742,7 +10261,11 @@ def _start_tautulli_background_refresh(cfg: dict) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-tautulli-refresh", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_tautulli_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -9819,7 +10342,11 @@ def _start_tautulli_deep_refresh(cfg: dict) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-tautulli-deep-refresh", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_tautulli_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -9924,7 +10451,11 @@ def _start_jellystat_background_apply(cfg: dict, index: dict | None) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-jellystat-apply", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_jellystat_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -9961,7 +10492,11 @@ def _start_jellystat_background_refresh(cfg: dict) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-jellystat-refresh", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_jellystat_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -10066,7 +10601,11 @@ def _start_plex_background_apply(cfg: dict, index: dict | None) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-plex-apply", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_plex_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -10103,7 +10642,11 @@ def _start_plex_background_refresh(cfg: dict, deep: bool = False) -> bool:
             _reset_tautulli_match_progress()
 
     thread = threading.Thread(target=worker, name="sortarr-plex-refresh", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception:
+        _release_plex_refresh_lock(lock_path, fd)
+        raise
     return True
 
 
@@ -10957,6 +11500,11 @@ def _build_sonarr_row(
     quality_profile = _resolve_quality_profile_name(profile_name, profile_id, profile_map or {})
     audio_channels_mixed = _is_mixed(audio_channel_values)
     audio_channels_all = _format_unique_values(audio_channel_values)
+    custom_format_scores = [
+        score
+        for score in (_normalize_custom_format_score(f.get("customFormatScore")) for f in metric_files)
+        if score is not None
+    ]
 
     total_gib = _bytes_to_gib(total_bytes_all)
     total_gib_regular = _bytes_to_gib(total_bytes_regular)
@@ -11000,6 +11548,8 @@ def _build_sonarr_row(
         "Airing": bool(next_airing),
         "SeasonCount": season_count,
         "EpisodesCounted": count,
+        "LowestCustomFormatScore": min(custom_format_scores) if custom_format_scores else "",
+        "HighestCustomFormatScore": max(custom_format_scores) if custom_format_scores else "",
         "TotalSizeGB": total_gib,
         "AvgEpisodeSizeGB": avg_gib,
         "GBPerHour": gb_per_hour if gb_per_hour else "",
@@ -11056,12 +11606,70 @@ def _build_sonarr_season_summaries(series: dict) -> list[dict]:
                 "episodeFileCount": episode_file_count,
                 "sizeOnDiskGiB": _bytes_to_gib(size_on_disk),
                 "avgEpisodeSizeGiB": avg_size,
+                "lowestCustomFormatScore": "",
+                "highestCustomFormatScore": "",
                 "monitored": season.get("monitored"),
                 "isSpecials": season_number == 0,
             }
         )
     out.sort(key=lambda item: item.get("seasonNumber", 0))
     return out
+
+
+def _normalize_custom_format_score(value):
+    if value == "" or value is None:
+        return None
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(score):
+        return None
+    if score.is_integer():
+        return int(score)
+    return round(score, 2)
+
+
+def _sonarr_episode_custom_format_score(episode: dict, file_map: dict[int, dict] | None = None):
+    if isinstance(file_map, dict):
+        file_id = _safe_int(episode.get("episodeFileId"))
+        if file_id > 0:
+            file = file_map.get(file_id)
+            if isinstance(file, dict):
+                score = _normalize_custom_format_score(file.get("customFormatScore"))
+                if score is not None:
+                    return score
+    return _normalize_custom_format_score(episode.get("customFormatScore"))
+
+
+def _attach_sonarr_season_score_summaries(
+    seasons: list[dict],
+    episodes: list[dict] | None,
+    file_map: dict[int, dict] | None = None,
+) -> list[dict]:
+    score_by_season: dict[int, list[float | int]] = {}
+    for episode in episodes or []:
+        if not isinstance(episode, dict):
+            continue
+        season_number = _safe_int(episode.get("seasonNumber"))
+        if season_number <= 0:
+            continue
+        score = _sonarr_episode_custom_format_score(episode, file_map)
+        if score is None:
+            continue
+        score_by_season.setdefault(season_number, []).append(score)
+
+    enriched: list[dict] = []
+    for season in seasons or []:
+        if not isinstance(season, dict):
+            continue
+        season_number = _safe_int(season.get("seasonNumber"))
+        scores = score_by_season.get(season_number) or []
+        item = dict(season)
+        item["lowestCustomFormatScore"] = min(scores) if scores else ""
+        item["highestCustomFormatScore"] = max(scores) if scores else ""
+        enriched.append(item)
+    return enriched
 
 
 def _build_sonarr_episode_payload(
@@ -11460,9 +12068,37 @@ def _get_sonarr_season_payload(
             _set_cached_sonarr_seasons(cache_key, series_id, seasons, stats_key)
     else:
         seasons = cached
+    fast_mode = _read_sonarr_episodefile_mode() == "fast"
+    cached_episodes = _get_cached_sonarr_episodes(cache_key, series_id, None, cache_seconds)
+    if cached_episodes is None:
+        cached_episodes = _arr_get(
+            base_url,
+            api_key,
+            "/api/v3/episode",
+            params={"seriesId": series_id},
+            app_name="sonarr",
+        )
+        if cache_seconds > 0:
+            _set_cached_sonarr_episodes(cache_key, series_id, cached_episodes, None)
+
+    file_map = None
+    if not fast_mode:
+        files = _get_cached_episodefiles(cache_key, series_id, None, cache_seconds)
+        if files is None:
+            files = _arr_get(
+                base_url,
+                api_key,
+                "/api/v3/episodefile",
+                params={"seriesId": series_id},
+                app_name="sonarr",
+            )
+            if cache_seconds > 0:
+                _set_cached_episodefiles(cache_key, series_id, files, None)
+        file_map = {f.get("id"): f for f in files or [] if isinstance(f, dict) and f.get("id") is not None}
+
+    seasons = _attach_sonarr_season_score_summaries(seasons, cached_episodes, file_map)
     if not include_specials:
         seasons = [season for season in seasons if not season.get("isSpecials")]
-    fast_mode = _read_sonarr_episodefile_mode() == "fast"
     return seasons, fast_mode
 
 
@@ -11587,7 +12223,7 @@ def _fetch_radarr_movie_file_detail(
         _record_timing(timing, "radarr_moviefile_ms", start)
 
     except Exception:
-        logger.warning("Radarr moviefile fetch failed (id=%s).", movie_file_id)
+        logger.warning("Radarr moviefile fetch failed.")
         return None
 
     if isinstance(detail, dict):
@@ -11755,8 +12391,11 @@ def _build_radarr_row(
     bits_per_pixel_per_frame_estimated = False
     release_group = ""
     edition = ""
-    custom_formats = ""
+    custom_formats = ", ".join(_format_custom_formats(movie.get("customFormats") or []))
     custom_format_score = ""
+    movie_score = movie.get("customFormatScore")
+    if movie_score != "" and movie_score is not None:
+        custom_format_score = _safe_int(movie_score)
     quality_cutoff_not_met = ""
     scene_name = ""
 
@@ -11785,12 +12424,10 @@ def _build_radarr_row(
         edition = str(primary.get("edition") or "")
         scene_name = str(primary.get("sceneName") or "")
         file_languages = _format_language_list(primary.get("languages") or "")
-        custom_formats = ", ".join(_format_custom_formats(primary.get("customFormats") or []))
-        if not custom_formats:
-            custom_formats = ", ".join(_format_custom_formats(movie.get("customFormats") or []))
+        primary_custom_formats = ", ".join(_format_custom_formats(primary.get("customFormats") or []))
+        if primary_custom_formats:
+            custom_formats = primary_custom_formats
         score = primary.get("customFormatScore")
-        if score == "" or score is None:
-            score = movie.get("customFormatScore")
         if score != "" and score is not None:
             custom_format_score = _safe_int(score)
         if "qualityCutoffNotMet" in primary:
@@ -12255,11 +12892,10 @@ def _get_cached_instance(
         fetch_elapsed = time.perf_counter() - fetch_start
         if log_cold_start:
             logger.info(
-                "Cold start %s fetch completed in %.2fs (rows=%s, instance=%s)",
+                "Cold start %s fetch completed in %.2fs (rows=%s)",
                 app_name,
                 fetch_elapsed,
                 len(data or []),
-                instance_id,
             )
         temp_entry = {"ts": now, "tautulli_index_ts": 0, "data": data}
         if tautulli_index:
@@ -13089,9 +13725,9 @@ def setup():
                     f"({setup_public_host}): {', '.join(setup_mismatches)}."
                 )
                 logger.warning(
-                    "Setup saved with cross-host CSRF trusted origins (public_host=%s, mismatched=%s).",
-                    setup_public_host,
-                    ",".join(setup_mismatches),
+                    "Setup saved with cross-host CSRF trusted origins (public_host=%s, mismatched_count=%s).",
+                    _sanitize_log_text(setup_public_host, max_length=120),
+                    len(setup_mismatches),
                 )
 
         external_auth_error = ""
@@ -13858,7 +14494,7 @@ def api_setup_test():
         return jsonify(
             {
                 "ok": False,
-                "error": _sanitize_connection_test_failure(failure, credential_label),
+                "error": f"Connection failed. Check URL and {credential_label}.",
             }
         ), 502
     return jsonify({"ok": True})
@@ -14562,12 +15198,9 @@ def api_arr_health(app_name: str):
 @_auth_required
 def api_clear_caches():
     cfg = _get_config()
-    global _tautulli_refresh_seen
-    _tautulli_refresh_seen = None
-    global _jellystat_refresh_seen
-    _jellystat_refresh_seen = None
-    global _plex_refresh_seen
-    _plex_refresh_seen = None
+    _playback_refresh_state["tautulli_seen"] = None
+    _playback_refresh_state["jellystat_seen"] = None
+    _playback_refresh_state["plex_seen"] = None
     _invalidate_cache()
     _wipe_cache_files()
     started = False
@@ -15303,14 +15936,6 @@ def api_playback_match_diagnostics():
         if instance_rows:
             match_counts = _summarize_match_counts(instance_rows)
 
-    def _safe_float(value) -> float | None:
-        if value is None or value == "":
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-
     core = {
         "generated_at": (
             datetime.datetime.now(datetime.timezone.utc)
@@ -15690,9 +16315,7 @@ def api_shows():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Sonarr is not configured"}), 503
-    force = False
     try:
-        refresh_notice = ""
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
         selected_library_ids = _requested_plex_library_ids("sonarr")
@@ -15707,39 +16330,16 @@ def api_shows():
             data, tautulli_warning, tautulli_notice, cold_cache = _get_plex_media_rows(
                 "sonarr",
                 cfg,
-                force=force,
+                force=False,
             )
             data = _apply_plex_library_scope(data, selected_library_ids)
-            if force and (tautulli_notice or _plex_refresh_in_progress(cfg)):
-                refresh_notice = "Refreshing Plex data in background."
         else:
-            if force:
-                cache_path = cfg.get("sonarr_cache_path")
-                disk_cache = _load_arr_cache(cache_path)
-                if _has_complete_cached_data("sonarr", instances, disk_cache):
-                    data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                        "sonarr",
-                        instances,
-                        cfg,
-                        force=False,
-                    )
-                    started = _start_arr_background_refresh("sonarr", instances, cfg)
-                    if started or _arr_refresh_in_progress("sonarr"):
-                        refresh_notice = "Refreshing Sonarr data in background."
-                else:
-                    data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                        "sonarr",
-                        instances,
-                        cfg,
-                        force=True,
-                    )
-            else:
-                data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                    "sonarr",
-                    instances,
-                    cfg,
-                    force=False,
-                )
+            data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
+                "sonarr",
+                instances,
+                cfg,
+                force=False,
+            )
         resp = jsonify(data)
         if tautulli_warning:
             resp.headers["X-Sortarr-Warn"] = tautulli_warning
@@ -15755,8 +16355,6 @@ def api_shows():
             notice_flags.append("tautulli_refresh")
         if _read_sonarr_episodefile_mode() == "fast":
             notice_flags.append("sonarr_fast")
-        if refresh_notice and not notices:
-            notices.append(refresh_notice)
         if notice_flags:
             resp.headers["X-Sortarr-Notice-Flags"] = ",".join(notice_flags)
         if notices:
@@ -15778,9 +16376,7 @@ def api_movies():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Radarr is not configured"}), 503
-    force = False
     try:
-        refresh_notice = ""
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
         selected_library_ids = _requested_plex_library_ids("radarr")
@@ -15795,39 +16391,16 @@ def api_movies():
             data, tautulli_warning, tautulli_notice, cold_cache = _get_plex_media_rows(
                 "radarr",
                 cfg,
-                force=force,
+                force=False,
             )
             data = _apply_plex_library_scope(data, selected_library_ids)
-            if force and (tautulli_notice or _plex_refresh_in_progress(cfg)):
-                refresh_notice = "Refreshing Plex data in background."
         else:
-            if force:
-                cache_path = cfg.get("radarr_cache_path")
-                disk_cache = _load_arr_cache(cache_path)
-                if _has_complete_cached_data("radarr", instances, disk_cache):
-                    data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                        "radarr",
-                        instances,
-                        cfg,
-                        force=False,
-                    )
-                    started = _start_arr_background_refresh("radarr", instances, cfg)
-                    if started or _arr_refresh_in_progress("radarr"):
-                        refresh_notice = "Refreshing Radarr data in background."
-                else:
-                    data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                        "radarr",
-                        instances,
-                        cfg,
-                        force=True,
-                    )
-            else:
-                data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
-                    "radarr",
-                    instances,
-                    cfg,
-                    force=False,
-                )
+            data, tautulli_warning, tautulli_notice, cold_cache = _get_cached_all(
+                "radarr",
+                instances,
+                cfg,
+                force=False,
+            )
         lite_raw = str(request.args.get("lite") or "").strip().lower()
         lite_requested = lite_raw in {"1", "true", "yes", "on"}
         lite_explicit_off = lite_raw in {"0", "false", "no", "off"}
@@ -15836,7 +16409,6 @@ def api_movies():
             lite_enabled = True
         elif (
             not lite_explicit_off
-            and not force
             and cold_cache
             and _read_bool_env("SORTARR_RADARR_LITE_FIRST", True)
         ):
@@ -15858,8 +16430,6 @@ def api_movies():
             notice_flags.append("tautulli_refresh")
         if lite_enabled:
             notice_flags.append("radarr_lite")
-        if refresh_notice and not notices:
-            notices.append(refresh_notice)
         if notice_flags:
             resp.headers["X-Sortarr-Notice-Flags"] = ",".join(notice_flags)
         if notices:
@@ -15882,7 +16452,6 @@ def shows_csv():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Sonarr is not configured"}), 503
-    force = False
     try:
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
@@ -15895,10 +16464,10 @@ def shows_csv():
         if available_ids:
             selected_library_ids = [item for item in selected_library_ids if item in available_ids]
         if plex_fallback:
-            data, _, _, _ = _get_plex_media_rows("sonarr", cfg, force=force)
+            data, _, _, _ = _get_plex_media_rows("sonarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:
-            data, _, _, _ = _get_cached_all("sonarr", instances, cfg, force=force)
+            data, _, _, _ = _get_cached_all("sonarr", instances, cfg, force=False)
     except Exception as exc:
         logger.exception("Sonarr request failed")
         resp = jsonify({"error": "Sonarr request failed"})
@@ -15932,6 +16501,8 @@ def shows_csv():
             "Airing",
             "SeasonCount",
             "EpisodesCounted",
+            "LowestCustomFormatScore",
+            "HighestCustomFormatScore",
             "TotalSizeGB",
             "AvgEpisodeSizeGB",
             "GBPerHour",
@@ -15989,7 +16560,6 @@ def movies_csv():
     plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
     if not instances and not plex_fallback:
         return jsonify({"error": "Radarr is not configured"}), 503
-    force = False
     try:
         plex_scope = _get_plex_library_scope(cfg)
         plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
@@ -16002,10 +16572,10 @@ def movies_csv():
         if available_ids:
             selected_library_ids = [item for item in selected_library_ids if item in available_ids]
         if plex_fallback:
-            data, _, _, _ = _get_plex_media_rows("radarr", cfg, force=force)
+            data, _, _, _ = _get_plex_media_rows("radarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:
-            data, _, _, _ = _get_cached_all("radarr", instances, cfg, force=force)
+            data, _, _, _ = _get_cached_all("radarr", instances, cfg, force=False)
     except Exception as exc:
         logger.exception("Radarr request failed")
         resp = jsonify({"error": "Radarr request failed"})

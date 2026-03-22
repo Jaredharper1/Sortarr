@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.7] - 2026-03-19
+
+### Features
+- Added Sonarr `Lowest Custom Format Score` and `Highest Custom Format Score` row fields, sorting, filtering, CSV export, and season-expansion summaries for score-based analysis.
+
+### Fixes
+- Allowed setup-only same-host HTTP/HTTPS scheme drift during CSRF validation when the setup request carries a valid CSRF token, unblocking bootstrap/save flows behind reverse proxies that terminate HTTPS but forward setup POSTs to Sortarr over plain HTTP without usable forwarded scheme headers.
+- Fixed Plex data/index enrichment so existing Plex rows populate stream and metadata fields more reliably instead of dropping details that were already expected to work.
+
 ## [0.8.6] - 2026-03-18
 
 ### Fixes
@@ -374,10 +383,6 @@ Translations are managed using Flask-Babel with gettext .po and .mo catalogs to 
 ### Refresh and cache workflow
 
 - Improve per-row refresh messaging, and remove rows when Arr reports missing items.
-
-### Tests and tooling
-
-- Capture selenium scenario failures in perf.json with attached failure artifacts and scenario scoping.
 
 ## 0.6.9
 

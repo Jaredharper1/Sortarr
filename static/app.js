@@ -325,6 +325,22 @@ function updateMismatchCenterButtonVisibility() {
   const supported = available.filter(provider => provider === "tautulli" || provider === "plex" || provider === "jellystat");
   mismatchCenterBtn.disabled = supported.length < 2;
 }
+
+function plexOnlyMediaSource(app = activeApp) {
+  if (!app || (app !== "sonarr" && app !== "radarr")) return false;
+  const selected = (configState && configState.optionSelected) || {};
+  return String(selected.media_source || "").trim().toLowerCase() === "plex";
+}
+
+function columnSupportedForMode(col, app = activeApp) {
+  if (!col) return true;
+  if (plexOnlyMediaSource(app)) {
+    const blocked = PLEX_UNSUPPORTED_COLUMNS[app];
+    if (blocked && blocked.has(col)) return false;
+  }
+  return true;
+}
+
 function applyOptionSetCapabilities() {
   const arrTables = capabilityEnabled("arr_tables", configState.sonarrConfigured || configState.radarrConfigured);
   const cacheActions = capabilityEnabled("cache_actions", arrTables);
@@ -2418,6 +2434,8 @@ const SONARR_COLUMNS = new Set([
   "ContentHours",
   "EpisodesCounted",
   "SeasonCount",
+  "LowestCustomFormatScore",
+  "HighestCustomFormatScore",
   "AvgEpisodeSizeGB",
   "TotalSizeGB",
   "GBPerHour",
@@ -2492,6 +2510,40 @@ const COLUMN_GROUPS = {
   video: Array.from(VIDEO_COLUMNS),
   language: Array.from(LANGUAGE_COLUMNS),
   tautulli: Array.from(TAUTULLI_COLUMNS),
+};
+const PLEX_UNSUPPORTED_COLUMNS = {
+  sonarr: new Set([
+    "SeriesType",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "Status",
+    "Monitored",
+    "Tags",
+    "ReleaseGroup",
+    "QualityProfile",
+    "OriginalLanguage",
+    "LowestCustomFormatScore",
+    "HighestCustomFormatScore",
+  ]),
+  radarr: new Set([
+    "Status",
+    "Monitored",
+    "Tags",
+    "ReleaseGroup",
+    "QualityProfile",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "HasFile",
+    "IsAvailable",
+    "InCinemas",
+    "LastSearchTime",
+    "Edition",
+    "CustomFormats",
+    "CustomFormatScore",
+    "QualityCutoffNotMet",
+    "OriginalLanguage",
+    "Languages",
+  ]),
 };
 
 
@@ -2840,6 +2892,20 @@ const FILTER_BUILDER_FIELDS = [
     type: "number",
     app: "radarr",
     placeholder: "100",
+  },
+  {
+    id: "lowestcustomformatscore",
+    label: t("Lowest Custom Format Score"),
+    type: "number",
+    app: "sonarr",
+    placeholder: "-100",
+  },
+  {
+    id: "highestcustomformatscore",
+    label: t("Highest Custom Format Score"),
+    type: "number",
+    app: "sonarr",
+    placeholder: "1000",
   },
   {
     id: "qualitycutoffnotmet",
@@ -3214,6 +3280,8 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
   "RuntimeMins",
   "EpisodesCounted",
   "SeasonCount",
+  "LowestCustomFormatScore",
+  "HighestCustomFormatScore",
   "MissingCount",
   "CutoffUnmetCount",
   "QualityCutoffNotMet",
@@ -3248,6 +3316,8 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
 const HEADER_CAP_MIN_TEXT = {
   ContentHours: "Runtime (hh:mm) v",
   EpisodesCounted: "Episodes v",
+  LowestCustomFormatScore: "Lowest CF Score v",
+  HighestCustomFormatScore: "Highest CF Score v",
   AvgEpisodeSizeGB: "Avg / Ep (GiB) v",
   TotalSizeGB: "Total (GiB) v",
   RuntimeMins: "Runtime (hh:mm) v",
@@ -3281,6 +3351,8 @@ const HEADER_CAP_TARGET_WIDTH_BY_APP = {
   sonarr: {
     GBPerHour: 112,
     BitrateMbps: 152,
+    LowestCustomFormatScore: 170,
+    HighestCustomFormatScore: 174,
     VideoQuality: 184,
     Resolution: 170,
     VideoCodec: 168,
@@ -7234,6 +7306,10 @@ function buildSeasonMetaText(season) {
   if (sizeText) parts.push(sizeText);
   const avgText = formatGiBValue(season.avgEpisodeSizeGiB);
   if (avgText) parts.push(`${avgText}/ep`);
+  const lowScore = formatEpisodeScore(season.lowestCustomFormatScore ?? "");
+  if (lowScore) parts.push(`Low CF ${lowScore}`);
+  const highScore = formatEpisodeScore(season.highestCustomFormatScore ?? "");
+  if (highScore) parts.push(`High CF ${highScore}`);
   if (season.monitored === false) parts.push("Unmonitored");
   return parts.join(" | ");
 }
@@ -8770,6 +8846,8 @@ const NUMERIC_DISPLAY_COLUMNS = {
   sonarr: [
     "EpisodesCounted",
     "SeasonCount",
+    "LowestCustomFormatScore",
+    "HighestCustomFormatScore",
     "MissingCount",
     "CutoffUnmetCount",
     "AvgEpisodeSizeGB",
@@ -9319,6 +9397,8 @@ const FIELD_MAP = {
   episodes: "EpisodesCounted",
   seasons: "SeasonCount",
   season: "SeasonCount",
+  lowestcustomformatscore: "LowestCustomFormatScore",
+  highestcustomformatscore: "HighestCustomFormatScore",
   totalsize: "TotalSizeGB",
   avgepisode: "AvgEpisodeSizeGB",
   runtime: "RuntimeMins",
@@ -9338,6 +9418,8 @@ const NUMERIC_FIELDS = new Set([
   "episodes",
   "seasons",
   "season",
+  "lowestcustomformatscore",
+  "highestcustomformatscore",
   "missing",
   "cutoff",
   "cutoffunmet",
@@ -10243,6 +10325,7 @@ function updateColumnGroupToggles(app = activeApp) {
     const group = input.getAttribute("data-col-group");
     const cols = COLUMN_GROUPS[group] || [];
     const inputs = cols
+      .filter(col => columnSupportedForMode(col, app))
       .map(col => getColumnInputs(col, app)[0])
       .filter(Boolean);
     if (!inputs.length) {
@@ -10309,6 +10392,12 @@ function loadColumnPrefs(app = activeApp) {
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     if (!inputMatchesApp(input, app)) return;
     const col = input.getAttribute("data-col");
+    if (!columnSupportedForMode(col, app)) {
+      input.checked = false;
+      input.disabled = true;
+      return;
+    }
+    input.disabled = false;
     if (Object.prototype.hasOwnProperty.call(prefs, col)) {
       input.checked = Boolean(prefs[col]);
     } else {
@@ -10355,11 +10444,12 @@ function getHiddenColumns(app = activeApp) {
 
 function isColumnHidden(col, app, hiddenColumns) {
   const hideByCol = hiddenColumns && hiddenColumns.has(col);
+  const hideByMode = !columnSupportedForMode(col, app);
   const hideByTautulli = TAUTULLI_COLUMNS.has(col) && !tautulliEnabled;
   const hideByDiagnostics = col === "Diagnostics" && !playbackSupportsDiagnostics;
   const hideByCsv = col && CSV_COLUMNS_BY_APP[app]?.has(col) && !csvColumnsEnabled();
   const hideByInstance = col === "Instance" && getInstanceCount(app) <= 1;
-  return hideByCol || hideByTautulli || hideByDiagnostics || hideByCsv || hideByInstance;
+  return hideByCol || hideByMode || hideByTautulli || hideByDiagnostics || hideByCsv || hideByInstance;
 }
 
 function getDeferredColumns(app, hiddenColumns, options = {}) {
@@ -10507,13 +10597,14 @@ function updateColumnFilter() {
     const group = groupInput?.getAttribute("data-col-group");
     let show = appMatch && (!query || label.includes(query));
     if (col) {
+      const supportedMatch = columnSupportedForMode(col, activeApp);
       const isTautulli = TAUTULLI_COLUMNS.has(col);
       const tautulliMatch = !isTautulli || tautulliEnabled;
       const hideDiagnostics = col === "Diagnostics" && !playbackSupportsDiagnostics;
       const isCsv = CSV_COLUMNS_BY_APP[activeApp]?.has(col);
       const csvMatch = !isCsv || csvEnabled;
       const hideByInstance = col === "Instance" && getInstanceCount(activeApp) <= 1;
-      show = show && tautulliMatch && csvMatch && !hideByInstance && !hideDiagnostics;
+      show = show && supportedMatch && tautulliMatch && csvMatch && !hideByInstance && !hideDiagnostics;
     } else if (group) {
       if (group === "tautulli" && !tautulliEnabled) {
         show = false;
@@ -10540,6 +10631,11 @@ function setAllColumns(checked) {
   if (!columnsPanel) return;
   columnsPanel.querySelectorAll("input[data-col]").forEach(input => {
     if (!inputMatchesApp(input, activeApp)) return;
+    const col = input.getAttribute("data-col");
+    if (!columnSupportedForMode(col, activeApp)) {
+      input.checked = false;
+      return;
+    }
     input.checked = checked;
   });
   enforceRequiredColumns(activeApp);
@@ -11325,6 +11421,20 @@ function computeHeavyCellValues(row, app, columns) {
     );
   }
 
+  if (colSet.has("LowestCustomFormatScore")) {
+    values.LowestCustomFormatScore = formatOptionalNumeric(
+      row.LowestCustomFormatScore ?? "",
+      getNumericWidths(app, "LowestCustomFormatScore")
+    );
+  }
+
+  if (colSet.has("HighestCustomFormatScore")) {
+    values.HighestCustomFormatScore = formatOptionalNumeric(
+      row.HighestCustomFormatScore ?? "",
+      getNumericWidths(app, "HighestCustomFormatScore")
+    );
+  }
+
   if (colSet.has("QualityCutoffNotMet")) {
     values.QualityCutoffNotMet = formatOptionalBool(row.QualityCutoffNotMet);
   }
@@ -11639,6 +11749,14 @@ function buildRow(row, app, options = {}) {
     row.SeasonCount ?? "",
     getNumericWidths(app, "SeasonCount")
   );
+  const lowestCustomFormatScore = formatNumericCell(
+    row.LowestCustomFormatScore ?? "",
+    getNumericWidths(app, "LowestCustomFormatScore")
+  );
+  const highestCustomFormatScore = formatNumericCell(
+    row.HighestCustomFormatScore ?? "",
+    getNumericWidths(app, "HighestCustomFormatScore")
+  );
   const avgEpisodeSize = formatNumericCell(
     row.AvgEpisodeSizeGB ?? "",
     getNumericWidths(app, "AvgEpisodeSizeGB")
@@ -11685,6 +11803,8 @@ function buildRow(row, app, options = {}) {
     <td class="right" data-col="ContentHours" data-app="sonarr" ${contentHoursAttr}>${contentHours}</td>
     <td class="right" data-col="EpisodesCounted" data-app="sonarr">${episodesCounted}</td>
     <td class="right" data-col="SeasonCount" data-app="sonarr">${seasonCount}</td>
+    <td class="right" data-col="LowestCustomFormatScore" data-app="sonarr">${lowestCustomFormatScore}</td>
+    <td class="right" data-col="HighestCustomFormatScore" data-app="sonarr">${highestCustomFormatScore}</td>
     <td class="right" data-col="AvgEpisodeSizeGB" data-app="sonarr">${avgEpisodeSize}</td>
     <td data-col="TotalSizeGB" data-app="sonarr">${totalSize}</td>
     <td class="right" data-col="GBPerHour" data-app="sonarr">${gbPerHour}</td>
