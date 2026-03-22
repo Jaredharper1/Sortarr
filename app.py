@@ -8101,7 +8101,12 @@ def _plex_enrich_movie_items_with_streams(
         rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
         if not rating_key:
             continue
-        if _plex_stream_language_values(item, 2) and _plex_stream_language_values(item, 3):
+        media_summary = _plex_media_summary_from_item(item)
+        has_stream_languages = bool(_plex_stream_language_values(item, 2)) and bool(
+            _plex_stream_language_values(item, 3)
+        )
+        has_perf_fields = bool(media_summary.get("bitrateMbps")) and bool(media_summary.get("frameRateFps"))
+        if has_stream_languages and has_perf_fields:
             continue
         missing_keys.append(rating_key)
 
@@ -8119,7 +8124,7 @@ def _plex_enrich_movie_items_with_streams(
             session=session,
         )
     except Exception as exc:
-        logger.warning("Plex movie metadata enrichment failed; continuing without stream languages: %s", exc)
+        logger.warning("Plex movie metadata enrichment failed; continuing without full media details: %s", exc)
         return items
 
     enriched: list[dict] = []
