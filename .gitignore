@@ -36,3 +36,11 @@ docs/radarr-openapi.json
 docs/sonarr-openapi.json
 secrets/
 .env
+Sortarr.*_cache.json
+Sortarr.*_refresh.done
+Sortarr.plex_sections_cache.json
+HEADER_FILTER_PLAN.md
+HEADER_FILTER_EXCEL_PLAN.md
+HEADER_FILTER_REMAINING_COLUMNS_PLAN.md
+UNMONOLITH_PLAN.md
+SECURITY_FINDINGS_20260327.md

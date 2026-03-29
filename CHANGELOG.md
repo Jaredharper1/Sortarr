@@ -1,9 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.8.8] - 2026-03-27
+
+### Fixes
+- Stopped deleting on-disk Arr, Plex, Tautulli, and Jellystat caches on routine app-version changes during startup. Sortarr now keeps warm caches across normal upgrades and instead relies on explicit cache payload version mismatches to invalidate stale cache formats.
+- Basic Auth setup now accepts a newly entered password even if the remove-password checkbox is ticked, avoiding the upgrade/setup trap where replacing credentials could be misread as requiring the old password to be cleared first.
+- Added env-driven iframe embedding control via `SORTARR_FRAME_ANCESTORS` while keeping the secure default deny posture. Same-origin embedding now emits `X-Frame-Options: SAMEORIGIN`; multi-origin embedding relies on CSP `frame-ancestors`.
+- Sonarr season expansion layout now supports a `Merged` mode in the season dropdown, combining visible seasons into one sortable episode grid.
+- Sonarr season expansion episode lists now support field-based sorting, including `CF Score`, via both sticky header clicks and dedicated sort field/order controls.
+- Sonarr score extrema columns now default hidden, and the visible labels/tooltips clarify that they represent the lowest and highest episode custom format scores found within the series or season.
+- Reused the existing startup Arr bootstrap load instead of issuing a second duplicate first-tab fetch during frontend init, reducing redundant initial network and render work without changing visible behavior.
+- Delayed only the hidden-tab startup Arr prefetch so first-load audits prioritize the active tab; manual refreshes and later background refresh behavior are unchanged.
+- Deferred non-critical mobile startup UI wiring for filter/panel controls and Radarr poster hover behavior until after first paint settles, reducing mobile main-thread startup work without changing table load behavior.
+- Expanded header-triggered column filters to more unambiguous numeric and boolean fields, still reusing the existing filter-token engine so sorting and active-filter state stay in sync.
+- Added contextual per-column active filter chips inside the header filter popup so existing column-specific filters are visible and removable without leaving the header workflow.
+- Expanded header-triggered column filters to additional real table columns with unambiguous existing parser semantics, including `Instance`, Sonarr `Avg / Ep` and `Title Slug`, `Edition`, `Video HDR`, `Watch Time`, and `TMDB ID`.
+- Added the remaining date-like header funnels with conservative raw date-fragment matching for `Date Added`, `Last Aired`, `Last Search`, and `Last Watched`, keeping the existing parser semantics instead of inventing new date operators.
+- Added a first Excel-style `Values` mode for safe enum/bool header filters, using the existing popup shell and token engine with dataset-driven checklist values for columns like `Status`, `Monitored`, `Quality`, `Resolution`, `Video Codec`, `Audio Codec`, `Has File`, `Available`, and related low-cardinality fields.
+- Expanded the mixed `Values`/`Advanced` header popup to `Studio` and `Release Group`, using case-insensitive distinct values from the active dataset while keeping the existing advanced text matching available.
+- Capped noisy header checklist popups, added an in-popup overflow hint with search guidance, and frequency-sorted `Studio` and `Release Group` values so large distinct-value lists remain usable without disabling mixed mode.
+- Kept `Audio Languages` and `Subtitle Languages` in `Advanced` mode only after auditing the underlying language data, and fixed `Users Watched` so its header condition menu correctly exposes the numeric operators.
+- Upgraded `requests` to `2.33.0` to address the current GitHub dependabot advisory for insecure temporary file reuse in `extract_zipped_paths()`.
+- Hardened local secret-file resolution so only files whose real paths remain under the expected base/secrets roots are eligible for loading.
+- Added a defensive secret scrub in env-file writes so plaintext secret values are converted to file/credential refs, or cleared when an external secret ref already exists, before persisting config.
+- Added a lightweight Plex sections bootstrap cache so `/api/config` can populate `plex_libraries` without loading the full Plex index cache on cold startup, while still validating the snapshot against the current Plex server URL/token and falling back to the full cache when needed.
+
 ## [0.8.7] - 2026-03-19
 
 ### Features
-- Added Sonarr `Lowest Custom Format Score` and `Highest Custom Format Score` row fields, sorting, filtering, CSV export, and season-expansion summaries for score-based analysis.
+- Added Sonarr `Lowest Episode Custom Format Score` and `Highest Episode Custom Format Score` row fields, sorting, filtering, CSV export, and season-expansion summaries for score-based analysis. These extrema are derived from episode-file custom format scores within each series or season, with specials excluded.
 
 ### Fixes
 - Allowed setup-only same-host HTTP/HTTPS scheme drift during CSRF validation when the setup request carries a valid CSRF token, unblocking bootstrap/save flows behind reverse proxies that terminate HTTPS but forward setup POSTs to Sortarr over plain HTTP without usable forwarded scheme headers.

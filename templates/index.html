@@ -80,10 +80,12 @@
             <label class="column-row"
               title="{{ _('Season count excludes specials and only counts seasons with files.') }}"><input
                 type="checkbox" data-col="SeasonCount" /> {{ _('Seasons') }}</label>
-            <label class="column-row" title="{{ _('Lowest episode custom format score across non-special files.') }}"><input
-                type="checkbox" data-col="LowestCustomFormatScore" /> {{ _('Lowest CF Score') }}</label>
-            <label class="column-row" title="{{ _('Highest episode custom format score across non-special files.') }}"><input
-                type="checkbox" data-col="HighestCustomFormatScore" /> {{ _('Highest CF Score') }}</label>
+            <label class="column-row"
+              title="{{ _('Minimum episode custom format score across episodes with files (specials excluded).') }}"><input
+                type="checkbox" data-col="LowestCustomFormatScore" /> {{ _('Lowest Ep CF Score') }}</label>
+            <label class="column-row"
+              title="{{ _('Maximum episode custom format score across episodes with files (specials excluded).') }}"><input
+                type="checkbox" data-col="HighestCustomFormatScore" /> {{ _('Highest Ep CF Score') }}</label>
             <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> {{ _('Avg / Ep (GiB)')
               }}</label>
             <label class="column-row" title="{{ _('Total size includes specials.') }}"><input type="checkbox"
@@ -505,11 +507,11 @@
                   <span class="sort-indicator"></span>
                 </th>
                 <th class="right" data-sort="LowestCustomFormatScore" data-app="sonarr" data-col="LowestCustomFormatScore"
-                  title="{{ _('Lowest episode custom format score across non-special files.') }}">{{ _('Lowest CF Score') }}
+                  title="{{ _('Minimum episode custom format score across episodes with files (specials excluded).') }}">{{ _('Lowest Ep CF Score') }}
                   <span class="sort-indicator"></span>
                 </th>
                 <th class="right" data-sort="HighestCustomFormatScore" data-app="sonarr" data-col="HighestCustomFormatScore"
-                  title="{{ _('Highest episode custom format score across non-special files.') }}">{{ _('Highest CF Score') }}
+                  title="{{ _('Maximum episode custom format score across episodes with files (specials excluded).') }}">{{ _('Highest Ep CF Score') }}
                   <span class="sort-indicator"></span>
                 </th>
                 <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg /
@@ -673,10 +675,35 @@
             <select data-role="series-season-sort" aria-label="{{ _('Season order') }}">
               <option value="asc">{{ _('Ascending') }}</option>
               <option value="desc">{{ _('Descending') }}</option>
+              <option value="merged">{{ _('Merged') }}</option>
             </select>
           </label>
           <label class="series-sort-control" title="{{ _('Episode order') }}">
             <span>{{ _('Episodes') }}</span>
+            <select data-role="series-episode-sort-field" aria-label="{{ _('Episode sort field') }}">
+              <option value="episode">{{ _('Episode') }}</option>
+              <option value="title">{{ _('Title') }}</option>
+              <option value="runtime">{{ _('Runtime') }}</option>
+              <option value="size">{{ _('Size') }}</option>
+              <option value="quality">{{ _('Quality') }}</option>
+              <option value="fps">{{ _('FPS') }}</option>
+              <option value="bppf">{{ _('BPPF') }}</option>
+              <option value="videoCodec">{{ _('Video Codec') }}</option>
+              <option value="audioCodec">{{ _('Audio Codec') }}</option>
+              <option value="audioChannels">{{ _('Audio Channels') }}</option>
+              <option value="audioLanguages">{{ _('Languages') }}</option>
+              <option value="subtitleLanguages">{{ _('Subtitles') }}</option>
+              <option value="airDate">{{ _('Air Date') }}</option>
+              <option value="cutoff">{{ _('Cutoff') }}</option>
+              <option value="monitored">{{ _('Monitored') }}</option>
+              <option value="releaseGroup">{{ _('Release Group') }}</option>
+              <option value="lastSearch">{{ _('Last Search') }}</option>
+              <option value="customFormats">{{ _('Custom Formats') }}</option>
+              <option value="customScore">{{ _('CF Score') }}</option>
+            </select>
+          </label>
+          <label class="series-sort-control" title="{{ _('Episode order') }}">
+            <span>{{ _('Order') }}</span>
             <select data-role="series-episode-sort" aria-label="{{ _('Episode order') }}">
               <option value="asc">{{ _('Ascending') }}</option>
               <option value="desc">{{ _('Descending') }}</option>

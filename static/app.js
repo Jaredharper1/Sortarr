@@ -112,8 +112,29 @@ const tableFullscreenBtn = document.getElementById("tableFullscreenBtn");
 const root = document.documentElement; // <html>
 const IS_IOS = root.classList.contains("is-ios");
 const IS_ANDROID = root.classList.contains("is-android");
+const DEFER_NONCRITICAL_STARTUP_UI = root.classList.contains("is-coarse");
 const tableEl = document.querySelector("table");
 const tableWrapEl = document.getElementById("tableWrap");
+let headerFilterMenuEl = null;
+let headerFilterTitleEl = null;
+let headerFilterModeEl = null;
+let headerFilterValuesTabEl = null;
+let headerFilterAdvancedTabEl = null;
+let headerFilterChecklistEl = null;
+let headerFilterChecklistSearchEl = null;
+let headerFilterChecklistListEl = null;
+let headerFilterChecklistSelectAllEl = null;
+let headerFilterChecklistMetaEl = null;
+let headerFilterAdvancedFieldsEl = null;
+let headerFilterConditionEl = null;
+let headerFilterValueInputEl = null;
+let headerFilterValueSelectEl = null;
+let headerFilterAppliedEl = null;
+let headerFilterApplyBtnEl = null;
+let headerFilterClearBtnEl = null;
+let activeHeaderFilterTrigger = null;
+let activeHeaderFilterConfig = null;
+let activeHeaderFilterMode = "advanced";
 const TABLE_SCROLL_SNAP_IDLE_MS = 140;
 const TABLE_SCROLL_SNAP_EPSILON = 4;
 const TABLE_SCROLL_SNAP_MIN_MS = 140;
@@ -122,6 +143,210 @@ const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
 const I18N = window.I18N || {};
 window.I18N = I18N;
+
+const HEADER_FILTER_CONFIGS = {
+  "all:Title": { fieldId: "title", label: t("Title"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:Path": { fieldId: "path", label: t("Path"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:RootFolder": { fieldId: "rootfolder", label: t("Root Folder"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:Instance": { fieldId: "instance", label: t("Instance"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:Year": { fieldId: "year", label: t("Year"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "all:DateAdded": { fieldId: "dateadded", label: t("Date Added"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:TmdbId": { fieldId: "tmdbid", label: t("TMDB ID"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:Status": { fieldId: "status", label: t("Status"), conditionIds: ["is", "is_not"] },
+  "all:Monitored": { fieldId: "monitored", label: t("Availability"), conditionIds: ["is", "is_not"] },
+  "all:CustomFormats": {
+    fieldId: "customformats",
+    label: t("Custom Formats"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "all:QualityProfile": {
+    fieldId: "qualityprofile",
+    label: t("Quality Profile"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "all:Tags": { fieldId: "tags", label: t("Tags"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:ReleaseGroup": {
+    fieldId: "releasegroup",
+    label: t("Release Group"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "all:Studio": { fieldId: "studio", label: t("Studio"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:Genres": { fieldId: "genres", label: t("Genres"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "sonarr:MissingCount": {
+    fieldId: "missingcount",
+    label: t("Missing"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "radarr:MissingCount": {
+    fieldId: "missing",
+    label: t("Missing"),
+    conditionIds: ["is", "is_not"],
+  },
+  "all:VideoQuality": { fieldId: "videoquality", label: t("Quality"), conditionIds: ["is", "is_not"] },
+  "all:Resolution": { fieldId: "resolution", label: t("Resolution"), conditionIds: ["is", "is_not"] },
+  "all:VideoCodec": { fieldId: "videocodec", label: t("Video Codec"), conditionIds: ["is", "is_not"] },
+  "all:VideoHDR": { fieldId: "videohdr", label: t("Video HDR"), conditionIds: ["is", "is_not"] },
+  "all:AudioCodec": { fieldId: "audiocodec", label: t("Audio Codec"), conditionIds: ["is", "is_not"] },
+  "all:AudioCodecMixed": { fieldId: "audiocodecmixed", label: t("Audio Codec Mixed"), conditionIds: ["is", "is_not"] },
+  "all:AudioChannels": {
+    fieldId: "audiochannels",
+    label: t("Audio Channels"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:AudioLanguages": {
+    fieldId: "audiolanguages",
+    label: t("Audio Languages"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "all:AudioLanguagesMixed": {
+    fieldId: "audiolanguagesmixed",
+    label: t("Audio Languages Mixed"),
+    conditionIds: ["is", "is_not"],
+  },
+  "all:SubtitleLanguages": {
+    fieldId: "subtitlelanguages",
+    label: t("Subtitle Languages"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "all:SubtitleLanguagesMixed": {
+    fieldId: "subtitlelanguagesmixed",
+    label: t("Subtitle Languages Mixed"),
+    conditionIds: ["is", "is_not"],
+  },
+  "all:BitrateMbps": { fieldId: "bitrate", label: t("Bitrate"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "all:FrameRateFps": {
+    fieldId: "fps",
+    label: t("FPS"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:BitsPerPixelPerFrame": {
+    fieldId: "bppf",
+    label: t("BPPF"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:PlayCount": { fieldId: "playcount", label: t("Times Watched"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "all:LastWatched": { fieldId: "lastwatched", label: t("Last Watched"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "all:TotalWatchTimeHours": {
+    fieldId: "watchtime",
+    label: t("Watch Time"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:DaysSinceWatched": {
+    fieldId: "dayssincewatched",
+    label: t("Days Since"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:UsersWatched": {
+    fieldId: "userswatched",
+    label: t("Users Watched"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:ContentHours": {
+    fieldId: "contenthours",
+    label: t("Runtime"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:WatchContentRatio": {
+    fieldId: "watchratio",
+    label: t("Watch / Runtime Ratio"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "all:CutoffUnmetCount": {
+    fieldId: "cutoffunmet",
+    label: t("Cutoff Not Met"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "sonarr:TotalSizeGB": { fieldId: "totalsize", label: t("Total Size"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "sonarr:EpisodesCounted": { fieldId: "episodes", label: t("Episodes"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "sonarr:SeasonCount": { fieldId: "seasons", label: t("Seasons"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "sonarr:RuntimeMins": { fieldId: "runtime", label: t("Runtime"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "sonarr:GBPerHour": { fieldId: "gbperhour", label: t("GB / Hour"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "sonarr:AvgEpisodeSizeGB": {
+    fieldId: "avgepisode",
+    label: t("Avg Episode Size"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "sonarr:SeriesType": { fieldId: "seriestype", label: t("Series Type"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "sonarr:TitleSlug": { fieldId: "titleslug", label: t("Title Slug"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "sonarr:LastAired": { fieldId: "lastaired", label: t("Last Aired"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "sonarr:OriginalLanguage": {
+    fieldId: "originallanguage",
+    label: t("Original Language"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "sonarr:LowestCustomFormatScore": {
+    fieldId: "lowestcustomformatscore",
+    label: t("Lowest Episode Custom Format Score"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "sonarr:HighestCustomFormatScore": {
+    fieldId: "highestcustomformatscore",
+    label: t("Highest Episode Custom Format Score"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "radarr:FileSizeGB": { fieldId: "filesize", label: t("Size"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "radarr:CustomFormatScore": {
+    fieldId: "customformatscore",
+    label: t("Custom Format Score"),
+    conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"],
+  },
+  "radarr:RuntimeMins": { fieldId: "runtime", label: t("Runtime"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "radarr:GBPerHour": { fieldId: "gbperhour", label: t("GB / Hour"), conditionIds: ["eq", "neq", "gt", "gte", "lt", "lte"] },
+  "radarr:HasFile": { fieldId: "hasfile", label: t("Has File"), conditionIds: ["is", "is_not"] },
+  "radarr:IsAvailable": { fieldId: "isavailable", label: t("Is Available"), conditionIds: ["is", "is_not"] },
+  "radarr:InCinemas": { fieldId: "incinemas", label: t("In Cinemas"), conditionIds: ["is", "is_not"] },
+  "radarr:LastSearchTime": {
+    fieldId: "lastsearchtime",
+    label: t("Last Search"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "radarr:QualityCutoffNotMet": {
+    fieldId: "qualitycutoffnotmet",
+    label: t("Quality Cutoff Not Met"),
+    conditionIds: ["is", "is_not"],
+  },
+  "radarr:Edition": { fieldId: "edition", label: t("Edition"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+  "radarr:OriginalLanguage": {
+    fieldId: "originallanguage",
+    label: t("Original Language"),
+    conditionIds: ["contains", "not_contains", "is", "is_not"],
+  },
+  "radarr:Languages": { fieldId: "languages", label: t("Languages"), conditionIds: ["contains", "not_contains", "is", "is_not"] },
+};
+
+const HEADER_FILTER_CHECKLIST_FIELDS = new Set([
+  "instance",
+  "status",
+  "monitored",
+  "qualityprofile",
+  "releasegroup",
+  "studio",
+  "seriestype",
+  "originallanguage",
+  "genres",
+  "videoquality",
+  "resolution",
+  "videocodec",
+  "videohdr",
+  "audiocodec",
+  "audiochannels",
+  "hasfile",
+  "isavailable",
+  "incinemas",
+  "qualitycutoffnotmet",
+  "audiocodecmixed",
+  "audiolanguagesmixed",
+  "subtitlelanguagesmixed",
+  "rootfolder",
+]);
+
+const HEADER_FILTER_CHECKLIST_RENDER_LIMIT = 120;
+
+Object.values(HEADER_FILTER_CONFIGS).forEach(config => {
+  if (HEADER_FILTER_CHECKLIST_FIELDS.has(String(config?.fieldId || "").toLowerCase())) {
+    config.popupMode = "mixed";
+  }
+});
 
 function sourceLabelFromKey(value) {
   const key = String(value || "").trim().toLowerCase();
@@ -1131,7 +1356,74 @@ function initFilterCustomSelects() {
 
 function getFilterFieldMeta(fieldId) {
   if (!fieldId) return null;
-  return FILTER_BUILDER_FIELDS.find(field => field.id === fieldId) || null;
+  const normalized = String(fieldId || "").trim().toLowerCase();
+  const fieldAliases = {
+    languages: "audiolanguages",
+    missingcount: "missingcount",
+    userswatched: "users",
+  };
+  const resolved = fieldAliases[normalized] || normalized;
+  return FILTER_BUILDER_FIELDS.find(field => field.id === resolved) || null;
+}
+
+function getHeaderFilterConfigForHeader(th) {
+  if (!th) return null;
+  const col = String(th.getAttribute("data-col") || "").trim();
+  if (!col) return null;
+  const app = String(th.getAttribute("data-app") || "all").trim() || "all";
+  return HEADER_FILTER_CONFIGS[`${app}:${col}`] || HEADER_FILTER_CONFIGS[`all:${col}`] || null;
+}
+
+function getChipTokens() {
+  return String(chipQuery || "").split(/\s+/).filter(Boolean);
+}
+
+function extractFilterFieldFromToken(token) {
+  const rawToken = String(token || "").trim();
+  if (!rawToken) return "";
+  let raw = rawToken;
+  if (raw.startsWith("-") && raw.length > 1) {
+    raw = raw.slice(1);
+  }
+  const compMatch = raw.match(/^([a-zA-Z]+)(>=|<=|=|>|<)(.+)$/);
+  if (compMatch) {
+    return String(compMatch[1] || "").toLowerCase();
+  }
+  const idx = raw.indexOf(":");
+  if (idx > 0) {
+    return String(raw.slice(0, idx) || "").toLowerCase();
+  }
+  return "";
+}
+
+function getHeaderFilterTokens(fieldId) {
+  const normalized = String(fieldId || "").trim().toLowerCase();
+  if (!normalized) return [];
+  return getChipTokens().filter(token => extractFilterFieldFromToken(token) === normalized);
+}
+
+function removeHeaderFilterTokens(fieldId) {
+  const normalized = String(fieldId || "").trim().toLowerCase();
+  if (!normalized) return false;
+  const tokens = getChipTokens();
+  const next = tokens.filter(token => extractFilterFieldFromToken(token) !== normalized);
+  if (next.length === tokens.length) return false;
+  chipQuery = next.join(" ");
+  return true;
+}
+
+function buildHeaderFilterToken(fieldId, conditionId, rawValue) {
+  const meta = getFilterFieldMeta(fieldId);
+  if (!meta) return "";
+  const conditions = FILTER_CONDITIONS[meta.type] || FILTER_CONDITIONS.string;
+  const condition = conditions.find(item => item.id === conditionId) || conditions[0];
+  const normalized = normalizeBuilderValue(rawValue, meta, condition);
+  if (!normalized) return "";
+  let token = `${meta.id}${condition.op}${normalized}`;
+  if (condition.negate) {
+    token = `-${token}`;
+  }
+  return token;
 }
 
 function resolveFilterValues(meta) {
@@ -1145,6 +1437,235 @@ function resolveFilterValues(meta) {
     }
   }
   return Array.isArray(meta.values) ? meta.values.filter(Boolean) : [];
+}
+
+function splitHeaderFilterAlternatives(rawValue) {
+  return String(rawValue || "")
+    .split("|")
+    .map(part => String(part || "").trim())
+    .filter(Boolean);
+}
+
+function getHeaderFilterPopupMode(config) {
+  return String(config?.popupMode || "advanced").toLowerCase();
+}
+
+function supportsHeaderChecklist(config) {
+  return getHeaderFilterPopupMode(config) === "mixed";
+}
+
+const EXACT_CHECKLIST_TOKEN_FIELDS = new Set([
+  "instance",
+  "status",
+  "qualityprofile",
+  "releasegroup",
+  "studio",
+  "seriestype",
+  "originallanguage",
+  "genres",
+  "videoquality",
+  "resolution",
+  "videocodec",
+  "videohdr",
+  "audiocodec",
+  "audiochannels",
+  "rootfolder",
+]);
+
+function supportsExactChecklistToken(fieldId) {
+  return EXACT_CHECKLIST_TOKEN_FIELDS.has(String(fieldId || "").toLowerCase());
+}
+
+function uniqHeaderOptions(options) {
+  const out = [];
+  const seen = new Map();
+  (Array.isArray(options) ? options : []).forEach(option => {
+    const value = String(option?.value ?? "").trim();
+    const label = String(option?.label ?? value).trim();
+    if (!value || !label) return;
+    const key = value.toLowerCase();
+    const existing = seen.get(key);
+    if (existing) {
+      existing.count = (existing.count || 1) + 1;
+      return;
+    }
+    const item = { value, label, count: 1 };
+    seen.set(key, item);
+    out.push(item);
+  });
+  return out;
+}
+
+function splitDistinctListValues(value) {
+  return String(value ?? "")
+    .split(",")
+    .map(part => String(part || "").trim())
+    .filter(Boolean);
+}
+
+function titleCaseWords(value) {
+  return String(value || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getBooleanChecklistOption(value, trueLabel, falseLabel) {
+  if (
+    value === null ||
+    value === undefined ||
+    (typeof value === "string" && String(value).trim() === "")
+  ) {
+    return null;
+  }
+  return {
+    value: String(Boolean(value)),
+    label: value ? trueLabel : falseLabel,
+  };
+}
+
+function getHeaderChecklistExtractor(fieldId) {
+  const key = String(fieldId || "").toLowerCase();
+  const extractors = {
+    instance: (row) => {
+      const value = String(row?.InstanceId ?? "").trim();
+      const label = String(row?.InstanceName ?? row?.InstanceId ?? "").trim();
+      return value && label ? [{ value, label }] : [];
+    },
+    status: (row) => {
+      const raw = String(row?.Status ?? "").trim();
+      return raw ? [{ value: raw.toLowerCase(), label: titleCaseWords(raw) }] : [];
+    },
+    monitored: (row) => [getBooleanChecklistOption(row?.Monitored, t("Monitored"), t("Unmonitored"))].filter(Boolean),
+    qualityprofile: (row) => {
+      const raw = String(row?.QualityProfile ?? "").trim();
+      return raw ? [{ value: raw, label: raw }] : [];
+    },
+    releasegroup: (row) => {
+      const raw = String(row?.ReleaseGroup ?? "").trim();
+      return raw ? [{ value: raw, label: raw }] : [];
+    },
+    studio: (row) => {
+      const raw = String(row?.Studio ?? "").trim();
+      return raw ? [{ value: raw, label: raw }] : [];
+    },
+    seriestype: (row) => {
+      const raw = String(row?.SeriesType ?? "").trim();
+      return raw ? [{ value: raw, label: raw }] : [];
+    },
+    originallanguage: (row) => splitDistinctListValues(normalizeLanguageLabel(row?.OriginalLanguage ?? "")).map(item => ({ value: item, label: item })),
+    genres: (row) => splitDistinctListValues(row?.Genres ?? "").map(item => ({ value: item, label: item })),
+    videoquality: (row) => splitDistinctListValues(row?.VideoQualityAll ?? row?.VideoQuality ?? "").map(item => ({ value: item, label: item })),
+    resolution: (row) => splitDistinctListValues(row?.ResolutionAll ?? row?.Resolution ?? "").map(item => ({ value: item, label: item })),
+    videocodec: (row) => splitDistinctListValues(row?.VideoCodecAll ?? row?.VideoCodec ?? "").map(item => ({ value: item, label: item })),
+    videohdr: (row) => {
+      const raw = String(row?.VideoHDR ?? "").trim();
+      if (!raw || raw.toLowerCase() === "false") {
+        return [getBooleanChecklistOption(false, t("HDR"), t("No HDR"))];
+      }
+      const lowered = raw.toLowerCase();
+      if (lowered.includes("dolby")) return [{ value: "dolby", label: "Dolby Vision" }];
+      if (lowered.includes("hdr")) return [{ value: "hdr", label: "HDR" }];
+      return [{ value: raw, label: raw }];
+    },
+    audiocodec: (row) => splitDistinctListValues(row?.AudioCodecAll ?? row?.AudioCodec ?? "").map(item => ({ value: item, label: item })),
+    audiochannels: (row) => {
+      return splitDistinctListValues(row?.AudioChannelsAll ?? row?.AudioChannels ?? "")
+        .map(item => {
+          const value = String(item || "").trim();
+          return value ? { value, label: value } : null;
+        })
+        .filter(Boolean);
+    },
+    hasfile: (row) => [getBooleanChecklistOption(row?.HasFile, t("Has File"), t("No File"))].filter(Boolean),
+    isavailable: (row) => [getBooleanChecklistOption(row?.IsAvailable, t("Available"), t("Unavailable"))].filter(Boolean),
+    incinemas: (row) => [getBooleanChecklistOption(row?.InCinemas, t("In Cinemas"), t("Not In Cinemas"))].filter(Boolean),
+    qualitycutoffnotmet: (row) => [getBooleanChecklistOption(row?.QualityCutoffNotMet, t("Cutoff Not Met"), t("Cutoff Met"))].filter(Boolean),
+    audiocodecmixed: (row) => [getBooleanChecklistOption(row?.AudioCodecMixed, t("Mixed"), t("Uniform"))].filter(Boolean),
+    audiolanguagesmixed: (row) => [getBooleanChecklistOption(row?.AudioLanguagesMixed, t("Mixed"), t("Uniform"))].filter(Boolean),
+    subtitlelanguagesmixed: (row) => [getBooleanChecklistOption(row?.SubtitleLanguagesMixed, t("Mixed"), t("Uniform"))].filter(Boolean),
+    rootfolder: (row) => {
+      const raw = String(row?.RootFolder ?? "").trim();
+      return raw ? [{ value: raw, label: raw }] : [];
+    },
+  };
+  return extractors[key] || null;
+}
+
+function sortHeaderChecklistOptions(fieldId, options) {
+  const key = String(fieldId || "").toLowerCase();
+  const sorted = [...(Array.isArray(options) ? options : [])];
+  sorted.sort((left, right) => {
+    const leftCount = Number(left?.count || 0);
+    const rightCount = Number(right?.count || 0);
+    if ((key === "studio" || key === "releasegroup") && leftCount !== rightCount) {
+      return rightCount - leftCount;
+    }
+    if (key === "audiochannels") {
+      return Number(left.value) - Number(right.value);
+    }
+    return String(left.label || "").localeCompare(String(right.label || ""), undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+  return sorted;
+}
+
+function getHeaderChecklistOptions(config) {
+  const fieldId = String(config?.fieldId || "").toLowerCase();
+  const meta = getFilterFieldMeta(fieldId);
+  const rows = Array.isArray(dataByApp[activeApp]) ? dataByApp[activeApp] : [];
+  const extractor = getHeaderChecklistExtractor(fieldId);
+  let options = [];
+  if (extractor) {
+    rows.forEach(row => {
+      options.push(...(extractor(row) || []));
+    });
+  } else {
+    options = resolveFilterValues(meta);
+  }
+  if ((!options || options.length === 0) && meta) {
+    options = resolveFilterValues(meta);
+  }
+  return sortHeaderChecklistOptions(fieldId, uniqHeaderOptions(options));
+}
+
+function normalizeHeaderChecklistTokenValues(fieldId, rawValues) {
+  const meta = getFilterFieldMeta(fieldId);
+  if (!meta) return [];
+  const conditions = FILTER_CONDITIONS[meta.type] || FILTER_CONDITIONS.string;
+  const exactCondition = conditions.find(item => item.id === "is") || conditions[0];
+  return uniqHeaderOptions(
+    (Array.isArray(rawValues) ? rawValues : []).map(value => ({
+      value: normalizeBuilderValue(value, meta, exactCondition),
+      label: value,
+    }))
+  ).map(item => item.value).filter(Boolean);
+}
+
+function parseHeaderChecklistSelection(config) {
+  const fieldId = String(config?.fieldId || "").toLowerCase();
+  const tokens = getHeaderFilterTokens(fieldId);
+  if (tokens.length !== 1) return [];
+  let token = String(tokens[0] || "").trim();
+  if (!token || token.startsWith("-")) return [];
+  const compMatch = token.match(/^([a-zA-Z]+)(>=|<=|=|>|<)(.+)$/);
+  if (compMatch) {
+    if (String(compMatch[1] || "").toLowerCase() !== fieldId) return [];
+    if (compMatch[2] === "=" && supportsExactChecklistToken(fieldId)) {
+      return splitHeaderFilterAlternatives(compMatch[3]);
+    }
+    return [];
+  }
+  const idx = token.indexOf(":");
+  if (idx <= 0) return [];
+  const tokenField = String(token.slice(0, idx) || "").toLowerCase();
+  if (tokenField !== fieldId) return [];
+  const rawValue = token.slice(idx + 1);
+  if (!rawValue) return [];
+  return normalizeHeaderChecklistTokenValues(fieldId, splitHeaderFilterAlternatives(rawValue));
 }
 
 function updateFilterConditionOptions() {
@@ -1272,14 +1793,27 @@ function formatFilterTokenLabel(token) {
 
   const fieldKey = field.toLowerCase();
   const fieldLabel = FILTER_FIELD_LABELS[fieldKey] || field;
+  const altValues = splitHeaderFilterAlternatives(value);
   if (op === ":" || op === "=") {
-    const wildcard = /[*?]/.test(value);
-    let cleanValue = value.replace(/[*?]+/g, " ").trim();
-    if (!cleanValue) cleanValue = value;
-    const condition = wildcard
+    const outerWildcard = altValues.some(item => {
+      const text = String(item || "");
+      return text.includes("?") || text.startsWith("*") || text.endsWith("*");
+    });
+    const cleanParts = altValues.map(item => {
+      const cleanValue = String(item || "").replace(/\*/g, " ").replace(/\?/g, " ").trim();
+      return cleanValue || item;
+    }).filter(Boolean);
+    const cleanValue = cleanParts.join(", ");
+    const condition = outerWildcard
       ? (negated ? "does not contain" : "contains")
       : (negated ? "is not" : "is");
+    if (!outerWildcard && cleanParts.length > 1) {
+      return `${fieldLabel} ${negated ? t("is not any of") : t("is any of")} ${cleanValue}`;
+    }
     return `${fieldLabel} ${condition} ${cleanValue}`;
+  }
+  if (op === "=" && altValues.length > 1) {
+    return `${fieldLabel} ${negated ? t("is not any of") : t("is any of")} ${altValues.join(", ")}`;
   }
   const opLabels = {
     ">": t("greater than"),
@@ -1298,7 +1832,10 @@ function renderActiveFilterChips() {
   activeFiltersEl.textContent = "";
   activeFiltersEl.classList.toggle("hidden", tokens.length === 0);
   scheduleTableWrapLayout();
-  if (!tokens.length) return;
+  if (!tokens.length) {
+    updateHeaderFilterIndicators();
+    return;
+  }
   const frag = document.createDocumentFragment();
   tokens.forEach(token => {
     const label = formatFilterTokenLabel(token);
@@ -1323,6 +1860,7 @@ function renderActiveFilterChips() {
     frag.appendChild(btn);
   });
   activeFiltersEl.appendChild(frag);
+  updateHeaderFilterIndicators();
 }
 
 function normalizeBuilderValue(value, meta, condition) {
@@ -1388,6 +1926,541 @@ function addBuilderFilterToken() {
   }
   const scrollAnchor = captureTableScrollAnchor();
   render(dataByApp[activeApp] || [], { scrollAnchor });
+}
+
+function createHeaderFilterMenu() {
+  if (headerFilterMenuEl || !document.body) return;
+  const menu = document.createElement("div");
+  menu.id = "headerFilterMenu";
+  menu.className = "header-filter-menu hidden";
+  menu.setAttribute("aria-hidden", "true");
+  menu.innerHTML = `
+    <div class="header-filter-menu-title" data-role="header-filter-title"></div>
+    <div class="header-filter-menu-modes hidden" data-role="header-filter-modes">
+      <button type="button" class="header-filter-mode active" data-role="header-filter-values-tab">${escapeHtml(t("Values"))}</button>
+      <button type="button" class="header-filter-mode" data-role="header-filter-advanced-tab">${escapeHtml(t("Advanced"))}</button>
+    </div>
+    <div class="header-filter-menu-applied hidden" data-role="header-filter-applied"></div>
+    <div class="header-filter-menu-checklist hidden" data-role="header-filter-checklist">
+      <label class="header-filter-menu-field">
+        <span>${escapeHtml(t("Search"))}</span>
+        <input type="text" data-role="header-filter-checklist-search" />
+      </label>
+      <div class="header-filter-menu-checklist-meta hidden" data-role="header-filter-checklist-meta"></div>
+      <div class="header-filter-menu-checklist-actions">
+        <button type="button" class="btn small subtle" data-role="header-filter-select-all">${escapeHtml(t("Select all"))}</button>
+      </div>
+      <div class="header-filter-menu-checklist-list" data-role="header-filter-checklist-list"></div>
+    </div>
+    <div class="header-filter-menu-advanced" data-role="header-filter-advanced-fields">
+      <label class="header-filter-menu-field">
+        <span>${escapeHtml(t("Condition"))}</span>
+        <select data-role="header-filter-condition"></select>
+      </label>
+      <label class="header-filter-menu-field">
+        <span>${escapeHtml(t("Value"))}</span>
+        <select class="hidden" data-role="header-filter-value-select"></select>
+        <input type="text" data-role="header-filter-value-input" />
+      </label>
+    </div>
+    <div class="header-filter-menu-actions">
+      <button type="button" class="btn small" data-role="header-filter-apply">${escapeHtml(t("Apply"))}</button>
+      <button type="button" class="btn small subtle" data-role="header-filter-clear">${escapeHtml(t("Clear column"))}</button>
+    </div>
+  `;
+  document.body.appendChild(menu);
+  headerFilterMenuEl = menu;
+  headerFilterTitleEl = menu.querySelector('[data-role="header-filter-title"]');
+  headerFilterModeEl = menu.querySelector('[data-role="header-filter-modes"]');
+  headerFilterValuesTabEl = menu.querySelector('[data-role="header-filter-values-tab"]');
+  headerFilterAdvancedTabEl = menu.querySelector('[data-role="header-filter-advanced-tab"]');
+  headerFilterAppliedEl = menu.querySelector('[data-role="header-filter-applied"]');
+  headerFilterChecklistEl = menu.querySelector('[data-role="header-filter-checklist"]');
+  headerFilterChecklistSearchEl = menu.querySelector('[data-role="header-filter-checklist-search"]');
+  headerFilterChecklistMetaEl = menu.querySelector('[data-role="header-filter-checklist-meta"]');
+  headerFilterChecklistListEl = menu.querySelector('[data-role="header-filter-checklist-list"]');
+  headerFilterChecklistSelectAllEl = menu.querySelector('[data-role="header-filter-select-all"]');
+  headerFilterAdvancedFieldsEl = menu.querySelector('[data-role="header-filter-advanced-fields"]');
+  headerFilterConditionEl = menu.querySelector('[data-role="header-filter-condition"]');
+  headerFilterValueInputEl = menu.querySelector('[data-role="header-filter-value-input"]');
+  headerFilterValueSelectEl = menu.querySelector('[data-role="header-filter-value-select"]');
+  headerFilterApplyBtnEl = menu.querySelector('[data-role="header-filter-apply"]');
+  headerFilterClearBtnEl = menu.querySelector('[data-role="header-filter-clear"]');
+  if (headerFilterConditionEl && !headerFilterConditionEl.id) {
+    headerFilterConditionEl.id = "headerFilterCondition";
+  }
+  if (headerFilterValueSelectEl && !headerFilterValueSelectEl.id) {
+    headerFilterValueSelectEl.id = "headerFilterValueSelect";
+  }
+  initCustomSelect(headerFilterConditionEl);
+  initCustomSelect(headerFilterValueSelectEl);
+
+  headerFilterConditionEl?.addEventListener("change", () => {
+    syncHeaderFilterValueControls();
+  });
+  headerFilterValueSelectEl?.addEventListener("change", () => {
+    syncHeaderFilterValueControls();
+  });
+  headerFilterValuesTabEl?.addEventListener("click", () => {
+    setActiveHeaderFilterMode("values");
+  });
+  headerFilterAdvancedTabEl?.addEventListener("click", () => {
+    setActiveHeaderFilterMode("advanced");
+  });
+  headerFilterChecklistSearchEl?.addEventListener("input", () => {
+    renderHeaderFilterChecklist();
+  });
+  headerFilterChecklistSelectAllEl?.addEventListener("click", () => {
+    if (!activeHeaderFilterConfig) return;
+    const options = getHeaderChecklistOptions(activeHeaderFilterConfig);
+    const filterText = String(headerFilterChecklistSearchEl?.value || "").trim().toLowerCase();
+    const filteredOptions = options.filter(option => !filterText || String(option.label || "").toLowerCase().includes(filterText));
+    const visibleOptions = filteredOptions.slice(0, HEADER_FILTER_CHECKLIST_RENDER_LIMIT);
+    const inputs = headerFilterChecklistListEl?.querySelectorAll('input[type="checkbox"][data-value]');
+    inputs?.forEach(input => {
+      if (visibleOptions.some(option => option.value === input.value)) {
+        input.checked = true;
+      }
+    });
+  });
+  headerFilterValueInputEl?.addEventListener("keydown", e => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applyActiveHeaderFilter();
+    }
+  });
+  headerFilterApplyBtnEl?.addEventListener("click", () => {
+    applyActiveHeaderFilter();
+  });
+  headerFilterClearBtnEl?.addEventListener("click", () => {
+    clearActiveHeaderFilter();
+  });
+  headerFilterAppliedEl?.addEventListener("click", event => {
+    const btn = event.target.closest(".filter-bubble");
+    const token = btn?.getAttribute("data-token") || "";
+    if (!token) return;
+    const tokens = getChipTokens();
+    const next = tokens.filter(item => item !== token);
+    if (next.length === tokens.length) return;
+    chipQuery = next.join(" ");
+    syncChipButtonsToQuery();
+    renderActiveFilterChips();
+    scheduleViewStateSave();
+    renderHeaderFilterAppliedTokens();
+    if (activeHeaderFilterMode === "values") {
+      renderHeaderFilterChecklist();
+    }
+    const scrollAnchor = captureTableScrollAnchor();
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  });
+  headerFilterChecklistListEl?.addEventListener("change", event => {
+    const input = event.target?.closest?.('input[type="checkbox"][data-value]');
+    if (!input || activeHeaderFilterMode !== "values" || !supportsHeaderChecklist(activeHeaderFilterConfig)) {
+      return;
+    }
+    window.setTimeout(() => {
+      if (activeHeaderFilterMode !== "values" || !supportsHeaderChecklist(activeHeaderFilterConfig)) return;
+      applyActiveHeaderChecklistSelection({ closeMenu: false });
+    }, 0);
+  });
+}
+
+function closeHeaderFilterMenu() {
+  if (!headerFilterMenuEl) return;
+  closeAllCustomSelects();
+  headerFilterMenuEl.classList.add("hidden");
+  headerFilterMenuEl.setAttribute("aria-hidden", "true");
+  activeHeaderFilterTrigger?.setAttribute("aria-expanded", "false");
+  activeHeaderFilterTrigger = null;
+  activeHeaderFilterConfig = null;
+}
+
+function positionHeaderFilterMenu(trigger) {
+  if (!headerFilterMenuEl || !trigger) return;
+  const rect = trigger.getBoundingClientRect();
+  const menuWidth = Math.max(220, headerFilterMenuEl.offsetWidth || 220);
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+  const left = Math.min(
+    Math.max(12, rect.right - menuWidth),
+    Math.max(12, viewportWidth - menuWidth - 12),
+  );
+  const top = rect.bottom + 8;
+  headerFilterMenuEl.style.left = `${Math.round(left)}px`;
+  headerFilterMenuEl.style.top = `${Math.round(top)}px`;
+}
+
+function syncHeaderFilterValueControls() {
+  if (!activeHeaderFilterConfig || !headerFilterValueInputEl || !headerFilterValueSelectEl) return;
+  const meta = getFilterFieldMeta(activeHeaderFilterConfig.fieldId);
+  const values = resolveFilterValues(meta);
+  const allowCustom = Boolean(meta?.allowCustom);
+  const usePresetValues = values.length > 0;
+  if (!usePresetValues) {
+    headerFilterValueSelectEl.classList.add("hidden");
+    headerFilterValueInputEl.classList.remove("hidden");
+    headerFilterValueInputEl.disabled = false;
+    headerFilterValueSelectEl.disabled = true;
+    updateCustomSelect(headerFilterValueSelectEl);
+    return;
+  }
+  const selected = headerFilterValueSelectEl.value;
+  headerFilterValueSelectEl.textContent = "";
+  values.forEach(item => {
+    const opt = document.createElement("option");
+    opt.value = item.value;
+    opt.textContent = item.label;
+    headerFilterValueSelectEl.appendChild(opt);
+  });
+  if (allowCustom) {
+    const customOpt = document.createElement("option");
+    customOpt.value = "__custom__";
+    customOpt.textContent = t("Custom");
+    headerFilterValueSelectEl.appendChild(customOpt);
+  }
+  headerFilterValueSelectEl.value = Array.from(headerFilterValueSelectEl.options).some(opt => opt.value === selected)
+    ? selected
+    : (values[0]?.value || (allowCustom ? "__custom__" : ""));
+  const isCustom = allowCustom && headerFilterValueSelectEl.value === "__custom__";
+  headerFilterValueSelectEl.classList.remove("hidden");
+  headerFilterValueSelectEl.disabled = false;
+  headerFilterValueInputEl.classList.toggle("hidden", !isCustom);
+  headerFilterValueInputEl.disabled = !isCustom;
+  if (!isCustom) {
+    headerFilterValueInputEl.value = "";
+  }
+  updateCustomSelect(headerFilterValueSelectEl);
+}
+
+function renderHeaderFilterAppliedTokens() {
+  if (!headerFilterAppliedEl || !activeHeaderFilterConfig) return;
+  if (activeHeaderFilterMode === "values" && supportsHeaderChecklist(activeHeaderFilterConfig)) {
+    headerFilterAppliedEl.textContent = "";
+    headerFilterAppliedEl.classList.add("hidden");
+    return;
+  }
+  const tokens = getHeaderFilterTokens(activeHeaderFilterConfig.fieldId);
+  headerFilterAppliedEl.textContent = "";
+  headerFilterAppliedEl.classList.toggle("hidden", tokens.length === 0);
+  if (!tokens.length) {
+    return;
+  }
+  const title = document.createElement("div");
+  title.className = "header-filter-menu-applied-title";
+  title.textContent = tp("activeForLabel", { label: activeHeaderFilterConfig.label }, "Active for %(label)s");
+  headerFilterAppliedEl.appendChild(title);
+  const list = document.createElement("div");
+  list.className = "header-filter-menu-applied-list";
+  const frag = document.createDocumentFragment();
+  tokens.forEach(token => {
+    const label = formatFilterTokenLabel(token);
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "filter-bubble";
+    btn.setAttribute("data-token", token);
+    btn.setAttribute(
+      "aria-label",
+      tp("ariaRemoveFilter", { label }, "Remove filter %(label)s")
+    );
+    btn.title = token;
+    const text = document.createElement("span");
+    text.className = "filter-bubble-label";
+    text.textContent = label;
+    const remove = document.createElement("span");
+    remove.className = "filter-bubble-remove";
+    remove.textContent = "x";
+    remove.setAttribute("aria-hidden", "true");
+    btn.appendChild(text);
+    btn.appendChild(remove);
+    frag.appendChild(btn);
+  });
+  list.appendChild(frag);
+  headerFilterAppliedEl.appendChild(list);
+}
+
+function populateHeaderFilterConditions(config) {
+  if (!headerFilterConditionEl) return;
+  const meta = getFilterFieldMeta(config?.fieldId);
+  const allConditions = FILTER_CONDITIONS[meta?.type || "string"] || FILTER_CONDITIONS.string;
+  const allowedIds = new Set(Array.isArray(config?.conditionIds) ? config.conditionIds : []);
+  const conditions = allConditions.filter(item => allowedIds.size === 0 || allowedIds.has(item.id));
+  headerFilterConditionEl.textContent = "";
+  conditions.forEach(condition => {
+    const opt = document.createElement("option");
+    opt.value = condition.id;
+    opt.textContent = condition.label;
+    headerFilterConditionEl.appendChild(opt);
+  });
+  headerFilterConditionEl.value = conditions[0]?.id || "";
+  updateCustomSelect(headerFilterConditionEl);
+}
+
+function renderHeaderFilterChecklist() {
+  if (!headerFilterChecklistListEl || !activeHeaderFilterConfig) return;
+  const options = getHeaderChecklistOptions(activeHeaderFilterConfig);
+  const selected = new Set(parseHeaderChecklistSelection(activeHeaderFilterConfig).map(value => String(value || "").toLowerCase()));
+  const filterText = String(headerFilterChecklistSearchEl?.value || "").trim().toLowerCase();
+  const filteredOptions = options.filter(option => {
+    if (!filterText) return true;
+    return String(option.label || "").toLowerCase().includes(filterText);
+  });
+  const visibleOptions = filteredOptions.slice(0, HEADER_FILTER_CHECKLIST_RENDER_LIMIT);
+  headerFilterChecklistListEl.textContent = "";
+  if (headerFilterChecklistMetaEl) {
+    if (filteredOptions.length > HEADER_FILTER_CHECKLIST_RENDER_LIMIT) {
+      headerFilterChecklistMetaEl.classList.remove("hidden");
+      headerFilterChecklistMetaEl.textContent = tp(
+        "headerFilterShowingFirst",
+        { shown: HEADER_FILTER_CHECKLIST_RENDER_LIMIT, total: filteredOptions.length },
+        "Showing first %(shown)s of %(total)s values. Keep typing to narrow results."
+      );
+    } else {
+      headerFilterChecklistMetaEl.classList.add("hidden");
+      headerFilterChecklistMetaEl.textContent = "";
+    }
+  }
+  if (!visibleOptions.length) {
+    const empty = document.createElement("div");
+    empty.className = "header-filter-checklist-empty";
+    empty.textContent = t("No values");
+    headerFilterChecklistListEl.appendChild(empty);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  visibleOptions.forEach(option => {
+    const row = document.createElement("label");
+    row.className = "header-filter-checklist-option";
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.value = option.value;
+    const normalizedOptionValue = normalizeHeaderChecklistTokenValues(
+      String(activeHeaderFilterConfig?.fieldId || "").toLowerCase(),
+      [option.value]
+    )[0] || "";
+    input.checked = selected.has(String(normalizedOptionValue || "").toLowerCase());
+    input.setAttribute("data-value", option.value);
+    const text = document.createElement("span");
+    text.textContent = option.label;
+    row.appendChild(input);
+    row.appendChild(text);
+    frag.appendChild(row);
+  });
+  headerFilterChecklistListEl.appendChild(frag);
+}
+
+function setActiveHeaderFilterMode(mode) {
+  const next = mode === "values" ? "values" : "advanced";
+  activeHeaderFilterMode = next;
+  const valuesActive = next === "values" && supportsHeaderChecklist(activeHeaderFilterConfig);
+  headerFilterModeEl?.classList.toggle("hidden", !supportsHeaderChecklist(activeHeaderFilterConfig));
+  headerFilterValuesTabEl?.classList.toggle("active", valuesActive);
+  headerFilterAdvancedTabEl?.classList.toggle("active", !valuesActive);
+  headerFilterChecklistEl?.classList.toggle("hidden", !valuesActive);
+  headerFilterAdvancedFieldsEl?.classList.toggle("hidden", valuesActive);
+  headerFilterApplyBtnEl?.classList.toggle("hidden", valuesActive);
+  renderHeaderFilterAppliedTokens();
+  if (valuesActive) {
+    renderHeaderFilterChecklist();
+    headerFilterChecklistSearchEl?.focus();
+  } else if (!headerFilterValueInputEl?.classList.contains("hidden")) {
+    headerFilterValueInputEl?.focus();
+  } else {
+    headerFilterValueSelectEl?.focus();
+  }
+}
+
+function buildHeaderChecklistToken(config) {
+  const fieldId = String(config?.fieldId || "").toLowerCase();
+  const options = getHeaderChecklistOptions(config);
+  const selected = Array.from(
+    headerFilterChecklistListEl?.querySelectorAll('input[type="checkbox"][data-value]:checked') || []
+  ).map(input => String(input.value || "").trim()).filter(Boolean);
+  const normalizedSelected = normalizeHeaderChecklistTokenValues(fieldId, selected);
+  if (!normalizedSelected.length) return "";
+  const allValues = new Set(options.map(option => String(option.value || "").trim()).filter(Boolean));
+  if (allValues.size > 0 && normalizedSelected.length === allValues.size) {
+    return "";
+  }
+  if (supportsExactChecklistToken(fieldId)) {
+    return `${fieldId}=${normalizedSelected.join("|")}`;
+  }
+  return `${fieldId}:${normalizedSelected.join("|")}`;
+}
+
+function applyActiveHeaderChecklistSelection(options = {}) {
+  if (!activeHeaderFilterConfig) return false;
+  const closeMenu = options.closeMenu === true;
+  const token = buildHeaderChecklistToken(activeHeaderFilterConfig);
+  const removed = removeHeaderFilterTokens(activeHeaderFilterConfig.fieldId);
+  let changed = removed;
+  if (token) {
+    applyHeaderFilterToken(activeHeaderFilterConfig.fieldId, token);
+    changed = true;
+  }
+  if (!changed) {
+    if (closeMenu) closeHeaderFilterMenu();
+    return false;
+  }
+  syncChipButtonsToQuery();
+  renderActiveFilterChips();
+  renderHeaderFilterAppliedTokens();
+  renderHeaderFilterChecklist();
+  scheduleViewStateSave();
+  const scrollAnchor = captureTableScrollAnchor();
+  render(dataByApp[activeApp] || [], { scrollAnchor });
+  if (closeMenu) {
+    closeHeaderFilterMenu();
+  } else {
+    positionHeaderFilterMenu(activeHeaderFilterTrigger);
+  }
+  return true;
+}
+
+function openHeaderFilterMenu(trigger, config) {
+  if (!trigger || !config) return;
+  createHeaderFilterMenu();
+  activeHeaderFilterTrigger?.setAttribute("aria-expanded", "false");
+  activeHeaderFilterTrigger = trigger;
+  activeHeaderFilterConfig = config;
+  if (headerFilterTitleEl) {
+    headerFilterTitleEl.textContent = config.label || getFilterFieldMeta(config.fieldId)?.label || "";
+  }
+  populateHeaderFilterConditions(config);
+  if (headerFilterValueInputEl) {
+    headerFilterValueInputEl.placeholder = getFilterFieldMeta(config.fieldId)?.placeholder || "";
+    headerFilterValueInputEl.value = "";
+  }
+  if (headerFilterValueSelectEl) {
+    headerFilterValueSelectEl.value = "";
+  }
+  if (headerFilterChecklistSearchEl) {
+    headerFilterChecklistSearchEl.value = "";
+  }
+  syncHeaderFilterValueControls();
+  renderHeaderFilterAppliedTokens();
+  headerFilterMenuEl.classList.remove("hidden");
+  headerFilterMenuEl.setAttribute("aria-hidden", "false");
+  trigger.setAttribute("aria-expanded", "true");
+  positionHeaderFilterMenu(trigger);
+  setActiveHeaderFilterMode(supportsHeaderChecklist(config) ? "values" : "advanced");
+}
+
+function applyHeaderFilterToken(fieldId, token) {
+  if (!fieldId || !token) return false;
+  const tokens = getChipTokens().filter(item => extractFilterFieldFromToken(item) !== String(fieldId).toLowerCase());
+  if (!tokens.includes(token)) {
+    tokens.push(token);
+  }
+  chipQuery = tokens.join(" ");
+  return true;
+}
+
+function applyActiveHeaderFilter() {
+  if (!activeHeaderFilterConfig) return;
+  if (activeHeaderFilterMode === "values" && supportsHeaderChecklist(activeHeaderFilterConfig)) {
+    applyActiveHeaderChecklistSelection({ closeMenu: false });
+    return;
+  }
+  const meta = getFilterFieldMeta(activeHeaderFilterConfig.fieldId);
+  if (!meta) return;
+  const useSelect = headerFilterValueSelectEl && !headerFilterValueSelectEl.classList.contains("hidden");
+  let rawValue = "";
+  if (useSelect) {
+    const selected = headerFilterValueSelectEl.value;
+    rawValue = selected === "__custom__" ? (headerFilterValueInputEl?.value || "") : selected;
+  } else {
+    rawValue = headerFilterValueInputEl?.value || "";
+  }
+  const token = buildHeaderFilterToken(activeHeaderFilterConfig.fieldId, headerFilterConditionEl?.value, rawValue);
+  if (!token) return;
+  applyHeaderFilterToken(activeHeaderFilterConfig.fieldId, token);
+  const changed = true;
+  if (!changed) {
+    closeHeaderFilterMenu();
+    return;
+  }
+  syncChipButtonsToQuery();
+  renderActiveFilterChips();
+  renderHeaderFilterAppliedTokens();
+  scheduleViewStateSave();
+  const scrollAnchor = captureTableScrollAnchor();
+  render(dataByApp[activeApp] || [], { scrollAnchor });
+  closeHeaderFilterMenu();
+}
+
+function clearActiveHeaderFilter() {
+  if (!activeHeaderFilterConfig) return;
+  const changed = removeHeaderFilterTokens(activeHeaderFilterConfig.fieldId);
+  if (changed) {
+    syncChipButtonsToQuery();
+    renderActiveFilterChips();
+    renderHeaderFilterAppliedTokens();
+    scheduleViewStateSave();
+    const scrollAnchor = captureTableScrollAnchor();
+    render(dataByApp[activeApp] || [], { scrollAnchor });
+  } else {
+    updateHeaderFilterIndicators();
+  }
+  closeHeaderFilterMenu();
+}
+
+function updateHeaderFilterIndicators() {
+  if (!tableEl) return;
+  tableEl.querySelectorAll(".header-filter-trigger[data-filter-field]").forEach(btn => {
+    const fieldId = btn.getAttribute("data-filter-field") || "";
+    const active = getHeaderFilterTokens(fieldId).length > 0;
+    btn.classList.toggle("has-active-filter", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function ensureHeaderFilterControls() {
+  if (!tableEl) return;
+  tableEl.querySelectorAll('th[data-sort]').forEach(th => {
+    const config = getHeaderFilterConfigForHeader(th);
+    if (!config) return;
+    th.classList.add("header-filter-enabled");
+    let trigger = th.querySelector(".header-filter-trigger");
+    if (!trigger) {
+      trigger = document.createElement("button");
+      trigger.type = "button";
+      trigger.className = "header-filter-trigger";
+      trigger.setAttribute("aria-haspopup", "dialog");
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.setAttribute("aria-label", tp("filterByLabel", { label: config.label }, "Filter by %(label)s"));
+      trigger.setAttribute("title", tp("filterByLabel", { label: config.label }, "Filter by %(label)s"));
+      trigger.dataset.filterField = config.fieldId;
+      trigger.addEventListener("click", e => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (activeHeaderFilterTrigger === trigger && headerFilterMenuEl && !headerFilterMenuEl.classList.contains("hidden")) {
+          closeHeaderFilterMenu();
+          return;
+        }
+        openHeaderFilterMenu(trigger, config);
+      });
+      th.appendChild(trigger);
+    } else {
+      trigger.dataset.filterField = config.fieldId;
+      trigger.setAttribute("aria-label", tp("filterByLabel", { label: config.label }, "Filter by %(label)s"));
+      trigger.setAttribute("title", tp("filterByLabel", { label: config.label }, "Filter by %(label)s"));
+    }
+  });
+  updateHeaderFilterIndicators();
+}
+
+function isHeaderFilterCustomSelectEvent(event) {
+  const path = typeof event?.composedPath === "function" ? event.composedPath() : [];
+  const target = event?.target || null;
+  return [headerFilterConditionEl, headerFilterValueSelectEl].some(selectEl => {
+    if (!selectEl) return false;
+    const state = CUSTOM_SELECTS.get(selectEl);
+    if (!state) return false;
+    const nodes = [state.wrapper, state.menu, state.trigger];
+    if (target && nodes.some(node => node?.contains?.(target))) {
+      return true;
+    }
+    return path.some(node => nodes.includes(node));
+  });
 }
 
 function getDefaultSortKey(app) {
@@ -2724,6 +3797,13 @@ const FILTER_BUILDER_FIELDS = [
     placeholder: "2024",
   },
   {
+    id: "missingcount",
+    label: t("Missing"),
+    type: "number",
+    app: "sonarr",
+    placeholder: "2",
+  },
+  {
     id: "titleslug",
     label: t("Title Slug"),
     type: "string",
@@ -2895,14 +3975,14 @@ const FILTER_BUILDER_FIELDS = [
   },
   {
     id: "lowestcustomformatscore",
-    label: t("Lowest Custom Format Score"),
+    label: t("Lowest Episode Custom Format Score"),
     type: "number",
     app: "sonarr",
     placeholder: "-100",
   },
   {
     id: "highestcustomformatscore",
-    label: t("Highest Custom Format Score"),
+    label: t("Highest Episode Custom Format Score"),
     type: "number",
     app: "sonarr",
     placeholder: "1000",
@@ -3266,6 +4346,9 @@ const FRONTEND_BOOTSTRAP_CONFIG = (() => {
 // Prevent stale fetches from rendering after you switch tabs
 const loadTokens = { sonarr: 0, radarr: 0 };
 const prefetchTokens = { sonarr: 0, radarr: 0 };
+const bootstrapLoadPromiseByApp = { sonarr: null, radarr: null };
+const STARTUP_PREFETCH_DELAY_MS = 12000;
+const startupPrefetchTimerByApp = { sonarr: null, radarr: null };
 const RENDER_FLAG_STORAGE_KEY = "Sortarr-render-flags";
 const DEFAULT_RENDER_FLAGS = {
   batch: true,
@@ -3316,8 +4399,8 @@ const HEADER_WIDTH_CAP_COLUMNS = new Set([
 const HEADER_CAP_MIN_TEXT = {
   ContentHours: "Runtime (hh:mm) v",
   EpisodesCounted: "Episodes v",
-  LowestCustomFormatScore: "Lowest CF Score v",
-  HighestCustomFormatScore: "Highest CF Score v",
+  LowestCustomFormatScore: "Lowest Ep CF Score v",
+  HighestCustomFormatScore: "Highest Ep CF Score v",
   AvgEpisodeSizeGB: "Avg / Ep (GiB) v",
   TotalSizeGB: "Total (GiB) v",
   RuntimeMins: "Runtime (hh:mm) v",
@@ -3540,6 +4623,7 @@ const sonarrExpansionState = {
   childRowsBySeries: new Map(),
   expansionHeightBySeries: new Map(),
   seasonSortDir: "asc",
+  episodeSortField: "episode",
   episodeSortDir: "asc",
 };
 const SERIES_EXPANSION_MAX_HEIGHT = 280;
@@ -4511,7 +5595,14 @@ requestAnimationFrame(() => {
   const activeData = dataByApp[activeApp] || [];
   if (!activeData.length) {
     clearTable();
-    load(false);
+    const bootstrapApp = activeApp;
+    const promise = load(false);
+    bootstrapLoadPromiseByApp[bootstrapApp] = promise;
+    Promise.resolve(promise).finally(() => {
+      if (bootstrapLoadPromiseByApp[bootstrapApp] === promise) {
+        bootstrapLoadPromiseByApp[bootstrapApp] = null;
+      }
+    });
   } else {
     render(activeData);
   }
@@ -5468,13 +6559,39 @@ function isAppConfigured(app) {
   return app === "sonarr" ? configState.sonarrConfigured : configState.radarrConfigured;
 }
 
-function queuePrefetch(app, refresh) {
+function clearScheduledStartupPrefetch(app) {
+  const timer = startupPrefetchTimerByApp[app];
+  if (!timer) return;
+  clearTimeout(timer);
+  startupPrefetchTimerByApp[app] = null;
+}
+
+function scheduleStartupPrefetch(app) {
+  const pending = pendingPrefetchByApp[app];
+  if (!pending || pending.startup !== true) return false;
+  clearScheduledStartupPrefetch(app);
+  startupPrefetchTimerByApp[app] = window.setTimeout(() => {
+    startupPrefetchTimerByApp[app] = null;
+    const latest = pendingPrefetchByApp[app];
+    if (!latest || latest.startup !== true) return;
+    latest.deferred = false;
+    latest.startup = false;
+    runQueuedPrefetch(app);
+  }, STARTUP_PREFETCH_DELAY_MS);
+  return true;
+}
+
+function queuePrefetch(app, refresh, options = {}) {
   if (!isAppConfigured(app)) return;
   const existing = pendingPrefetchByApp[app];
   pendingPrefetchByApp[app] = {
     refresh: Boolean(refresh) || (existing && existing.refresh),
     deferred: existing ? existing.deferred : false,
+    startup: options.startup === true,
   };
+  if (options.startup !== true) {
+    clearScheduledStartupPrefetch(app);
+  }
 }
 
 function deferQueuedPrefetch(app) {
@@ -5485,6 +6602,7 @@ function deferQueuedPrefetch(app) {
 function runQueuedPrefetch(app) {
   const pending = pendingPrefetchByApp[app];
   if (!pending) return false;
+  clearScheduledStartupPrefetch(app);
   pendingPrefetchByApp[app] = null;
   if (!isAppConfigured(app)) return false;
   prefetch(app, pending.refresh);
@@ -5497,6 +6615,7 @@ function flushDeferredPrefetch(options = {}) {
   ["sonarr", "radarr"].forEach(app => {
     const pending = pendingPrefetchByApp[app];
     if (!pending || !pending.deferred) return;
+    if (pending.startup === true) return;
     pending.deferred = false;
     runQueuedPrefetch(app);
   });
@@ -5509,6 +6628,11 @@ function handlePrefetchGate(app, flags) {
   if (!pending) return;
   if (flags && flags.has("cold_cache")) {
     deferQueuedPrefetch(otherApp);
+    return;
+  }
+  if (pending.startup === true) {
+    pending.deferred = true;
+    scheduleStartupPrefetch(otherApp);
     return;
   }
   runQueuedPrefetch(otherApp);
@@ -5545,18 +6669,32 @@ function scheduleTautulliPoll(app) {
     if (app === activeApp) {
       load(false, { background: true });
     } else {
+      const existing = dataByApp[app] || [];
+      if (!existing.length) {
+        fetchStatus({ silent: true, lite: true });
+        return;
+      }
       prefetch(app, false, { background: true });
     }
   }, TAUTULLI_POLL_INTERVAL_MS);
 }
 
 function setTautulliPending(app, pending) {
+  const wasPending = tautulliPendingByApp[app];
   tautulliPendingByApp[app] = pending;
   if (pending) {
     cancelFollowUpRefresh(app);
     scheduleTautulliPoll(app);
   } else {
     cancelTautulliPoll(app);
+    if (wasPending) {
+      const queued = pendingPrefetchByApp[app];
+      if (queued && queued.deferred) {
+        queued.deferred = false;
+        queued.startup = false;
+        runQueuedPrefetch(app);
+      }
+    }
   }
 }
 
@@ -7125,6 +8263,178 @@ const EPISODE_GRID_COLUMNS = [
   },
 ];
 
+const EPISODE_SORT_FIELD_DEFAULT = "episode";
+const EPISODE_SORT_FIELD_OPTION_KEYS = [
+  "episode",
+  ...EPISODE_GRID_COLUMNS.map(col => col.key),
+];
+
+function getEpisodeSortFieldDefinitions() {
+  const seen = new Set();
+  const defs = [
+    {
+      key: "episode",
+      label: t("episode_grid_column_episode_title", "Episode"),
+    },
+  ];
+  seen.add("episode");
+  EPISODE_GRID_COLUMNS.forEach(col => {
+    if (!col?.key || seen.has(col.key)) return;
+    defs.push({
+      key: col.key,
+      label: col.label || col.key,
+    });
+    seen.add(col.key);
+  });
+  return defs;
+}
+
+function normalizeEpisodeSortField(value) {
+  const raw = String(value || "").trim();
+  return EPISODE_SORT_FIELD_OPTION_KEYS.includes(raw) ? raw : EPISODE_SORT_FIELD_DEFAULT;
+}
+
+function buildEpisodeSortFieldOptionsHtml(selectedField) {
+  const activeField = normalizeEpisodeSortField(selectedField);
+  return getEpisodeSortFieldDefinitions()
+    .map(({ key, label }) => (
+      `<option value="${escapeHtml(key)}"${key === activeField ? " selected" : ""}>${escapeHtml(label)}</option>`
+    ))
+    .join("");
+}
+
+function episodeSortMissingRank(value) {
+  return value == null || value === "" ? 1 : 0;
+}
+
+function normalizeEpisodeSortText(value) {
+  return String(value ?? "").trim().toLocaleLowerCase();
+}
+
+function normalizeEpisodeSortNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeEpisodeSortTimestamp(value) {
+  if (!value) return null;
+  const ts = Date.parse(String(value));
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function normalizeEpisodeSortBool(value) {
+  if (value === true) return 1;
+  if (value === false) return 0;
+  return null;
+}
+
+function compareEpisodeSortValues(left, right, dir) {
+  const leftMissing = episodeSortMissingRank(left);
+  const rightMissing = episodeSortMissingRank(right);
+  if (leftMissing !== rightMissing) {
+    return leftMissing - rightMissing;
+  }
+  if (leftMissing) return 0;
+  if (typeof left === "number" && typeof right === "number") {
+    if (left !== right) return left < right ? -dir : dir;
+    return 0;
+  }
+  const leftText = normalizeEpisodeSortText(left);
+  const rightText = normalizeEpisodeSortText(right);
+  if (leftText !== rightText) {
+    return leftText.localeCompare(rightText, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    }) * dir;
+  }
+  return 0;
+}
+
+function compareEpisodeOrdinal(left, right, dir = 1) {
+  const leftSeason = Number(left?.seasonNumber ?? 0);
+  const rightSeason = Number(right?.seasonNumber ?? 0);
+  if (leftSeason !== rightSeason) return (leftSeason - rightSeason) * dir;
+  const leftEpisode = Number(left?.episodeNumber ?? 0);
+  const rightEpisode = Number(right?.episodeNumber ?? 0);
+  if (leftEpisode !== rightEpisode) return (leftEpisode - rightEpisode) * dir;
+  const leftId = Number(left?.episodeId ?? 0);
+  const rightId = Number(right?.episodeId ?? 0);
+  if (leftId !== rightId) return (leftId - rightId) * dir;
+  return normalizeEpisodeSortText(left?.title).localeCompare(
+    normalizeEpisodeSortText(right?.title),
+    undefined,
+    { numeric: true, sensitivity: "base" }
+  );
+}
+
+function getEpisodeSortValue(episode, field) {
+  switch (normalizeEpisodeSortField(field)) {
+    case "episode":
+      return null;
+    case "title":
+      return episode?.title ?? "";
+    case "runtime":
+      return normalizeEpisodeSortNumber(episode?.runtimeMins);
+    case "size":
+      return normalizeEpisodeSortNumber(episode?.fileSizeGiB);
+    case "quality":
+      return [episode?.quality, episode?.resolution].filter(Boolean).join(" ");
+    case "fps":
+      return normalizeEpisodeSortNumber(episode?.frameRateFps);
+    case "bppf":
+      return normalizeEpisodeSortNumber(episode?.bitsPerPixelPerFrame);
+    case "videoCodec":
+      return episode?.videoCodec ?? "";
+    case "audioCodec":
+      return episode?.audioCodec ?? "";
+    case "audioChannels": {
+      const numericChannels = normalizeEpisodeSortNumber(episode?.audioChannels);
+      return numericChannels ?? (episode?.audioChannels ?? "");
+    }
+    case "audioLanguages":
+      return Array.isArray(episode?.audioLanguages)
+        ? episode.audioLanguages.join(", ")
+        : (episode?.audioLanguages ?? "");
+    case "subtitleLanguages":
+      return Array.isArray(episode?.subtitleLanguages)
+        ? episode.subtitleLanguages.join(", ")
+        : (episode?.subtitleLanguages ?? "");
+    case "airDate":
+      return normalizeEpisodeSortTimestamp(episode?.airDate);
+    case "cutoff":
+      return normalizeEpisodeSortBool(episode?.qualityCutoffNotMet);
+    case "monitored":
+      return normalizeEpisodeSortBool(episode?.monitored);
+    case "releaseGroup":
+      return episode?.releaseGroup ?? "";
+    case "lastSearch":
+      return normalizeEpisodeSortTimestamp(episode?.lastSearchTime);
+    case "customFormats":
+      return Array.isArray(episode?.customFormats)
+        ? episode.customFormats.join(", ")
+        : (episode?.customFormats ?? "");
+    case "customScore":
+      return normalizeEpisodeSortNumber(episode?.customFormatScore);
+    default:
+      return episode?.[field] ?? "";
+  }
+}
+
+function compareEpisodesForExpansion(left, right) {
+  const field = normalizeEpisodeSortField(sonarrExpansionState.episodeSortField);
+  const dir = sonarrExpansionState.episodeSortDir === "desc" ? -1 : 1;
+  if (field === "episode") {
+    return compareEpisodeOrdinal(left, right, dir);
+  }
+  const valueCompare = compareEpisodeSortValues(
+    getEpisodeSortValue(left, field),
+    getEpisodeSortValue(right, field),
+    dir
+  );
+  if (valueCompare !== 0) return valueCompare;
+  return compareEpisodeOrdinal(left, right, 1);
+}
+
 function isEpisodeCellReported(cellHtml) {
   return Boolean(cellHtml && cellHtml !== EPISODE_NOT_REPORTED_HTML);
 }
@@ -7333,17 +8643,28 @@ function buildEpisodeGridHeader(columns) {
   const ordered = Array.isArray(columns) && columns.length
     ? columns
     : EPISODE_GRID_COLUMNS;
+  const activeField = normalizeEpisodeSortField(sonarrExpansionState.episodeSortField);
+  const activeDir = normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir);
+  const buildHeaderButton = (fieldKey, label) => {
+    const isActive = activeField === fieldKey;
+    const classes = ["series-episode-sort-btn"];
+    if (isActive) {
+      classes.push("active-sort", activeDir === "desc" ? "sort-desc" : "sort-asc");
+    }
+    return `<button type="button" class="${classes.join(" ")}" data-sort-key="${escapeHtml(fieldKey)}" aria-label="${escapeHtml(tp("sortByLabel", { label }, "Sort by %(label)s"))}">${escapeHtml(label)}<span class="sort-indicator"></span></button>`;
+  };
   const cells = [
-    `<div class="series-episode-header-cell series-episode-header-title">${t("episode_grid_column_episode_title", "Episode")}</div>`,
+    `<div class="series-episode-header-cell series-episode-header-title series-episode-header-cell--sortable">${buildHeaderButton("episode", t("episode_grid_column_episode_title", "Episode"))}</div>`,
   ];
   ordered.forEach(col => {
     const classes = [
       "series-episode-header-cell",
       "series-episode-col",
       col.className,
+      "series-episode-header-cell--sortable",
     ];
     if (col.extra) classes.push("series-episode-extra");
-    cells.push(`<div class="${classes.join(" ")}">${col.label}</div>`);
+    cells.push(`<div class="${classes.join(" ")}">${buildHeaderButton(col.key, col.label)}</div>`);
   });
   row.innerHTML = cells.join("");
   return row;
@@ -7482,6 +8803,31 @@ function normalizeExpansionSortDir(value) {
   return value === "desc" ? "desc" : "asc";
 }
 
+function normalizeSeasonLayoutMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  return raw === "desc" || raw === "merged" ? raw : "asc";
+}
+
+function isMergedSeasonLayoutMode(value = sonarrExpansionState.seasonSortDir) {
+  return normalizeSeasonLayoutMode(value) === "merged";
+}
+
+function getVisibleSeasonsForExpansion(seasons) {
+  return sortSeasonsForExpansion(seasons).filter(season => {
+    const seasonNumber = Number(season.seasonNumber || 0);
+    if (seasonNumber !== 0) return true;
+    const fileCount = season.episodeFileCount;
+    const episodeCount = season.episodeCount;
+    if (fileCount != null && fileCount !== "") {
+      return Number(fileCount) > 0;
+    }
+    if (episodeCount != null && episodeCount !== "") {
+      return Number(episodeCount) > 0;
+    }
+    return false;
+  });
+}
+
 function loadSonarrExpansionSortPrefs() {
   let prefs = null;
   try {
@@ -7490,20 +8836,22 @@ function loadSonarrExpansionSortPrefs() {
     prefs = null;
   }
   if (!prefs || typeof prefs !== "object") return;
-  sonarrExpansionState.seasonSortDir = normalizeExpansionSortDir(prefs.seasonSortDir);
+  sonarrExpansionState.seasonSortDir = normalizeSeasonLayoutMode(prefs.seasonSortDir);
+  sonarrExpansionState.episodeSortField = normalizeEpisodeSortField(prefs.episodeSortField);
   sonarrExpansionState.episodeSortDir = normalizeExpansionSortDir(prefs.episodeSortDir);
 }
 
 function saveSonarrExpansionSortPrefs() {
   const payload = {
-    seasonSortDir: normalizeExpansionSortDir(sonarrExpansionState.seasonSortDir),
+    seasonSortDir: normalizeSeasonLayoutMode(sonarrExpansionState.seasonSortDir),
+    episodeSortField: normalizeEpisodeSortField(sonarrExpansionState.episodeSortField),
     episodeSortDir: normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir),
   };
   localStorage.setItem(SONARR_EXPANSION_SORT_STORAGE_KEY, JSON.stringify(payload));
 }
 
 function sortSeasonsForExpansion(seasons) {
-  const dir = sonarrExpansionState.seasonSortDir === "desc" ? -1 : 1;
+  const dir = normalizeSeasonLayoutMode(sonarrExpansionState.seasonSortDir) === "desc" ? -1 : 1;
   return [...(Array.isArray(seasons) ? seasons : [])].sort((a, b) => {
     const aSeason = Number(a?.seasonNumber ?? 0);
     const bSeason = Number(b?.seasonNumber ?? 0);
@@ -7515,31 +8863,25 @@ function sortSeasonsForExpansion(seasons) {
 }
 
 function sortEpisodesForExpansion(episodes) {
-  const dir = sonarrExpansionState.episodeSortDir === "desc" ? -1 : 1;
-  return [...(Array.isArray(episodes) ? episodes : [])].sort((a, b) => {
-    const aEpisode = Number(a?.episodeNumber ?? 0);
-    const bEpisode = Number(b?.episodeNumber ?? 0);
-    if (aEpisode !== bEpisode) {
-      return (aEpisode - bEpisode) * dir;
-    }
-    const aId = Number(a?.episodeId ?? 0);
-    const bId = Number(b?.episodeId ?? 0);
-    if (aId !== bId) {
-      return (aId - bId) * dir;
-    }
-    return 0;
-  });
+  return [...(Array.isArray(episodes) ? episodes : [])].sort(compareEpisodesForExpansion);
 }
 
 function syncSeriesExpansionSortControls(expansion) {
   if (!expansion) return;
   const seasonSelect = expansion.querySelector('[data-role="series-season-sort"]');
-  const episodeSelect = expansion.querySelector('[data-role="series-episode-sort"]');
+  const episodeFieldSelect = expansion.querySelector('[data-role="series-episode-sort-field"]');
+  const episodeDirSelect = expansion.querySelector('[data-role="series-episode-sort"]');
   if (seasonSelect) {
-    seasonSelect.value = normalizeExpansionSortDir(sonarrExpansionState.seasonSortDir);
+    seasonSelect.value = normalizeSeasonLayoutMode(sonarrExpansionState.seasonSortDir);
+    updateCustomSelect(seasonSelect);
   }
-  if (episodeSelect) {
-    episodeSelect.value = normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir);
+  if (episodeFieldSelect) {
+    episodeFieldSelect.value = normalizeEpisodeSortField(sonarrExpansionState.episodeSortField);
+    updateCustomSelect(episodeFieldSelect);
+  }
+  if (episodeDirSelect) {
+    episodeDirSelect.value = normalizeExpansionSortDir(sonarrExpansionState.episodeSortDir);
+    updateCustomSelect(episodeDirSelect);
   }
   syncSeriesSortCaretDirections(expansion);
 }
@@ -7552,7 +8894,10 @@ function syncSeriesSortCaretDirections(expansion) {
   sortSelects.forEach(selectEl => {
     const customSelect = selectEl.closest(".custom-select");
     if (!customSelect) return;
-    customSelect.dataset.sortDir = normalizeExpansionSortDir(selectEl.value);
+    const value = selectEl.matches('[data-role="series-season-sort"]')
+      ? normalizeSeasonLayoutMode(selectEl.value)
+      : normalizeExpansionSortDir(selectEl.value);
+    customSelect.dataset.sortDir = value;
   });
 }
 
@@ -7595,10 +8940,17 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
               <select data-role="series-season-sort" aria-label="${escapeHtml(t("Season order", "Season order"))}">
                 <option value="asc">${escapeHtml(t("Ascending", "Ascending"))}</option>
                 <option value="desc">${escapeHtml(t("Descending", "Descending"))}</option>
+                <option value="merged">${escapeHtml(t("Merged", "Merged"))}</option>
+              </select>
+            </label>
+            <label class="series-sort-control" title="${escapeHtml(t("Episode sort field", "Episode sort field"))}">
+              <span>${escapeHtml(t("Episodes", "Episodes"))}</span>
+              <select data-role="series-episode-sort-field" aria-label="${escapeHtml(t("Episode sort field", "Episode sort field"))}">
+                ${buildEpisodeSortFieldOptionsHtml(sonarrExpansionState.episodeSortField)}
               </select>
             </label>
             <label class="series-sort-control" title="${escapeHtml(t("Episode order", "Episode order"))}">
-              <span>${escapeHtml(t("Episodes", "Episodes"))}</span>
+              <span>${escapeHtml(t("Order", "Order"))}</span>
               <select data-role="series-episode-sort" aria-label="${escapeHtml(t("Episode order", "Episode order"))}">
                 <option value="asc">${escapeHtml(t("Ascending", "Ascending"))}</option>
                 <option value="desc">${escapeHtml(t("Descending", "Descending"))}</option>
@@ -7618,15 +8970,18 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
     shell.dataset.instanceId = String(instanceId);
   }
   const seasonSortSelect = shell.querySelector('[data-role="series-season-sort"]');
+  const episodeSortFieldSelect = shell.querySelector('[data-role="series-episode-sort-field"]');
   const episodeSortSelect = shell.querySelector('[data-role="series-episode-sort"]');
-  if (seasonSortSelect && episodeSortSelect && !shouldUseNativeSelects()) {
+  if (seasonSortSelect && episodeSortFieldSelect && episodeSortSelect && !shouldUseNativeSelects()) {
     const sortIdBase = String(seriesKey || seriesId || "series")
       .replace(/[^a-zA-Z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "")
       .toLowerCase();
     if (!seasonSortSelect.id) seasonSortSelect.id = `series-season-sort-${sortIdBase}`;
+    if (!episodeSortFieldSelect.id) episodeSortFieldSelect.id = `series-episode-sort-field-${sortIdBase}`;
     if (!episodeSortSelect.id) episodeSortSelect.id = `series-episode-sort-${sortIdBase}`;
     initCustomSelect(seasonSortSelect);
+    initCustomSelect(episodeSortFieldSelect);
     initCustomSelect(episodeSortSelect);
   }
   const body = shell.querySelector('[data-role="series-expansion-body"]') || shell;
@@ -7640,6 +8995,13 @@ function updateExpandAllSeasonsButton(expansion, seriesKey) {
   if (!expansion) return;
   const btn = expansion.querySelector('[data-role="series-expand-all-seasons"]');
   if (!btn) return;
+
+  if (isMergedSeasonLayoutMode()) {
+    btn.classList.add("hidden");
+    btn.disabled = true;
+    btn.setAttribute("aria-pressed", "false");
+    return;
+  }
 
   const blocks = Array.from(expansion.querySelectorAll(".series-season-block"));
   if (blocks.length <= 1) {
@@ -7817,24 +9179,17 @@ function renderSeasonList(container, seriesKey, seasons) {
   const expansion = container.closest(".series-expansion");
   const seriesId = expansion?.dataset?.seriesId || "";
   const instanceId = expansion?.dataset?.instanceId || "";
-  const visible = sortSeasonsForExpansion(seasons).filter(season => {
-      const seasonNumber = Number(season.seasonNumber || 0);
-      if (seasonNumber !== 0) return true;
-      const fileCount = season.episodeFileCount;
-      const episodeCount = season.episodeCount;
-      if (fileCount != null && fileCount !== "") {
-        return Number(fileCount) > 0;
-      }
-      if (episodeCount != null && episodeCount !== "") {
-        return Number(episodeCount) > 0;
-      }
-      return false;
-    });
+  const visible = getVisibleSeasonsForExpansion(seasons);
   if (!visible.length) {
     const empty = document.createElement("div");
     empty.className = "series-expansion-empty";
     empty.textContent = t("sonarr_no_seasons_available", "No seasons available.");
     container.appendChild(empty);
+    updateExpandAllSeasonsButton(expansion, seriesKey);
+    return;
+  }
+  if (isMergedSeasonLayoutMode()) {
+    void renderMergedSeasonList(container, seriesKey, visible, seriesId, instanceId);
     updateExpandAllSeasonsButton(expansion, seriesKey);
     return;
   }
@@ -7927,13 +9282,75 @@ function renderSeasonList(container, seriesKey, seasons) {
   updateExpandAllSeasonsButton(expansion, seriesKey);
 }
 
-async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container, seriesKey) {
+function buildMergedSeasonMetaText(seasons, episodes) {
+  const parts = [];
+  const safeSeasons = Array.isArray(seasons) ? seasons : [];
+  const safeEpisodes = Array.isArray(episodes) ? episodes : [];
+  const seasonCount = safeSeasons.length;
+  if (seasonCount) {
+    parts.push(tp("mergedSeasonsCount", { count: seasonCount }, "%(count)s seasons"));
+  }
+  if (safeEpisodes.length) {
+    parts.push(tp("mergedEpisodesCount", { count: safeEpisodes.length }, "%(count)s eps"));
+  }
+  const totalSize = safeSeasons.reduce((sum, season) => {
+    const value = Number(season?.sizeOnDiskGiB);
+    return Number.isFinite(value) ? sum + value : sum;
+  }, 0);
+  const avgSize = safeEpisodes.length ? totalSize / safeEpisodes.length : 0;
+  const sizeText = totalSize > 0 ? formatGiBValue(totalSize) : "";
+  if (sizeText) parts.push(sizeText);
+  const avgText = avgSize > 0 ? formatGiBValue(avgSize) : "";
+  if (avgText) parts.push(`${avgText}/ep`);
+  const scoredEpisodes = safeEpisodes
+    .map(episode => normalizeEpisodeSortNumber(episode?.customFormatScore))
+    .filter(value => value != null);
+  if (scoredEpisodes.length) {
+    parts.push(`Low CF ${formatEpisodeScore(Math.min(...scoredEpisodes))}`);
+    parts.push(`High CF ${formatEpisodeScore(Math.max(...scoredEpisodes))}`);
+  }
+  return parts.join(" | ");
+}
+
+function renderMergedSeasonEpisodes(container, seasons, episodes) {
+  if (!container) return;
+  container.textContent = "";
+  const block = document.createElement("div");
+  block.className = "series-season-block series-season-block--merged";
+  block.dataset.seriesKey = container.dataset.seriesKey || "";
+  block.dataset.season = "merged";
+
+  const row = document.createElement("div");
+  row.className = "series-season-row series-season-row--merged";
+
+  const label = document.createElement("div");
+  label.className = "series-season-title";
+  label.textContent = t("All Episodes", "All Episodes");
+
+  const meta = document.createElement("div");
+  meta.className = "series-season-meta";
+  meta.textContent = buildMergedSeasonMetaText(seasons, episodes);
+
+  const metaWrap = document.createElement("div");
+  metaWrap.className = "series-season-main";
+  metaWrap.append(label, meta);
+  row.append(metaWrap);
+
+  const episodesWrap = document.createElement("div");
+  episodesWrap.className = "series-season-episodes is-open";
+  episodesWrap.dataset.seriesKey = container.dataset.seriesKey || "";
+  episodesWrap.dataset.season = "merged";
+  episodesWrap.setAttribute("aria-hidden", "false");
+  renderEpisodeList(episodesWrap, episodes);
+
+  block.append(row, episodesWrap);
+  container.appendChild(block);
+}
+
+async function fetchSeasonEpisodesForExpansion(seriesId, seasonNumber, instanceId, seriesKey) {
   const cacheKey = `${seriesKey}::${seasonNumber}`;
   const cached = sonarrExpansionState.episodesBySeason.get(cacheKey);
-  if (cached) {
-    renderEpisodeList(container, cached);
-    return;
-  }
+  if (cached) return cached;
   const requestKey = `episodes::${cacheKey}`;
   let request = sonarrExpansionState.inflight.get(requestKey);
   if (!request) {
@@ -7944,6 +9361,46 @@ async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container,
     const payload = await request;
     const episodes = Array.isArray(payload?.episodes) ? payload.episodes : [];
     sonarrExpansionState.episodesBySeason.set(cacheKey, episodes);
+    return episodes;
+  } finally {
+    sonarrExpansionState.inflight.delete(requestKey);
+  }
+}
+
+async function renderMergedSeasonList(container, seriesKey, seasons, seriesId, instanceId) {
+  if (!container) return;
+  container.textContent = "";
+  renderSeriesSkeleton(container, 3);
+  if (!seriesId) {
+    renderSeriesError(container, "Series id missing.");
+    return;
+  }
+  const renderToken = `${Date.now()}-${Math.random()}`;
+  container.dataset.renderToken = renderToken;
+  try {
+    const seasonEpisodes = await Promise.all(
+      seasons.map(async season => {
+        const seasonNumber = Number(season?.seasonNumber || 0);
+        const episodes = await fetchSeasonEpisodesForExpansion(seriesId, seasonNumber, instanceId, seriesKey);
+        return Array.isArray(episodes) ? episodes : [];
+      })
+    );
+    if (!container.isConnected || container.dataset.renderToken !== renderToken) return;
+    renderMergedSeasonEpisodes(container, seasons, seasonEpisodes.flat());
+  } catch (err) {
+    const loadEpisodesFail = t("sonarr_failed_load_episodes", "Failed to load episodes.");
+    renderSeriesError(container, err?.message || loadEpisodesFail);
+  } finally {
+    if (container.dataset.renderToken === renderToken) {
+      delete container.dataset.renderToken;
+    }
+  }
+}
+
+async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container, seriesKey) {
+  try {
+    const cacheKey = `${seriesKey}::${seasonNumber}`;
+    const episodes = await fetchSeasonEpisodesForExpansion(seriesId, seasonNumber, instanceId, seriesKey);
     if (!sonarrExpansionState.expandedSeasons.has(cacheKey)) return;
     if (!container || !container.isConnected) return;
     renderEpisodeList(container, episodes);
@@ -7951,8 +9408,6 @@ async function loadSeasonEpisodes(seriesId, seasonNumber, instanceId, container,
     const loadEpisodesFail = t("sonarr_failed_load_episodes", "Failed to load episodes.");
     renderSeriesError(container, err.message || loadEpisodesFail);
     updateSeriesExpansionStatus(expansion.statusEl, loadEpisodesFail, { warn: true });
-  } finally {
-    sonarrExpansionState.inflight.delete(requestKey);
   }
 }
 
@@ -9388,6 +10843,7 @@ const FIELD_MAP = {
   originallanguage: "OriginalLanguage",
   genres: "Genres",
   lastaired: "LastAired",
+  missingcount: "MissingCount",
   missing: "MissingCount",
   cutoff: "CutoffUnmetCount",
   cutoffunmet: "CutoffUnmetCount",
@@ -9420,6 +10876,7 @@ const NUMERIC_FIELDS = new Set([
   "season",
   "lowestcustomformatscore",
   "highestcustomformatscore",
+  "missingcount",
   "missing",
   "cutoff",
   "cutoffunmet",
@@ -9491,6 +10948,30 @@ function parseBoolValue(value) {
   if (["1", "true", "yes", "y"].includes(raw)) return true;
   if (["0", "false", "no", "n"].includes(raw)) return false;
   return null;
+}
+
+function parseBoolAlternatives(value) {
+  return splitHeaderFilterAlternatives(value)
+    .map(parseBoolValue)
+    .filter(item => item !== null);
+}
+
+function getExactChecklistRowValues(row, field) {
+  const normalizedField = String(field || "").toLowerCase();
+  const extractor = getHeaderChecklistExtractor(normalizedField);
+  if (extractor) {
+    return uniqHeaderOptions(
+      (extractor(row) || []).map(item => {
+        const rawValue = item && typeof item === "object" ? item.value : item;
+        const normalizedValue = normalizeHeaderChecklistTokenValues(normalizedField, [rawValue])[0] || "";
+        return normalizedValue ? { value: normalizedValue, label: normalizedValue } : null;
+      }).filter(Boolean)
+    ).map(item => item.value);
+  }
+  const raw = getFieldValue(row, normalizedField);
+  if (raw === null || raw === undefined || raw === "") return [];
+  const normalized = normalizeHeaderChecklistTokenValues(normalizedField, [raw])[0] || "";
+  return normalized ? [normalized] : [];
 }
 
 function hasSubtitleLanguages(row) {
@@ -9591,6 +11072,21 @@ function parseAdvancedQuery(query) {
     if (comp) {
       const field = comp[1].toLowerCase();
       const op = comp[2];
+      if (op === "=" && supportsExactChecklistToken(field)) {
+        const values = normalizeHeaderChecklistTokenValues(field, splitHeaderFilterAlternatives(comp[3])).filter(Boolean);
+        if (!values.length) {
+          warnings.push(`Invalid value for '${field}'.`);
+          addPred(() => false);
+          continue;
+        }
+        addPred(row => {
+          const current = getExactChecklistRowValues(row, field).map(item => String(item || "").toLowerCase());
+          if (!current.length) return false;
+          const hit = values.some(value => current.includes(String(value || "").toLowerCase()));
+          return neg ? !hit : hit;
+        });
+        continue;
+      }
       if (TAUTULLI_FILTER_FIELDS.has(field) && !tautulliEnabled) {
         if (!playbackWarned) { warnings.push(playbackWarning()); playbackWarned = true; }
         addPred(() => false);
@@ -9601,25 +11097,35 @@ function parseAdvancedQuery(query) {
         addPred(() => false);
         continue;
       }
-      const val = Number(comp[3]);
-      if (!Number.isFinite(val)) {
-        warnings.push(`Invalid number for '${field}'.`);
-        addPred(() => false);
-        continue;
-      }
-
       if (op === "=") {
+        const values = splitHeaderFilterAlternatives(comp[3])
+          .map(part => parseNumberValue(part, field))
+          .filter(Number.isFinite);
+        if (!values.length) {
+          warnings.push(`Invalid number for '${field}'.`);
+          addPred(() => false);
+          continue;
+        }
         // Explicit (not via generic predicate inversion): '=' negates to '!='.
         addPred(row => {
           const num = parseNumberValue(getFieldValue(row, field), field);
           if (!Number.isFinite(num)) return false;
-          return neg ? (num !== val) : (num === val);
+          const hit = values.includes(num);
+          return neg ? !hit : hit;
         });
-      } else if (neg) {
+      } else {
+        const val = Number(comp[3]);
+        if (!Number.isFinite(val)) {
+          warnings.push(`Invalid number for '${field}'.`);
+          addPred(() => false);
+          continue;
+        }
+        if (neg) {
         const inv = invertOp(op);
         addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), inv, val));
-      } else {
+        } else {
         addPred(row => compareNumber(parseNumberValue(getFieldValue(row, field), field), op, val));
+        }
       }
       continue;
     }
@@ -9635,23 +11141,23 @@ function parseAdvancedQuery(query) {
       const value = token.slice(idx + 1);
 
       if (field === "nosubs") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
         }
         addPred(row => {
           const hasSubs = hasSubtitleLanguages(row);
-          const wantNoSubs = boolVal ? !hasSubs : hasSubs;
-          return neg ? !wantNoSubs : wantNoSubs;
+          const hit = boolVals.some(boolVal => (boolVal ? !hasSubs : hasSubs));
+          return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "missing" || field === "cutoff" || field === "cutoffunmet") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
@@ -9660,37 +11166,62 @@ function parseAdvancedQuery(query) {
           const raw = getFieldValue(row, field);
           const count = Number(raw);
           const hasCount = Number.isFinite(count) && count > 0;
-          const want = boolVal ? hasCount : !hasCount;
-          return neg ? !want : want;
+          const hit = boolVals.some(boolVal => (boolVal ? hasCount : !hasCount));
+          return neg ? !hit : hit;
         });
         continue;
       }
 
-      if (field === "recentlygrabbed" || field === "scene" || field === "airing") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+      if (field === "recentlygrabbed" || field === "scene" || field === "airing" || field === "incinemas") {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
         }
         addPred(row => {
-          const want = (Boolean(getFieldValue(row, field)) === boolVal);
-          return neg ? !want : want;
+          let current;
+          if (field === "incinemas") {
+            const raw = getFieldValue(row, field);
+            current = Boolean(String(raw || "").trim());
+          } else {
+            current = Boolean(getFieldValue(row, field));
+          }
+          const hit = boolVals.some(boolVal => current === boolVal);
+          return neg ? !hit : hit;
+        });
+        continue;
+      }
+
+      const fieldMeta = getFilterFieldMeta(field);
+      if (fieldMeta?.type === "bool") {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
+          warnings.push(t(`Invalid value for '${field}' (use true/false).`));
+          addPred(() => false);
+          continue;
+        }
+        addPred(row => {
+          const current = parseBoolValue(getFieldValue(row, field));
+          if (current === null) return false;
+          const hit = boolVals.some(boolVal => current === boolVal);
+          return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "audio") {
+        const parts = splitHeaderFilterAlternatives(value);
         addPred(row => {
-          const hit = matchPattern(getFieldValue(row, "AudioCodec"), value);
+          const hit = parts.some(part => matchPattern(getFieldValue(row, "AudioCodec"), part));
           return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "neverwatched") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
@@ -9698,38 +11229,38 @@ function parseAdvancedQuery(query) {
         addPred(row => {
           const matched = row.TautulliMatched === true;
           const never = matched && !row.LastWatched;
-          const want = boolVal ? never : !never;
-          return neg ? !want : want;
+          const hit = boolVals.some(boolVal => (boolVal ? never : !never));
+          return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "mismatch") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
         }
         addPred(row => {
           const mismatched = row.TautulliMatchStatus === "unmatched";
-          const want = boolVal ? mismatched : !mismatched;
-          return neg ? !want : want;
+          const hit = boolVals.some(boolVal => (boolVal ? mismatched : !mismatched));
+          return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "duplicate" || field === "duplicates") {
-        const boolVal = parseBoolValue(value);
-        if (boolVal === null) {
+        const boolVals = parseBoolAlternatives(value);
+        if (!boolVals.length) {
           warnings.push(t(`Invalid value for '${field}' (use true/false).`));
           addPred(() => false);
           continue;
         }
         addPred(row => {
           const duplicated = row.__sortarrDuplicate === true;
-          const want = boolVal ? duplicated : !duplicated;
-          return neg ? !want : want;
+          const hit = boolVals.some(boolVal => (boolVal ? duplicated : !duplicated));
+          return neg ? !hit : hit;
         });
         continue;
       }
@@ -9746,11 +11277,12 @@ function parseAdvancedQuery(query) {
       }
 
       if (field === "instance") {
+        const parts = splitHeaderFilterAlternatives(value);
         addPred(row => {
-          const hit = (
-            matchPattern(row?.InstanceName ?? "", value) ||
-            matchPattern(row?.InstanceId ?? "", value)
-          );
+          const hit = parts.some(part => (
+            matchPattern(row?.InstanceName ?? "", part) ||
+            matchPattern(row?.InstanceId ?? "", part)
+          ));
           return neg ? !hit : hit;
         });
         continue;
@@ -9770,12 +11302,10 @@ function parseAdvancedQuery(query) {
         f === "subtitlelanguages" || f === "sublanguages" ||
         f === "sublang" || f === "subtitles" ||
         f === "languages") {
-        const queryValue = normalizeLanguageQuery(value);
+        const queryValues = splitHeaderFilterAlternatives(value).map(normalizeLanguageQuery).filter(Boolean);
         addPred(row => {
-          const hit = matchPattern(
-            normalizeLanguageLabel(getFieldValue(row, field)),
-            queryValue
-          );
+          const hay = normalizeLanguageLabel(getFieldValue(row, field));
+          const hit = queryValues.some(queryValue => matchPattern(hay, queryValue));
           return neg ? !hit : hit;
         });
         continue;
@@ -9814,30 +11344,58 @@ function parseAdvancedQuery(query) {
         continue;
       }
 
-      if (field === "videoquality" || field === "videocodec" || field === "videohdr") {
+      if (field === "videohdr") {
+        const parts = splitHeaderFilterAlternatives(value);
+        const boolVals = parseBoolAlternatives(value);
+        if (boolVals.length === parts.length && parts.length > 0) {
+          addPred(row => {
+            const raw = String(getFieldValue(row, field) || "").trim().toLowerCase();
+            const hasHdr = Boolean(raw && raw !== "false");
+            const hit = boolVals.some(boolVal => (boolVal ? hasHdr : !hasHdr));
+            return neg ? !hit : hit;
+          });
+          continue;
+        }
         addPred(row => {
           const hay = getFieldValue(row, field);
-          let hit;
-          if (value.includes("*") || value.includes("?")) {
-            hit = matchPattern(hay, value);
-          } else {
-            const needle = normalizeToken(value);
-            hit = normalizeToken(hay).includes(needle);
-          }
+          const hit = parts.some(part => {
+            if (part.includes("*") || part.includes("?")) {
+              return matchPattern(hay, part);
+            }
+            const needle = normalizeToken(part);
+            return normalizeToken(hay).includes(needle);
+          });
+          return neg ? !hit : hit;
+        });
+        continue;
+      }
+
+      if (field === "videoquality" || field === "videocodec") {
+        const parts = splitHeaderFilterAlternatives(value);
+        addPred(row => {
+          const hay = getFieldValue(row, field);
+          const hit = parts.some(part => {
+            if (part.includes("*") || part.includes("?")) {
+              return matchPattern(hay, part);
+            }
+            const needle = normalizeToken(part);
+            return normalizeToken(hay).includes(needle);
+          });
           return neg ? !hit : hit;
         });
         continue;
       }
 
       if (field === "resolution") {
+        const parts = splitHeaderFilterAlternatives(value);
         addPred(row => {
           // If mixed, check all resolutions in ResolutionAll
           if (row.ResolutionMixed && row.ResolutionAll) {
             const parts = row.ResolutionAll.split(",").map(s => s.trim());
-            const hit = parts.some(part => resolutionMatches(part, value));
+            const hit = parts.some(part => splitHeaderFilterAlternatives(value).some(filterValue => resolutionMatches(part, filterValue)));
             return neg ? !hit : hit;
           }
-          const hit = resolutionMatches(getFieldValue(row, field), value);
+          const hit = parts.some(part => resolutionMatches(getFieldValue(row, field), part));
           return neg ? !hit : hit;
         });
         continue;
@@ -9849,8 +11407,9 @@ function parseAdvancedQuery(query) {
         continue;
       }
 
+      const parts = splitHeaderFilterAlternatives(value);
       addPred(row => {
-        const hit = matchPattern(getFieldValue(row, field), value);
+        const hit = parts.some(part => matchPattern(getFieldValue(row, field), part));
         return neg ? !hit : hit;
       });
       continue;
@@ -10150,6 +11709,8 @@ const DEFAULT_HIDDEN_COLUMNS = new Set([
   "QualityCutoffNotMet",
   "Languages",
   "SeasonCount",
+  "LowestCustomFormatScore",
+  "HighestCustomFormatScore",
   "AudioLanguages",
   "SubtitleLanguages",
   "TitleSlug",
@@ -12954,7 +14515,8 @@ async function load(refresh, options = {}) {
 /* sorting clicks */
 document.querySelectorAll("th[data-sort]").forEach(th => {
   th.style.cursor = "pointer";
-  th.addEventListener("click", () => {
+  th.addEventListener("click", (event) => {
+    if (event.target?.closest?.(".header-filter-trigger")) return;
     const key = th.getAttribute("data-sort");
 
     // ignore clicks on columns that are not for the active tab
@@ -12979,6 +14541,31 @@ document.querySelectorAll("th[data-sort]").forEach(th => {
     });
   });
 });
+
+ensureHeaderFilterControls();
+document.addEventListener("click", event => {
+  if (!headerFilterMenuEl || headerFilterMenuEl.classList.contains("hidden")) return;
+  const target = event.target;
+  if (headerFilterMenuEl.contains(target)) return;
+  if (isHeaderFilterCustomSelectEvent(event)) return;
+  if (target?.closest?.(".header-filter-trigger")) return;
+  closeHeaderFilterMenu();
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    closeHeaderFilterMenu();
+  }
+});
+window.addEventListener("resize", () => {
+  if (headerFilterMenuEl && !headerFilterMenuEl.classList.contains("hidden")) {
+    closeHeaderFilterMenu();
+  }
+});
+tableWrapEl?.addEventListener("scroll", () => {
+  if (headerFilterMenuEl && !headerFilterMenuEl.classList.contains("hidden")) {
+    closeHeaderFilterMenu();
+  }
+}, { passive: true });
 
 document.addEventListener("DOMContentLoaded", () => {
   tabSonarr?.addEventListener("click", () => setActiveTab("sonarr"));
@@ -13206,6 +14793,11 @@ async function prefetch(app, refresh, options = {}) {
   const token = ++prefetchTokens[app];
   const background = options.background === true;
   const hydrate = options.hydrate === true;
+  if (background && tautulliPendingByApp[app] && !hydrate && !existing.length) {
+    queuePrefetch(app, refresh);
+    deferQueuedPrefetch(app);
+    return;
+  }
   if (hydrate) {
     liteHydrateInFlightByApp[app] = true;
   }
@@ -13232,8 +14824,12 @@ async function prefetch(app, refresh, options = {}) {
     applyPlexScopeFromHeaders(app, res.headers);
     if (token !== prefetchTokens[app]) return;
     const existing = dataByApp[app] || [];
-    if (background && noticeState.flags.has("tautulli_refresh") && existing.length && !hydrate) {
+    if (background && noticeState.flags.has("tautulli_refresh") && !hydrate) {
       applyNoticeState(app, noticeState.flags, warn, noticeState.notice, { background });
+      if (!existing.length) {
+        queuePrefetch(app, refresh);
+        deferQueuedPrefetch(app);
+      }
       fetchStatus({ silent: true });
       if (res.body && typeof res.body.cancel === "function") {
         res.body.cancel();
@@ -13469,10 +15065,19 @@ if (tbody) {
   tbody.addEventListener("change", e => {
     const seasonSort = e.target.closest('[data-role="series-season-sort"]');
     if (seasonSort) {
-      sonarrExpansionState.seasonSortDir = normalizeExpansionSortDir(seasonSort.value);
+      sonarrExpansionState.seasonSortDir = normalizeSeasonLayoutMode(seasonSort.value);
       syncSeriesSortCaretDirections(seasonSort.closest(".series-expansion"));
       saveSonarrExpansionSortPrefs();
       const expansion = seasonSort.closest(".series-expansion");
+      const seriesKey = expansion?.dataset?.seriesKey || "";
+      rerenderSeriesExpansionByKey(seriesKey);
+      return;
+    }
+    const episodeSortField = e.target.closest('[data-role="series-episode-sort-field"]');
+    if (episodeSortField) {
+      sonarrExpansionState.episodeSortField = normalizeEpisodeSortField(episodeSortField.value);
+      saveSonarrExpansionSortPrefs();
+      const expansion = episodeSortField.closest(".series-expansion");
       const seriesKey = expansion?.dataset?.seriesKey || "";
       rerenderSeriesExpansionByKey(seriesKey);
       return;
@@ -13501,6 +15106,23 @@ if (tbody) {
   tbody.addEventListener("click", e => {
     if (tableWrapEl && !e.target.closest("input, textarea, select, [contenteditable]")) {
       tableWrapEl.focus({ preventScroll: true });
+    }
+    const episodeSortBtn = e.target.closest(".series-episode-sort-btn");
+    if (episodeSortBtn) {
+      e.preventDefault();
+      const sortField = normalizeEpisodeSortField(episodeSortBtn.getAttribute("data-sort-key"));
+      if (sonarrExpansionState.episodeSortField === sortField) {
+        sonarrExpansionState.episodeSortDir =
+          sonarrExpansionState.episodeSortDir === "asc" ? "desc" : "asc";
+      } else {
+        sonarrExpansionState.episodeSortField = sortField;
+        sonarrExpansionState.episodeSortDir = "asc";
+      }
+      saveSonarrExpansionSortPrefs();
+      const expansion = episodeSortBtn.closest(".series-expansion");
+      const seriesKey = expansion?.dataset?.seriesKey || "";
+      rerenderSeriesExpansionByKey(seriesKey);
+      return;
     }
     const clearFiltersBtn = e.target.closest('[data-role="clear-active-filters"]');
     if (clearFiltersBtn) {
@@ -13754,11 +15376,15 @@ function normalizeSonarrRuntimeOrder(scope = document) {
     const bitrateHeader = headerRow.querySelector('th[data-col="BitrateMbps"][data-app="sonarr"]');
     const episodesHeader = headerRow.querySelector('th[data-col="EpisodesCounted"][data-app="sonarr"]');
     const seasonsHeader = headerRow.querySelector('th[data-col="SeasonCount"][data-app="sonarr"]');
+    const lowestCustomFormatScoreHeader = headerRow.querySelector('th[data-col="LowestCustomFormatScore"][data-app="sonarr"]');
+    const highestCustomFormatScoreHeader = headerRow.querySelector('th[data-col="HighestCustomFormatScore"][data-app="sonarr"]');
     const radarrHeader = headerRow.querySelector('th[data-app="radarr"]');
     const order = [
       runtimeHeader,
       episodesHeader,
       seasonsHeader,
+      lowestCustomFormatScoreHeader,
+      highestCustomFormatScoreHeader,
       avgHeader,
       totalHeader,
       gbPerHourHeader,
@@ -15276,6 +16902,12 @@ document.addEventListener("keydown", event => {
 function initDeferredUiBindings() {
   if (deferredUiBindingsReady) return;
   deferredUiBindingsReady = true;
+  updateFilterBuilderOptions();
+  initFilterCustomSelects();
+  syncCsvToggle();
+  updateColumnFilter();
+  updateSortIndicators();
+  if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
   bindChipButtons();
 }
 
@@ -15318,16 +16950,18 @@ function scheduleDeferredUiBindings() {
   loadPlexLibrarySelection();
   loadViewState();
   applyViewState(activeApp);
-  updateFilterBuilderOptions();
-  initFilterCustomSelects();
-  syncCsvToggle();
   updateRuntimeLabels();
-  updateColumnFilter();
   updateColumnVisibility();
   updateChipVisibility();
   updateLastUpdatedDisplay();
-  updateSortIndicators();
-  if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
+  if (!DEFER_NONCRITICAL_STARTUP_UI) {
+    updateFilterBuilderOptions();
+    initFilterCustomSelects();
+    syncCsvToggle();
+    updateColumnFilter();
+    updateSortIndicators();
+    if (IMAGES_ENABLED) setupRadarrPosterTooltipDelegation();
+  }
   scheduleTitlePathWidthLock();
   await loadConfig();
   if (!chipsEnabled) {
@@ -15335,11 +16969,18 @@ function scheduleDeferredUiBindings() {
   }
   const otherApp = activeApp === "sonarr" ? "radarr" : "sonarr";
   if (isAppConfigured(otherApp)) {
-    queuePrefetch(otherApp, false);
+    queuePrefetch(otherApp, false, { startup: true });
 
   }
   if (capabilityEnabled("arr_tables", configState.sonarrConfigured || configState.radarrConfigured)) {
-    await load(false);
+    const bootstrapLoad = bootstrapLoadPromiseByApp[activeApp];
+    if (bootstrapLoad) {
+      await bootstrapLoad;
+    } else if (!(dataByApp[activeApp] || []).length) {
+      await load(false);
+    } else {
+      updateLastUpdatedDisplay();
+    }
   } else if (configState.plexConfigured) {
     setStatus(t("noArrMediaSourcePlexAvailable", "No Sonarr/Radarr media source configured. Plex features are available."));
     setLoading(false);

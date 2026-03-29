@@ -37,7 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.7"
+APP_VERSION = "0.8.8"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -659,6 +659,56 @@ def _csrf_trusted_origins_runtime_state(raw: str | None = None) -> dict:
         "public_host": public_host,
         "cross_host_mismatches": mismatches,
     }
+
+
+def _normalize_frame_ancestor_source(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    lowered = text.lower()
+    if lowered in {"none", "'none'"}:
+        return "'none'"
+    if lowered in {"self", "'self'"}:
+        return "'self'"
+    parts = urlsplit(text)
+    if (
+        parts.scheme in {"http", "https"}
+        and parts.netloc
+        and not parts.path
+        and not parts.query
+        and not parts.fragment
+    ):
+        return f"{parts.scheme}://{parts.netloc}"
+    return ""
+
+
+def _frame_ancestors_sources_from_env() -> list[str]:
+    raw = str(os.environ.get("SORTARR_FRAME_ANCESTORS", "") or "").strip()
+    if not raw:
+        return ["'none'"]
+    sources: list[str] = []
+    for token in re.split(r"[\s,]+", raw):
+        normalized = _normalize_frame_ancestor_source(token)
+        if normalized and normalized not in sources:
+            sources.append(normalized)
+    if not sources:
+        return ["'none'"]
+    if "'none'" in sources and len(sources) > 1:
+        sources = [source for source in sources if source != "'none'"]
+    return sources or ["'none'"]
+
+
+def _frame_ancestors_directive() -> str:
+    return "frame-ancestors " + " ".join(_frame_ancestors_sources_from_env())
+
+
+def _x_frame_options_value() -> str | None:
+    sources = _frame_ancestors_sources_from_env()
+    if sources == ["'none'"]:
+        return "DENY"
+    if sources == ["'self'"]:
+        return "SAMEORIGIN"
+    return None
 
 
 def _normalize_proxy_mode(value: str) -> str:
@@ -1448,7 +1498,7 @@ def _security_self_check_payload() -> dict:
     csp_expected = {
         "default-src 'self'",
         "base-uri 'self'",
-        "frame-ancestors 'none'",
+        _frame_ancestors_directive(),
         "form-action 'self'",
         "style-src 'self'",
         "script-src 'self'",
@@ -1998,16 +2048,18 @@ def _security_response_headers(
         request.is_secure if has_request_context() else False
     )
     headers = {
-        "X-Frame-Options": "DENY",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "strict-origin-when-cross-origin",
         "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
         "Content-Security-Policy": (
-            "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; "
+            f"default-src 'self'; base-uri 'self'; {_frame_ancestors_directive()}; form-action 'self'; "
             "img-src 'self' data: https: blob:; connect-src 'self'; "
             f"style-src 'self'; {script_src}"
         ),
     }
+    x_frame_options = _x_frame_options_value()
+    if x_frame_options:
+        headers["X-Frame-Options"] = x_frame_options
     if is_secure:
         headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return headers
@@ -2061,6 +2113,16 @@ def _quote_env_value(value: str) -> str:
     if value.strip() != value or any(ch in value for ch in [" ", "#", "\t", '"', "'"]):
         escaped = value.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
+    return value
+
+
+def _parse_env_line_value(line: str) -> str:
+    if "=" not in str(line or ""):
+        return ""
+    _key, value = str(line).split("=", 1)
+    value = value.rstrip("\r\n").strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
     return value
 
 
@@ -2233,11 +2295,21 @@ def _read_secret_from_file(secret_path: str) -> str:
         return ""
     if not re.fullmatch(r"[A-Za-z0-9._-]+", secret_name):
         return ""
-    candidate_paths = (
-        os.path.join(secrets_dir, secret_name),
-        os.path.join(base_dir, secret_name),
+    allowed_roots = (
+        secrets_dir,
+        base_dir,
     )
-    path = next((candidate for candidate in candidate_paths if os.path.isfile(candidate)), "")
+    path = ""
+    for root in allowed_roots:
+        candidate = os.path.realpath(os.path.join(root, secret_name))
+        try:
+            if os.path.commonpath([root, candidate]) != root:
+                continue
+        except ValueError:
+            continue
+        if os.path.isfile(candidate):
+            path = candidate
+            break
     if not path:
         return ""
     try:
@@ -2424,10 +2496,11 @@ def _write_secret_file_atomic(path: str, secret: str) -> None:
                 pass
 
 
-def _materialize_file_secret_refs(values: dict) -> None:
+def _materialize_file_secret_refs(values: dict, env_path: str | None = None) -> None:
     if _windows_credstore_enabled():
         return
-    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    target_env_path = str(env_path or ENV_FILE_PATH or "").strip()
+    base_dir = os.path.dirname(target_env_path) or os.getcwd()
     secrets_dir = os.path.join(base_dir, "secrets")
     for key in _SECRET_ENV_KEYS:
         raw = str(values.get(key) or "").strip()
@@ -2450,6 +2523,40 @@ def _materialize_file_secret_refs(values: dict) -> None:
             raise RuntimeError(
                 f"Unable to store {key} in a secret file. Check permissions for the secrets directory."
             )
+
+
+def _prepare_env_write_secret_refs(path: str, values: dict, existing_values: dict[str, str] | None = None) -> None:
+    if not path or not isinstance(values, dict):
+        return
+    current = existing_values if isinstance(existing_values, dict) else {}
+    candidate: dict[str, str] = {}
+    changed = False
+    for key in _SECRET_ENV_KEYS:
+        raw = str(values.get(key) or "").strip()
+        if not raw or raw.lower().startswith("wincred:"):
+            continue
+        file_var = f"{key}_FILE"
+        target_var = f"{key}_CRED_TARGET"
+        merged_file = str(values.get(file_var) or current.get(file_var) or "").strip()
+        merged_target = str(values.get(target_var) or current.get(target_var) or "").strip()
+        if merged_file or merged_target:
+            values[key] = ""
+            changed = True
+            continue
+        candidate[key] = raw
+        changed = True
+    if not changed or not candidate:
+        return
+    if _windows_credstore_enabled():
+        _prepare_windows_secret_refs(candidate)
+    else:
+        _materialize_file_secret_refs(candidate, env_path=path)
+    for key in _SECRET_ENV_KEYS:
+        if key not in candidate:
+            continue
+        values[key] = str(candidate.get(key) or "").strip()
+        values[f"{key}_FILE"] = str(candidate.get(f"{key}_FILE") or "").strip()
+        values[f"{key}_CRED_TARGET"] = str(candidate.get(f"{key}_CRED_TARGET") or "").strip()
 
 
 def _migrate_plaintext_secrets(path: str) -> bool:
@@ -3351,6 +3458,22 @@ def _normalize_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _validated_service_base_url(base_url: str, service_label: str = "service") -> str:
+    normalized = _normalize_url(base_url)
+    if not normalized:
+        raise RuntimeError(f"{service_label} base URL is not set")
+    try:
+        parts = urlsplit(normalized)
+    except Exception as exc:
+        raise RuntimeError(f"{service_label} URL is invalid") from exc
+    scheme = str(parts.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        raise RuntimeError(f"{service_label} URL must use http:// or https://")
+    if not parts.netloc:
+        raise RuntimeError(f"{service_label} URL is invalid")
+    return normalized
+
+
 def _sanitize_url_for_log(url: str) -> str:
     if not url:
         return ""
@@ -3707,6 +3830,7 @@ def _write_env_file(path: str, values: dict):
     ]
 
     existing_standard = {}
+    existing_values: dict[str, str] = {}
     extra_lines = []
     if os.path.exists(path):
         try:
@@ -3723,10 +3847,13 @@ def _write_env_file(path: str, values: dict):
                     key = key.strip()
                     if key in standard_keys:
                         existing_standard[key] = line.rstrip("\n")
+                        existing_values[key] = _parse_env_line_value(line)
                     else:
                         extra_lines.append(line.rstrip("\n"))
         except OSError:
             extra_lines = []
+
+    _prepare_env_write_secret_refs(path, values, existing_values)
 
     lines = []
     for key in standard_keys:
@@ -4049,7 +4176,6 @@ def _apply_startup_migrations() -> None:
                 _env_state["mtime"] = None
 
     _cache.clear_all()
-    _wipe_cache_files()
     if version_changed or bool(state.get("upgrade_setup_required", False)) != bool(upgrade_setup_required):
         _save_startup_state(
             state_path,
@@ -4181,6 +4307,10 @@ def _public_instances(instances: list[dict]) -> list[dict]:
 
 
 def _get_config():
+    if has_request_context():
+        cached = getattr(g, "_sortarr_config_cache", None)
+        if isinstance(cached, dict):
+            return cached
     _ensure_env_loaded()
     _apply_startup_migrations()
     sonarr_instances = _build_instances("SONARR", "Sonarr")
@@ -4381,6 +4511,8 @@ def _get_config():
         "sortarr_csrf_trusted_origins": os.environ.get("SORTARR_CSRF_TRUSTED_ORIGINS", "").strip(),
     }
     _emit_startup_config_lints(cfg)
+    if has_request_context():
+        g._sortarr_config_cache = cfg
     return cfg
 
 
@@ -5296,8 +5428,7 @@ def _arr_get(
     circuit_breaker: bool = True,
     circuit_group: str | None = None,
 ):
-    if not base_url:
-        raise RuntimeError("Base URL is not set")
+    base_url = _validated_service_base_url(base_url, f"{(app_name or 'Arr').title()} service")
     if not api_key:
         raise RuntimeError("API key is not set")
 
@@ -5815,6 +5946,11 @@ def _arr_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str 
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
+    except RuntimeError as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Arr connection test failed (%s).", type(exc).__name__)
+        return "Connection failed. Check URL and API key."
     except Exception as exc:
         logger.warning("Arr connection test failed (%s).", type(exc).__name__)
         return "Connection failed. Check URL and API key."
@@ -5827,6 +5963,11 @@ def _tautulli_test_connection(base_url: str, api_key: str, timeout: int = 10) ->
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
+    except RuntimeError as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Tautulli connection test failed (%s).", type(exc).__name__)
+        return "Connection failed. Check URL and API key."
     except Exception as exc:
         logger.warning("Tautulli connection test failed (%s).", type(exc).__name__)
         return "Connection failed. Check URL and API key."
@@ -5841,6 +5982,11 @@ def _plex_test_connection(base_url: str, token: str, client_id: str, timeout: in
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
+    except RuntimeError as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Plex connection test failed (%s).", type(exc).__name__)
+        return "Connection failed. Check URL and token."
     except Exception as exc:
         logger.warning("Plex connection test failed (%s).", type(exc).__name__)
         return "Connection failed. Check URL and token."
@@ -6159,6 +6305,11 @@ def _default_plex_cache_path() -> str:
     return os.path.join(base_dir, "Sortarr.plex_cache.json")
 
 
+def _default_plex_sections_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.plex_sections_cache.json")
+
+
 def _default_arr_cache_path(app_name: str) -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH)
     suffix = "sonarr" if app_name == "sonarr" else "radarr"
@@ -6172,6 +6323,9 @@ def _load_tautulli_metadata_cache(path: str) -> dict[str, dict]:
         with open(path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
+        return {}
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, TAUTULLI_METADATA_CACHE_VERSION):
         return {}
 
     if isinstance(payload, dict) and "items" in payload:
@@ -6222,6 +6376,9 @@ def _load_jellystat_cache(path: str) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
 
+    if isinstance(payload, dict) and payload.get("version") not in (None, JELLYSTAT_CACHE_VERSION):
+        return None
+
     if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
         index = _restore_index_keys(payload.get("index"))
         ts = _safe_int(payload.get("ts"))
@@ -6268,6 +6425,9 @@ def _load_plex_cache(path: str) -> dict | None:
     except (OSError, json.JSONDecodeError):
         return None
 
+    if isinstance(payload, dict) and payload.get("version") not in (None, PLEX_CACHE_VERSION):
+        return None
+
     if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
         index = _restore_index_keys(payload.get("index"))
         ts = _safe_int(payload.get("ts"))
@@ -6285,6 +6445,85 @@ def _load_plex_cache(path: str) -> dict | None:
     if isinstance(payload, dict):
         return {"index": _restore_index_keys(payload), "ts": 0}
     return None
+
+
+def _plex_sections_cache_path(plex_cache_path: str | None = None) -> str:
+    raw = str(plex_cache_path or "").strip()
+    if not raw:
+        return _default_plex_sections_cache_path()
+    directory = os.path.dirname(raw) or os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(directory, "Sortarr.plex_sections_cache.json")
+
+
+def _plex_token_fingerprint(token: str) -> str:
+    secret = str(token or "").strip()
+    if not secret:
+        return ""
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _load_plex_sections_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    sections = payload.get("sections")
+    if not isinstance(sections, list):
+        return None
+    return {
+        "ts": _safe_int(payload.get("ts")),
+        "server_url": _normalize_url(payload.get("server_url") or ""),
+        "machine_id": str(payload.get("machine_id") or "").strip(),
+        "token_fingerprint": str(payload.get("token_fingerprint") or "").strip(),
+        "sections": sections,
+    }
+
+
+def _save_plex_sections_cache(
+    path: str,
+    *,
+    sections: list[dict],
+    server_url: str,
+    machine_id: str = "",
+    token: str = "",
+    ts: float | int | None = None,
+) -> None:
+    if not path:
+        return
+    payload = {
+        "ts": _safe_int(time.time() if ts is None else ts),
+        "server_url": _normalize_url(server_url or ""),
+        "machine_id": str(machine_id or "").strip(),
+        "token_fingerprint": _plex_token_fingerprint(token),
+        "sections": sections if isinstance(sections, list) else [],
+    }
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.warning("Failed to write Plex sections cache (path redacted).")
+
+
+def _plex_sections_cache_matches(cache_payload: dict | None, cfg: dict) -> bool:
+    if not isinstance(cache_payload, dict):
+        return False
+    cached_url = _normalize_url(cache_payload.get("server_url") or "")
+    current_url = _normalize_url(cfg.get("plex_url") or "")
+    if not cached_url or not current_url or cached_url != current_url:
+        return False
+    cached_token_fp = str(cache_payload.get("token_fingerprint") or "").strip()
+    current_token_fp = _plex_token_fingerprint(cfg.get("plex_token") or "")
+    if cached_token_fp and current_token_fp and cached_token_fp != current_token_fp:
+        return False
+    return True
 
 
 def _save_plex_cache(path: str, index: dict, ts: float | int) -> None:
@@ -6312,6 +6551,9 @@ def _load_arr_cache(path: str) -> dict[str, dict]:
         with open(path, "r", encoding="utf-8") as handle:
             payload = json.load(handle)
     except (OSError, json.JSONDecodeError):
+        return {}
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, ARR_CACHE_VERSION):
         return {}
 
     if isinstance(payload, dict) and "instances" in payload:
@@ -6442,8 +6684,7 @@ def _tautulli_get(
     timeout: int | float | None = None,
     session: requests.Session | None = None,
 ):
-    if not base_url:
-        raise RuntimeError("Tautulli base URL is not set")
+    base_url = _validated_service_base_url(base_url, "Tautulli")
     if not api_key:
         raise RuntimeError("Tautulli API key is not set")
 
@@ -6474,8 +6715,7 @@ def _jellystat_request(
     session: requests.Session | None = None,
     method: str = "GET",
 ):
-    if not base_url:
-        raise RuntimeError("Jellystat base URL is not set")
+    base_url = _validated_service_base_url(base_url, "Jellystat")
     if not api_key:
         raise RuntimeError("Jellystat API key is not set")
 
@@ -6509,8 +6749,7 @@ def _plex_request(
     method: str = "GET",
     headers: dict | None = None,
 ):
-    if not base_url:
-        raise RuntimeError("Plex base URL is not set")
+    base_url = _validated_service_base_url(base_url, "Plex")
     if not token:
         raise RuntimeError("Plex token is not set")
     if not client_id:
@@ -6546,8 +6785,7 @@ def _plex_request_stream(
     session: requests.Session | None = None,
     headers: dict | None = None,
 ):
-    if not base_url:
-        raise RuntimeError("Plex base URL is not set")
+    base_url = _validated_service_base_url(base_url, "Plex")
     if not token:
         raise RuntimeError("Plex token is not set")
     if not client_id:
@@ -6621,6 +6859,8 @@ def _jellystat_test_connection(base_url: str, api_key: str, timeout: int = 10) -
         status = exc.response.status_code if exc.response is not None else "error"
         return f"Connection failed (HTTP {status})."
     except (RuntimeError, requests.RequestException, ValueError) as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
         logger.warning("Jellystat connection test failed (%s).", type(exc).__name__)
         return _sanitize_connection_test_failure(_safe_exception_message(exc), "API key")
 
@@ -8393,6 +8633,7 @@ def _get_plex_index(
         return cached_data
 
     cache_path = cfg.get("plex_cache_path") or ""
+    sections_cache_path = _plex_sections_cache_path(cache_path)
     disk_cache = None
     if not force:
         disk_cache = _load_plex_cache(cache_path)
@@ -8499,6 +8740,14 @@ def _get_plex_index(
                 )
                 movie_items.extend(items)
 
+    _save_plex_sections_cache(
+        sections_cache_path,
+        sections=section_meta,
+        server_url=base_url,
+        machine_id=identity_id,
+        token=token,
+    )
+
     shows_index = _plex_build_index(show_episode_items or show_items, "show", meta_items=show_items)
     movies_index = _plex_build_index(movie_items, "movie")
 
@@ -8592,7 +8841,57 @@ def _plex_libraries_from_sections(sections: list[dict]) -> dict[str, list[dict]]
 
 def _get_plex_library_scope(cfg: dict) -> dict[str, dict[str, list]]:
     index = _get_plex_index_cached()
+    sections_cache_path = _plex_sections_cache_path(cfg.get("plex_cache_path") or "")
     if not index:
+        sections_cache = _load_plex_sections_cache(sections_cache_path)
+        if _plex_sections_cache_matches(sections_cache, cfg):
+            cached_sections = sections_cache.get("sections")
+            if isinstance(cached_sections, list):
+                return {"available": _plex_libraries_from_sections(cached_sections)}
+        base_url = cfg.get("plex_url") or ""
+        token = cfg.get("plex_token") or ""
+        if base_url and token:
+            client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
+            request_timeout = 15
+            section_filters = _parse_id_list(cfg.get("plex_section_filters") or "")
+            identity_id = ""
+            try:
+                with requests.Session() as session:
+                    try:
+                        identity_payload = _plex_request(
+                            base_url,
+                            token,
+                            client_id,
+                            "/identity",
+                            timeout=10,
+                            session=session,
+                        )
+                        identity_container = (
+                            identity_payload.get("MediaContainer") if isinstance(identity_payload, dict) else None
+                        )
+                        if isinstance(identity_container, dict):
+                            identity_id = str(identity_container.get("machineIdentifier") or "").strip()
+                    except Exception:
+                        identity_id = ""
+                    sections = _plex_fetch_sections(
+                        base_url,
+                        token,
+                        client_id,
+                        timeout=request_timeout,
+                        session=session,
+                    )
+                section_meta = _plex_summarize_sections(sections, section_filters)
+                if section_meta:
+                    _save_plex_sections_cache(
+                        sections_cache_path,
+                        sections=section_meta,
+                        server_url=base_url,
+                        machine_id=identity_id,
+                        token=token,
+                    )
+                    return {"available": _plex_libraries_from_sections(section_meta)}
+            except Exception:
+                logger.warning("Plex sections bootstrap fetch failed; falling back to cached Plex scope.")
         disk_cache = _load_plex_cache(cfg.get("plex_cache_path") or "")
         if isinstance(disk_cache, dict):
             disk_index = disk_cache.get("index")
@@ -13660,10 +13959,10 @@ def setup():
             clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
             if not basic_auth_user:
                 basic_auth_pass = ""  # nosec
-            elif clear_basic_auth_pass:
-                basic_auth_pass = ""  # nosec
             elif basic_auth_pass_raw:
                 basic_auth_pass = basic_auth_pass_raw
+            elif clear_basic_auth_pass:
+                basic_auth_pass = ""  # nosec
             else:
                 basic_auth_pass = cfg["basic_auth_pass"]
             if not basic_auth_user:
@@ -15304,6 +15603,7 @@ def _pick_cover_filename(item_json: dict, cover_type: str) -> str | None:
 def _stream_arr_mediacover(
     base_url: str, api_key: str, item_id: int, filename: str, timeout_seconds: int
 ):
+    base_url = _validated_service_base_url(base_url, "Arr media cover")
     url = f"{base_url}/api/v3/mediacover/{item_id}/{filename}"
     headers = {"X-Api-Key": api_key}
     try:

@@ -8,14 +8,17 @@
 
 ---
 
-## 0.8.7 Release Notes
+## 0.8.8 Release Notes
 
-`0.8.7` finishes the remaining open issue work for the current release.
+`0.8.8` focuses on finishing current regression fixes, polishing Sonarr drilldown workflows, and tightening security hardening without changing Sortarr’s read-only behavior.
 
-- Adds Sonarr `Lowest Custom Format Score` and `Highest Custom Format Score` columns, sorting, filtering, CSV export, and season summary rollups for score-based analysis.
-- Fixes the remaining setup/save CSRF bootstrap failure for same-host reverse-proxy deployments that terminate HTTPS but forward setup POSTs to Sortarr over HTTP without usable forwarded scheme headers.
-- Fixes Plex data-route enrichment so existing Plex rows fill stream and metadata details more consistently instead of partially missing fields.
-- Includes the current issue fixes in one release so the shipped behavior is aligned for 0.8.7.
+- Keeps warm Arr, Plex, Tautulli, and Jellystat caches across routine upgrades instead of forcing a full rebuild on every app-version change.
+- Fixes the Windows-style upgrade/setup trap where replacing Basic Auth credentials could fail if the remove-password checkbox was still ticked.
+- Adds configurable iframe embedding via `SORTARR_FRAME_ANCESTORS` while preserving the secure default deny posture.
+- Improves Sonarr drilldown with merged season view, sortable episode grids, and clearer episode-extrema custom-format score labels.
+- Adds header-triggered column filters across the grid, including Excel-style `Values` mode for safe low-cardinality fields and adaptive capped checklists for noisier fields like `Studio` and `Release Group`.
+- Improves local security posture by upgrading `requests` to `2.33.0`, tightening secret-file path validation, and preferring file/credential refs over plaintext secret persistence during env writes.
+- Speeds up `/api/config` on cold startup by reusing request-scoped config state and loading Plex library scope from a lightweight validated sections cache instead of the full Plex index when possible.
 
 # Important 0.8.3 Security Upgrade Notice
 
@@ -130,6 +133,7 @@ If you want the least confusing setup, use only this supported surface:
 - Authentication boundary `Basic`: `SORTARR_AUTH_METHOD=basic` plus `BASIC_AUTH_USER` + (`BASIC_AUTH_PASS_FILE` or `BASIC_AUTH_PASS_CRED_TARGET`)
 - Authentication boundary `External`: `SORTARR_AUTH_METHOD=external` plus `SORTARR_UPSTREAM_AUTH_HEADER` and an explicit `SORTARR_WAITRESS_TRUSTED_PROXY`
 - Optional CSRF escape hatch: `SORTARR_CSRF_TRUSTED_ORIGINS` (exact origins only)
+- Optional dashboard embedding override: `SORTARR_FRAME_ANCESTORS` (`none` by default; set `self` or explicit origins to allow iframes intentionally)
 
 Copy and adapt: `Sortarr.minimal.env.example`
 
@@ -297,6 +301,7 @@ Setup includes:
   - Direct HTTP installs in `Proxy mode = direct` are treated as healthy when cookies are intentionally non-`Secure` on plain HTTP.
   - Setup, CSRF diagnostics, and the security self-check now warn explicitly if plain HTTP is detected but Sortarr would still issue `Secure` cookies, because the browser would drop them on the next POST.
   - The default CSP now keeps `connect-src` same-origin only, so browser API calls remain limited to Sortarr itself unless you intentionally broaden policy in code later.
+  - Sortarr denies iframe embedding by default with `frame-ancestors 'none'`. To allow dashboards such as Organizr, set `SORTARR_FRAME_ANCESTORS=self` for same-origin embedding or provide a space/comma-separated list of explicit allowed origins.
 
 While Setup is security-locked, the remediation path is intentionally narrow: finish the required Setup save first, then run diagnostics if you still need them.
 

@@ -589,9 +589,9 @@
         </label>
         <label class="setup-checkbox">
           <input type="checkbox" name="clear_basic_auth_pass" value="1" {% if values.clear_basic_auth_pass %}checked{% endif %} />
-          <span>{{ _('Clear existing password') }}</span>
+          <span>{{ _('Remove saved password') }}</span>
         </label>
-        <div class="setup-hint">{{ _('Leave blank to keep current password when a password is already configured.') }}</div>
+        <div class="setup-hint">{{ _('Leave blank and keep this unchecked to keep the current password. Enter a new password to replace it. Check this only if you intentionally want to remove the saved password.') }}</div>
         <div class="setup-hint">
           {% trans trimmed %}Credentials are stored via the configured secret backend. Protect your config directory and credential store.{% endtrans %}
         </div>
