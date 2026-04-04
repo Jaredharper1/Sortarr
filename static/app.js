@@ -352,6 +352,7 @@ function sourceLabelFromKey(value) {
   const key = String(value || "").trim().toLowerCase();
   if (key === "arr") return t("sourceArr", "Sonarr/Radarr");
   if (key === "plex") return t("sourcePlex", "Plex");
+  if (key === "jellyfin") return t("sourceJellyfin", "Jellyfin");
   if (key === "tautulli") return t("sourceTautulli", "Tautulli");
   if (key === "jellystat") return t("sourceJellystat", "Jellystat");
   if (key === "auto") return t("sourceAuto", "Auto");
@@ -547,8 +548,42 @@ function updateMismatchCenterButtonVisibility() {
   const available = Array.isArray(configState.historySourcesAvailable)
     ? configState.historySourcesAvailable
     : [];
-  const supported = available.filter(provider => provider === "tautulli" || provider === "plex" || provider === "jellystat");
+  const supported = available.filter(
+    provider => provider === "tautulli" || provider === "plex" || provider === "jellystat" || provider === "jellyfin"
+  );
   mismatchCenterBtn.disabled = supported.length < 2;
+}
+
+function getInsightsProvider() {
+  const explicit = String(configState.insightsProvider || "").trim().toLowerCase();
+  if (explicit === "plex" || explicit === "jellyfin") return explicit;
+  const playback = String(playbackProvider || configState.playbackProvider || "").trim().toLowerCase();
+  if (playback === "plex" || playback === "jellyfin") return playback;
+  if (configState.plexConfigured) return "plex";
+  if (configState.jellyfinConfigured) return "jellyfin";
+  return "";
+}
+
+function getInsightsProviderLabel(provider = getInsightsProvider()) {
+  return sourceLabelFromKey(provider) || t("providerInsightsFallback", "Provider");
+}
+
+function insightsProviderSupportsLive(provider = getInsightsProvider()) {
+  return provider === "plex";
+}
+
+function updateInsightsButton() {
+  if (!plexInsightsBtn) return;
+  const provider = getInsightsProvider();
+  const providerLabel = getInsightsProviderLabel(provider);
+  const available = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  plexInsightsBtn.disabled = !available;
+  plexInsightsBtn.textContent = providerLabel
+    ? tp("providerInsightsLabel", { label: providerLabel }, "%(label)s Insights")
+    : t("providerInsightsFallback", "Provider Insights");
+  plexInsightsBtn.title = providerLabel
+    ? tp("openProviderInsights", { label: providerLabel }, "Open %(label)s insights")
+    : t("providerInsightsUnavailable", "Provider insights unavailable.");
 }
 
 function plexOnlyMediaSource(app = activeApp) {
@@ -557,10 +592,20 @@ function plexOnlyMediaSource(app = activeApp) {
   return String(selected.media_source || "").trim().toLowerCase() === "plex";
 }
 
+function jellyfinOnlyMediaSource(app = activeApp) {
+  if (!app || (app !== "sonarr" && app !== "radarr")) return false;
+  const selected = (configState && configState.optionSelected) || {};
+  return String(selected.media_source || "").trim().toLowerCase() === "jellyfin";
+}
+
 function columnSupportedForMode(col, app = activeApp) {
   if (!col) return true;
   if (plexOnlyMediaSource(app)) {
     const blocked = PLEX_UNSUPPORTED_COLUMNS[app];
+    if (blocked && blocked.has(col)) return false;
+  }
+  if (jellyfinOnlyMediaSource(app)) {
+    const blocked = JELLYFIN_UNSUPPORTED_COLUMNS[app];
     if (blocked && blocked.has(col)) return false;
   }
   return true;
@@ -577,13 +622,15 @@ function applyOptionSetCapabilities() {
   setElementVisible(tabRadarr, arrTables && !!configState.radarrConfigured);
 
   if (!arrTables && tbody) {
-    const message = configState.plexConfigured
-      ? t("noArrMediaSourcePlexAvailable", "No Sonarr/Radarr media source configured. Plex features are available.")
-      : t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, or Plex.");
+    const providerAvailable = configState.plexConfigured || configState.jellyfinConfigured;
+    const message = providerAvailable
+      ? t("noArrMediaSourceProviderAvailable", "No Sonarr/Radarr media source configured. Direct provider features are available.")
+      : t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin.");
     tbody.innerHTML = `<tr><td colspan="99">${escapeHtml(message)}</td></tr>`;
   }
   updatePlexLibraryScopeControl();
   updateEffectiveSourcesLine();
+  updateInsightsButton();
 }
 
 
@@ -3343,9 +3390,11 @@ const cachedPlaybackProvider = (() => {
 let playbackProvider = cachedPlaybackProvider;
 let playbackLabel = playbackProvider === "jellystat"
   ? "Jellystat"
-  : (playbackProvider === "tautulli" ? "Tautulli" : "Playback");
+  : (playbackProvider === "tautulli"
+    ? "Tautulli"
+    : (playbackProvider === "plex" ? "Plex" : (playbackProvider === "jellyfin" ? "Jellyfin" : "Playback")));
 let playbackSupportsItemRefresh = playbackProvider === "tautulli";
-let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
+let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex" || playbackProvider === "jellyfin";
 let backgroundLoading = false;
 let chipsVisible = true;
 let filtersCollapsed = false;
@@ -3585,6 +3634,41 @@ const COLUMN_GROUPS = {
   tautulli: Array.from(TAUTULLI_COLUMNS),
 };
 const PLEX_UNSUPPORTED_COLUMNS = {
+  sonarr: new Set([
+    "SeriesType",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "Status",
+    "Monitored",
+    "Tags",
+    "ReleaseGroup",
+    "QualityProfile",
+    "OriginalLanguage",
+    "LowestCustomFormatScore",
+    "HighestCustomFormatScore",
+  ]),
+  radarr: new Set([
+    "Status",
+    "Monitored",
+    "Tags",
+    "ReleaseGroup",
+    "QualityProfile",
+    "MissingCount",
+    "CutoffUnmetCount",
+    "HasFile",
+    "IsAvailable",
+    "InCinemas",
+    "LastSearchTime",
+    "Edition",
+    "CustomFormats",
+    "CustomFormatScore",
+    "QualityCutoffNotMet",
+    "OriginalLanguage",
+    "Languages",
+  ]),
+};
+
+const JELLYFIN_UNSUPPORTED_COLUMNS = {
   sonarr: new Set([
     "SeriesType",
     "MissingCount",
@@ -4320,6 +4404,8 @@ const configState = {
   playbackProvider: "",
   playbackConfigured: false,
   plexConfigured: false,
+  jellyfinConfigured: false,
+  insightsProvider: "",
   historySourcesAvailable: [],
   plexLibraries: { sonarr: [], radarr: [] },
   optionSet: {},
@@ -4587,7 +4673,9 @@ function setupRadarrPosterTooltipDelegation() {
       if (!radarrPosterHoverKey || radarrPosterHoverKey !== hoverKey) return;
       ensureRadarrPosterTooltip();
       if (!radarrPosterTooltipEl || !radarrPosterTooltipImg) return;
-      radarrPosterTooltipImg.src = `/api/radarr/asset/${encodeURIComponent(String(instId))}/poster/${encodeURIComponent(String(movieId))}`;
+      const posterUrl = getMoviePosterUrl(row, movieId, instId);
+      if (!posterUrl) return;
+      radarrPosterTooltipImg.src = posterUrl;
       radarrPosterTooltipEl.classList.add("is-visible");
       positionRadarrPosterTooltip(anchorRect);
     }, 150);
@@ -5019,9 +5107,7 @@ function markStartupReady() {
   startupReady = true;
   document.body.classList.remove("sortarr-loading");
   document.body.classList.add("sortarr-ready");
-  if (plexInsightsBtn) {
-    plexInsightsBtn.disabled = !configState.plexConfigured;
-  }
+  updateInsightsButton();
   updateMismatchCenterButtonVisibility();
   const playbackReady = Boolean(statusState.tautulli?.configured || configState.playbackConfigured);
   const playbackProviderKey = statusState.tautulli?.provider || configState.playbackProvider;
@@ -5099,6 +5185,15 @@ function withElapsedAge(ageSeconds) {
 function formatCacheStatus(label, ageSeconds) {
   if (ageSeconds == null) return tp("cacheAwaitingData", { label }, "%(label)s: Awaiting data");
   return tp("cacheAgeAgo", { label, age: formatAgeShort(ageSeconds) }, "%(label)s: %(age)s ago");
+}
+
+function getActiveMediaCacheLabel(app = activeApp) {
+  const selected = (configState && configState.optionSelected) || {};
+  const mediaSource = String(selected.media_source || "").trim().toLowerCase();
+  if (mediaSource === "plex" || mediaSource === "jellyfin") {
+    return sourceLabelFromKey(mediaSource);
+  }
+  return t(app === "sonarr" ? "Sonarr" : "Radarr");
 }
 
 function setPartialBanner(show) {
@@ -5275,6 +5370,18 @@ function formatProgressHtml(counts, configured, progressMeta, tautulliState, dis
   return `${base}${progressSuffix}`;
 }
 
+function getResolvedPlaybackCounts(appState) {
+  const counts = resolveProgressCounts(appState?.counts, activeApp);
+  if (!counts.total) return null;
+  return counts;
+}
+
+function isPlaybackCountsSettled(appState) {
+  const counts = getResolvedPlaybackCounts(appState);
+  if (!counts) return false;
+  return counts.pending <= 0;
+}
+
 function applyProgressStatusFilter(token) {
   if (!token) return;
 
@@ -5307,12 +5414,17 @@ function applyProgressStatusFilter(token) {
 }
 
 
-function formatTautulliStatus(state, progressMeta) {
+function formatTautulliStatus(state, progressMeta, appState = null) {
   if (!state || !state.configured) return t("notConfigured", "Not configured");
 
   if (state.refresh_in_progress) {
     const total = Number.isFinite(progressMeta?.total) ? progressMeta.total : 0;
     if (total > 0) return t("matchingInProgress", "Matching in progress");
+    if (isPlaybackCountsSettled(appState)) {
+      const age = formatAgeShort(withElapsedAge(state.index_age_seconds));
+      if (age === "--") return t("matched", "Matched");
+      return tp("matchedWithAge", { age }, `Matched (${age} ago)`);
+    }
     return tp("receivingPlaybackData", { label: getPlaybackLabel() }, "Receiving %(label)s data...");
   }
 
@@ -5331,6 +5443,9 @@ function formatStatusPillText(appState, tautulli, displayProcessed = null) {
     const total = appState?.progress?.total || 0;
 
     if (!total) {
+      if (isPlaybackCountsSettled(appState)) {
+        return t("dataLoaded", "Data loaded");
+      }
       return tp("receivingPlaybackData", { label: getPlaybackLabel() }, "Receiving %(label)s data...");
     }
 
@@ -5369,11 +5484,13 @@ function updateStatusPill(appState, tautulli, displayProcessed = null) {
         `${getPlaybackLabel()} matching in progress (${processed}/${progress.total} processed).`
       );
     } else {
-      title = tp(
-        "receivingPlaybackData",
-        { label: getPlaybackLabel() },
-        "Receiving %(label)s data..."
-      );
+      title = isPlaybackCountsSettled(appState)
+        ? t("dataLoaded", "Data loaded.")
+        : tp(
+          "receivingPlaybackData",
+          { label: getPlaybackLabel() },
+          "Receiving %(label)s data..."
+        );
     }
   } else {
     title = t("dataLoaded", "Data loaded.");
@@ -5717,7 +5834,7 @@ function updateStatusPanel() {
         tautulliStatusEl.dataset.hasValue === "1"
       );
       if (!holdConfiguredPlaybackValue) {
-        const next = formatTautulliStatus(tautulli, appState?.progress);
+        const next = formatTautulliStatus(tautulli, appState?.progress, appState);
         tautulliStatusEl.textContent = next;
         tautulliStatusEl.dataset.hasValue = (next && next !== "--") ? "1" : "0";
       }
@@ -5727,7 +5844,7 @@ function updateStatusPanel() {
     const parts = [];
     const appCache = statusState.apps?.[activeApp]?.cache;
     if (statusState.apps?.[activeApp]?.configured) {
-      const label = t(activeApp === "sonarr" ? "Sonarr" : "Radarr");
+      const label = getActiveMediaCacheLabel(activeApp);
       const appAgeSeconds = appCache?.memory_age_seconds ?? appCache?.disk_age_seconds;
       parts.push(formatCacheStatus(label, withElapsedAge(appAgeSeconds)));
     }
@@ -7455,13 +7572,16 @@ async function requestArrItemPlaybackRefresh(app, options = {}) {
   return res.json();
 }
 
-async function requestSonarrSeasons(seriesId, instanceId) {
+async function requestSonarrSeasons(seriesId, instanceId, providerItemId = "") {
   if (!seriesId) {
     throw new Error("series_id is required.");
   }
   const params = new URLSearchParams();
   if (instanceId) {
     params.set("instance_id", instanceId);
+  }
+  if (providerItemId) {
+    params.set("provider_item_id", providerItemId);
   }
   params.set("include_specials", "1");
   const url = `/api/sonarr/series/${encodeURIComponent(seriesId)}/seasons?${params.toString()}`;
@@ -7473,7 +7593,7 @@ async function requestSonarrSeasons(seriesId, instanceId) {
   return res.json();
 }
 
-async function requestSonarrEpisodes(seriesId, seasonNumber, instanceId) {
+async function requestSonarrEpisodes(seriesId, seasonNumber, instanceId, providerItemId = "") {
   if (!seriesId) {
     throw new Error("series_id is required.");
   }
@@ -7483,6 +7603,9 @@ async function requestSonarrEpisodes(seriesId, seasonNumber, instanceId) {
   const params = new URLSearchParams();
   if (instanceId) {
     params.set("instance_id", instanceId);
+  }
+  if (providerItemId) {
+    params.set("provider_item_id", providerItemId);
   }
   const url = `/api/sonarr/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonNumber)}/episodes?${params.toString()}`;
   const res = await fetch(apiUrl(url));
@@ -8453,6 +8576,12 @@ function applyEpisodeGridTemplate(container, columns) {
 }
 
 function getEpisodeGridColumns(episodes) {
+  const hiddenDirectMediaKeys = new Set();
+  if (plexOnlyMediaSource("sonarr") || jellyfinOnlyMediaSource("sonarr")) {
+    ["releaseGroup", "lastSearch", "customFormats", "customScore"].forEach(key => {
+      hiddenDirectMediaKeys.add(key);
+    });
+  }
   const reportedByKey = new Map();
   EPISODE_GRID_COLUMNS.forEach(col => reportedByKey.set(col.key, false));
   if (Array.isArray(episodes)) {
@@ -8471,6 +8600,7 @@ function getEpisodeGridColumns(episodes) {
   const baseUnreported = [];
   const extraUnreported = [];
   EPISODE_GRID_COLUMNS.forEach(col => {
+    if (hiddenDirectMediaKeys.has(col.key)) return;
     const reported = reportedByKey.get(col.key);
     if (col.extra) {
       (reported ? extraReported : extraUnreported).push(col);
@@ -8918,7 +9048,7 @@ function rerenderSeriesExpansionByKey(seriesKey) {
   }
 }
 
-function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
+function buildSeriesExpansionShell(seriesKey, seriesId, instanceId, providerItemId = "") {
   const template = document.getElementById("sonarrSeriesExpansionTemplate");
   let shell = null;
   if (template && template.content && template.content.firstElementChild) {
@@ -8968,6 +9098,9 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId) {
   }
   if (instanceId != null) {
     shell.dataset.instanceId = String(instanceId);
+  }
+  if (providerItemId != null && String(providerItemId)) {
+    shell.dataset.providerItemId = String(providerItemId);
   }
   const seasonSortSelect = shell.querySelector('[data-role="series-season-sort"]');
   const episodeSortFieldSelect = shell.querySelector('[data-role="series-episode-sort-field"]');
@@ -9150,7 +9283,15 @@ async function loadSeriesSeasons(row, seriesKey, expansion) {
   if (!request) {
     const seriesId = row.SeriesId ?? row.seriesId ?? "";
     const instanceId = row.InstanceId ?? row.instanceId ?? "";
-    request = requestSonarrSeasons(seriesId, instanceId);
+    const providerItemId =
+      row.JellyfinItemId
+      ?? row.jellyfinItemId
+      ?? row.PlexItemId
+      ?? row.plexItemId
+      ?? expansion?.shell?.dataset?.providerItemId
+      ?? expansion?.body?.closest(".series-expansion")?.dataset?.providerItemId
+      ?? "";
+    request = requestSonarrSeasons(seriesId, instanceId, providerItemId);
     sonarrExpansionState.inflight.set(requestKey, request);
   }
   try {
@@ -9354,7 +9495,10 @@ async function fetchSeasonEpisodesForExpansion(seriesId, seasonNumber, instanceI
   const requestKey = `episodes::${cacheKey}`;
   let request = sonarrExpansionState.inflight.get(requestKey);
   if (!request) {
-    request = requestSonarrEpisodes(seriesId, seasonNumber, instanceId);
+    const childRow = sonarrExpansionState.childRowsBySeries.get(seriesKey);
+    const expansion = childRow ? childRow.querySelector(".series-expansion") : null;
+    const providerItemId = expansion?.dataset?.providerItemId || "";
+    request = requestSonarrEpisodes(seriesId, seasonNumber, instanceId, providerItemId);
     sonarrExpansionState.inflight.set(requestKey, request);
   }
   try {
@@ -9492,6 +9636,13 @@ async function handleSeriesExpanderClick(btn) {
   const seriesId = row.SeriesId ?? row.seriesId ?? "";
   if (!seriesId) return;
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
+  const providerItemId =
+    row.JellyfinItemId
+    ?? row.jellyfinItemId
+    ?? row.PlexItemId
+    ?? row.plexItemId
+    ?? btn.dataset.providerItemId
+    ?? "";
   const seriesKey = getSonarrSeriesKey(seriesId, instanceId);
   if (!seriesKey) return;
   if (sonarrExpansionState.expandedSeries.has(seriesKey)) {
@@ -9508,20 +9659,26 @@ async function handleSeriesExpanderClick(btn) {
   const childRow = ensureSeriesChildRow(rowEl, seriesKey);
   const cell = childRow.querySelector("td");
   cell.textContent = "";
-  const expansion = buildSeriesExpansionShell(seriesKey, seriesId, instanceId);
+  const expansion = buildSeriesExpansionShell(seriesKey, seriesId, instanceId, providerItemId);
   cell.appendChild(expansion.shell);
   if (IMAGES_ENABLED && expansion.posterImg && seriesId) {
-    const inst = instanceId ? encodeURIComponent(String(instanceId)) : "";
-    expansion.posterImg.src = inst ? `/api/sonarr/asset/${inst}/poster/${encodeURIComponent(String(seriesId))}` : `/api/sonarr/asset/sonarr-1/poster/${encodeURIComponent(String(seriesId))}`;
-    expansion.posterImg.onerror = () => {
-      const img = expansion.posterImg;
-      if (!img) return;
-      if (img.complete && img.naturalWidth > 0) return;
-      const wrap = img.closest(".series-expansion-poster");
+    const posterUrl = getSeriesPosterUrl(row, seriesId, instanceId);
+    if (posterUrl) {
+      expansion.posterImg.src = posterUrl;
+      expansion.posterImg.onerror = () => {
+        const img = expansion.posterImg;
+        if (!img) return;
+        if (img.complete && img.naturalWidth > 0) return;
+        const wrap = img.closest(".series-expansion-poster");
+        if (wrap) wrap.classList.add("series-expansion-poster--empty");
+      };
+      const wrap = expansion.posterImg.closest(".series-expansion-poster");
+      if (wrap) wrap.classList.remove("series-expansion-poster--empty");
+    } else {
+      expansion.posterImg.removeAttribute("src");
+      const wrap = expansion.posterImg.closest(".series-expansion-poster");
       if (wrap) wrap.classList.add("series-expansion-poster--empty");
-    };
-    const wrap = expansion.posterImg.closest(".series-expansion-poster");
-    if (wrap) wrap.classList.remove("series-expansion-poster--empty");
+    }
   } else if (expansion.posterImg) {
     expansion.posterImg.removeAttribute("src");
     const wrap = expansion.posterImg.closest(".series-expansion-poster");
@@ -12872,12 +13029,46 @@ const DIAG_BUTTON_HTML =
 function buildSeriesExpanderButton(row) {
   const seriesId = row.SeriesId ?? row.seriesId ?? "";
   if (!seriesId) return "";
+  const providerItemId =
+    row.JellyfinItemId ?? row.jellyfinItemId ?? row.PlexItemId ?? row.plexItemId ?? "";
+  if ((jellyfinOnlyMediaSource("sonarr") || plexOnlyMediaSource("sonarr")) && !providerItemId) return "";
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
   const seriesKey = getSonarrSeriesKey(seriesId, instanceId);
   const keyAttr = seriesKey ? ` data-series-key="${escapeHtml(seriesKey)}"` : "";
   const seriesAttr = seriesId ? ` data-series-id="${escapeHtml(seriesId)}"` : "";
   const instanceAttr = instanceId ? ` data-instance-id="${escapeHtml(instanceId)}"` : "";
-  return `<button class="series-expander" type="button" title="${escapeHtml(t("Expand seasons"))}" aria-label="${escapeHtml(t("Expand seasons"))}" aria-expanded="false"${keyAttr}${seriesAttr}${instanceAttr}>${SERIES_EXPAND_ICON_HTML}</button>`;
+  const providerAttr = providerItemId ? ` data-provider-item-id="${escapeHtml(providerItemId)}"` : "";
+  return `<button class="series-expander" type="button" title="${escapeHtml(t("Expand seasons"))}" aria-label="${escapeHtml(t("Expand seasons"))}" aria-expanded="false"${keyAttr}${seriesAttr}${instanceAttr}${providerAttr}>${SERIES_EXPAND_ICON_HTML}</button>`;
+}
+
+function getSeriesPosterUrl(row, seriesId, instanceId) {
+  if (jellyfinOnlyMediaSource("sonarr")) {
+    const itemId = row?.JellyfinItemId ?? row?.jellyfinItemId ?? "";
+    return itemId ? `/api/jellyfin/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
+  if (plexOnlyMediaSource("sonarr")) {
+    const itemId = row?.PlexItemId ?? row?.plexItemId ?? "";
+    return itemId ? `/api/plex/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
+  if (!seriesId) return "";
+  const inst = instanceId ? encodeURIComponent(String(instanceId)) : "";
+  return inst
+    ? `/api/sonarr/asset/${inst}/poster/${encodeURIComponent(String(seriesId))}`
+    : `/api/sonarr/asset/sonarr-1/poster/${encodeURIComponent(String(seriesId))}`;
+}
+
+function getMoviePosterUrl(row, movieId, instanceId) {
+  if (jellyfinOnlyMediaSource("radarr")) {
+    const itemId = row?.JellyfinItemId ?? row?.jellyfinItemId ?? "";
+    return itemId ? `/api/jellyfin/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
+  if (plexOnlyMediaSource("radarr")) {
+    const itemId = row?.PlexItemId ?? row?.plexItemId ?? "";
+    return itemId ? `/api/plex/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
+  if (!movieId) return "";
+  const inst = instanceId ? encodeURIComponent(String(instanceId)) : "radarr-1";
+  return `/api/radarr/asset/${inst}/poster/${encodeURIComponent(String(movieId))}`;
 }
 
 function computeHeavyCellValues(row, app, columns) {
@@ -14944,14 +15135,17 @@ function setPlaybackProvider(provider) {
   playbackProvider = provider || "";
   playbackLabel = playbackProvider === "jellystat"
     ? "Jellystat"
-    : (playbackProvider === "tautulli" ? "Tautulli" : (playbackProvider === "plex" ? "Plex" : "Playback"));
+    : (playbackProvider === "tautulli"
+      ? "Tautulli"
+      : (playbackProvider === "plex" ? "Plex" : (playbackProvider === "jellyfin" ? "Jellyfin" : "Playback")));
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
-  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex";
+  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex" || playbackProvider === "jellyfin";
   try {
     localStorage.setItem(PLAYBACK_PROVIDER_STORAGE_KEY, playbackProvider);
   } catch {
   }
   updatePlaybackLabels();
+  updateInsightsButton();
 }
 
 function setTautulliEnabled(enabled, provider = "") {
@@ -15475,6 +15669,8 @@ function buildFrontendConfigUiSignature(payload, normalizedState) {
     playbackProvider: state.playbackProvider || "",
     playbackConfigured: Boolean(state.playbackConfigured),
     plexConfigured: Boolean(state.plexConfigured),
+    jellyfinConfigured: Boolean(state.jellyfinConfigured),
+    insightsProvider: state.insightsProvider || "",
     historySourcesAvailable: Array.isArray(state.historySourcesAvailable) ? state.historySourcesAvailable : [],
     optionSet: state.optionSet || {},
     plexLibraries: state.plexLibraries || { sonarr: [], radarr: [] },
@@ -15515,6 +15711,8 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
     payload.playback_configured ?? payload.tautulli_configured
   );
   configState.plexConfigured = Boolean(payload.plex_configured);
+  configState.jellyfinConfigured = Boolean(payload.jellyfin_configured);
+  configState.insightsProvider = String(payload.insights_provider || "").trim().toLowerCase();
   configState.historySourcesAvailable = Array.isArray(payload.history_sources_available)
     ? payload.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
     : [];
@@ -15540,6 +15738,8 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
     playbackProvider: configState.playbackProvider,
     playbackConfigured: configState.playbackConfigured,
     plexConfigured: configState.plexConfigured,
+    jellyfinConfigured: configState.jellyfinConfigured,
+    insightsProvider: configState.insightsProvider,
     historySourcesAvailable: configState.historySourcesAvailable,
     optionSet: configState.optionSet,
     plexLibraries: configState.plexLibraries,
@@ -15551,9 +15751,7 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
   }
   lastFrontendConfigUiSignature = nextUiSignature;
   applyOptionSetCapabilities();
-  if (plexInsightsBtn) {
-    plexInsightsBtn.disabled = !configState.plexConfigured;
-  }
+  updateInsightsButton();
   updateMismatchCenterButtonVisibility();
   buildInstanceChips();
   updateFilterBuilderOptions();
@@ -15882,6 +16080,9 @@ let plexOverlayEl = null;
 let plexDrawerEl = null;
 let plexBodyEl = null;
 let plexMetaEl = null;
+let plexTitleEl = null;
+let plexPrimaryTitleEl = null;
+let plexSecondaryTitleEl = null;
 let plexHubChipsEl = null;
 let plexHubItemsEl = null;
 let plexSectionChipsEl = null;
@@ -15893,6 +16094,23 @@ let plexLiveBtn = null;
 let plexLiveSource = null;
 let plexLiveRefreshTimer = null;
 
+function currentInsightsProvider() {
+  const dataProvider = String(plexInsightsState?.data?.provider || "").trim().toLowerCase();
+  if (dataProvider === "plex" || dataProvider === "jellyfin") return dataProvider;
+  return getInsightsProvider();
+}
+
+function currentInsightsProviderLabel() {
+  return getInsightsProviderLabel(currentInsightsProvider());
+}
+
+function getInsightsIncludeValue(provider) {
+  if (provider === "jellyfin") {
+    return "sections,sessions,activities,match_health";
+  }
+  return "hubs,activities,butler,sections,match_health";
+}
+
 function ensurePlexOverlay() {
   if (plexOverlayEl && plexDrawerEl) return;
   plexOverlayEl = document.createElement("div");
@@ -15901,7 +16119,7 @@ function ensurePlexOverlay() {
     <div class="plex-scrim" data-plex-close="1"></div>
     <div class="plex-drawer glass-panel">
       <div class="plex-header">
-        <div class="plex-title">${escapeHtml(t("Plex Insights"))}</div>
+        <div class="plex-title" data-role="plex-title">${escapeHtml(t("providerInsightsFallback", "Provider Insights"))}</div>
         <div class="plex-actions">
           <button class="plex-btn" type="button" data-role="plex-refresh">${escapeHtml(t("Refresh"))}</button>
           <button class="plex-btn plex-live-toggle" type="button" data-role="plex-live">${escapeHtml(t("Live"))}</button>
@@ -15911,7 +16129,7 @@ function ensurePlexOverlay() {
       <div class="plex-meta" data-role="plex-meta"></div>
       <div class="plex-body" data-role="plex-body">
         <div class="plex-section">
-          <div class="plex-section-title">${escapeHtml(t("Hubs"))}</div>
+          <div class="plex-section-title" data-role="plex-primary-title">${escapeHtml(t("Hubs"))}</div>
           <div class="plex-hub-filters">
             <span class="plex-label">${escapeHtml(t("Library"))}</span>
             <div class="plex-section-chips" data-role="plex-section-chips"></div>
@@ -15928,7 +16146,7 @@ function ensurePlexOverlay() {
           <div class="plex-activities" data-role="plex-activities"></div>
         </div>
         <div class="plex-section">
-          <div class="plex-section-title">${escapeHtml(t("Butler"))}</div>
+          <div class="plex-section-title" data-role="plex-secondary-title">${escapeHtml(t("Butler"))}</div>
           <div class="plex-butler" data-role="plex-butler"></div>
         </div>
       </div>
@@ -15938,6 +16156,9 @@ function ensurePlexOverlay() {
   plexDrawerEl = plexOverlayEl.querySelector(".plex-drawer");
   plexBodyEl = plexOverlayEl.querySelector('[data-role="plex-body"]');
   plexMetaEl = plexOverlayEl.querySelector('[data-role="plex-meta"]');
+  plexTitleEl = plexOverlayEl.querySelector('[data-role="plex-title"]');
+  plexPrimaryTitleEl = plexOverlayEl.querySelector('[data-role="plex-primary-title"]');
+  plexSecondaryTitleEl = plexOverlayEl.querySelector('[data-role="plex-secondary-title"]');
   plexHubChipsEl = plexOverlayEl.querySelector('[data-role="plex-hub-chips"]');
   plexHubItemsEl = plexOverlayEl.querySelector('[data-role="plex-hub-items"]');
   plexSectionChipsEl = plexOverlayEl.querySelector('[data-role="plex-section-chips"]');
@@ -15966,7 +16187,25 @@ function updatePlexMeta(text, warn = false) {
   plexMetaEl.classList.toggle("plex-meta--warn", Boolean(warn));
 }
 
+function updatePlexTitle() {
+  if (!plexTitleEl) return;
+  const label = currentInsightsProviderLabel();
+  plexTitleEl.textContent = label
+    ? tp("providerInsightsLabel", { label }, "%(label)s Insights")
+    : t("providerInsightsFallback", "Provider Insights");
+}
+
 function getPlexSectionLabel() {
+  const provider = currentInsightsProvider();
+  if (provider === "jellyfin") {
+    const sectionId = plexInsightsState.sectionId;
+    if (!sectionId) return t("All Libraries");
+    const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
+    const match = sections.find(section => String(section.id) === String(sectionId));
+    if (match && match.name) return match.name;
+    if (match && match.title) return match.title;
+    return t("All Libraries");
+  }
   const sectionId = plexInsightsState.sectionId;
   if (!sectionId) return t("All Libraries");
   const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
@@ -15979,6 +16218,7 @@ function renderPlexSections(sections) {
   if (!plexSectionChipsEl) return;
   const list = Array.isArray(sections) ? sections : [];
   plexInsightsState.sections = list;
+  const provider = currentInsightsProvider();
   const validIds = new Set(list.map(section => String(section.id || "")));
   if (plexInsightsState.sectionId && !validIds.has(String(plexInsightsState.sectionId))) {
     plexInsightsState.sectionId = "";
@@ -15991,7 +16231,9 @@ function renderPlexSections(sections) {
   for (const section of list) {
     const id = String(section.id || "");
     if (!id) continue;
-    const title = escapeHtml(section.title || t("Untitled", "Untitled"));
+    const title = escapeHtml(
+      (provider === "jellyfin" ? section.name : section.title) || section.title || section.name || t("Untitled", "Untitled")
+    );
     const active = String(plexInsightsState.sectionId) === id ? " plex-chip--active" : "";
     chips.push(
       `<button class="plex-chip${active}" type="button" data-plex-section="${escapeHtml(id)}">${title}</button>`
@@ -16002,6 +16244,10 @@ function renderPlexSections(sections) {
 
 function renderPlexHubChips(hubs) {
   if (!plexHubChipsEl) return;
+  if (currentInsightsProvider() === "jellyfin") {
+    plexHubChipsEl.innerHTML = "";
+    return;
+  }
   if (!Array.isArray(hubs) || !hubs.length) {
     plexHubChipsEl.innerHTML = `<span class="plex-empty">${escapeHtml(t("No hubs available"))}</span>`;
     return;
@@ -16019,6 +16265,10 @@ function renderPlexHubChips(hubs) {
 
 function renderPlexHubItems(hubs) {
   if (!plexHubItemsEl) return;
+  if (currentInsightsProvider() === "jellyfin") {
+    renderJellyfinSessions((plexInsightsState.data || {}).sessions || []);
+    return;
+  }
   if (!Array.isArray(hubs) || !hubs.length) {
     plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No hub items"))}</div>`;
     return;
@@ -16045,8 +16295,63 @@ function renderPlexHubItems(hubs) {
   plexHubItemsEl.innerHTML = rows.join("");
 }
 
+function renderJellyfinSessions(sessions) {
+  if (!plexHubItemsEl) return;
+  if (!Array.isArray(sessions) || !sessions.length) {
+    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No sessions available"))}</div>`;
+    return;
+  }
+  const rows = sessions.map(session => {
+    const user = escapeHtml(session.user || "");
+    const client = escapeHtml(session.client || "");
+    const device = escapeHtml(session.device || "");
+    const fallbackTitle = session.client || session.device || session.user || t("Untitled", "Untitled");
+    const title = escapeHtml(session.title || fallbackTitle);
+    const progress = session.progress_label ? escapeHtml(session.progress_label) : "";
+    const state = session.state ? escapeHtml(session.state) : "";
+    const mediaType = session.type ? escapeHtml(session.type) : "";
+    const meta = [user, client || device, mediaType, progress, state].filter(Boolean).join(" · ");
+    return `
+      <div class="plex-hub-item">
+        <div class="plex-hub-title">${title}</div>
+        <div class="plex-hub-meta">${meta}</div>
+      </div>
+    `;
+  });
+  plexHubItemsEl.innerHTML = rows.join("");
+}
+
+function renderJellyfinActivities(activities) {
+  if (!plexActivitiesEl) return;
+  if (!Array.isArray(activities) || !activities.length) {
+    plexActivitiesEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No active tasks"))}</div>`;
+    return;
+  }
+  plexActivitiesEl.innerHTML = activities.map(activity => {
+    const title = escapeHtml(activity.title || activity.name || t("Untitled", "Untitled"));
+    const subtitleText = activity.subtitle || activity.shortDescription || "";
+    const subtitle = subtitleText ? `<div class="plex-sub">${escapeHtml(subtitleText)}</div>` : "";
+    const state = activity.state ? escapeHtml(activity.state) : "";
+    const date = activity.date ? escapeHtml(activity.date) : "";
+    const meta = [state, date].filter(Boolean).join(" · ");
+    return `
+      <div class="plex-task">
+        <div class="plex-task-row">
+          <div class="plex-task-title">${title}</div>
+          <div class="plex-task-meta">${meta}</div>
+        </div>
+        ${subtitle}
+      </div>
+    `;
+  }).join("");
+}
+
 function renderPlexActivities(activities) {
   if (!plexActivitiesEl) return;
+  if (currentInsightsProvider() === "jellyfin") {
+    renderJellyfinActivities(activities);
+    return;
+  }
   if (!Array.isArray(activities) || !activities.length) {
     plexActivitiesEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No active tasks"))}</div>`;
     return;
@@ -16073,6 +16378,10 @@ function renderPlexActivities(activities) {
 
 function renderPlexButler(tasks) {
   if (!plexButlerEl) return;
+  if (currentInsightsProvider() === "jellyfin") {
+    renderJellyfinLibraries((plexInsightsState.data || {}).sections || []);
+    return;
+  }
   if (!Array.isArray(tasks) || !tasks.length) {
     plexButlerEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No butler tasks"))}</div>`;
     return;
@@ -16095,11 +16404,47 @@ function renderPlexButler(tasks) {
   }).join("");
 }
 
+function renderJellyfinLibraries(libraries) {
+  if (!plexButlerEl) return;
+  if (!Array.isArray(libraries) || !libraries.length) {
+    plexButlerEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No libraries available"))}</div>`;
+    return;
+  }
+  plexButlerEl.innerHTML = libraries.map(library => {
+    const title = escapeHtml(library.name || library.title || t("Untitled", "Untitled"));
+    const type = escapeHtml(library.type || "");
+    const path = escapeHtml(library.path || "");
+    const count = Number(library.item_count || 0);
+    const meta = [type, count ? `${count} items` : "", path].filter(Boolean).join(" · ");
+    return `
+      <div class="plex-task">
+        <div class="plex-task-row">
+          <div class="plex-task-title">${title}</div>
+          <div class="plex-task-meta">${meta}</div>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
 function formatMatchValue(value, total, withPercent = false) {
   const count = Number(value || 0);
   if (!withPercent || !total) return `${count}`;
   const pct = total > 0 ? Math.round((count / total) * 100) : 0;
   return `${count} (${pct}%)`;
+}
+
+function normalizeInsightsMatchHealth(appHealth, fallbackLabel) {
+  const counts = appHealth && typeof appHealth === "object" ? (appHealth.counts || {}) : {};
+  const total = Number(counts.total || appHealth?.total || 0);
+  const buckets = Array.isArray(appHealth?.buckets)
+    ? appHealth.buckets
+    : (Array.isArray(appHealth?.top_match_buckets) ? appHealth.top_match_buckets : []);
+  const reasons = Array.isArray(appHealth?.reasons)
+    ? appHealth.reasons
+    : (Array.isArray(appHealth?.top_reasons) ? appHealth.top_reasons : []);
+  const label = appHealth?.label || fallbackLabel;
+  return { label, counts, total, buckets, reasons };
 }
 
 function renderPlexMatchHealth(matchHealth) {
@@ -16108,14 +16453,14 @@ function renderPlexMatchHealth(matchHealth) {
     plexMatchEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No match data"))}</div>`;
     return;
   }
+  const provider = currentInsightsProvider();
   const apps = ["sonarr", "radarr"];
   const cards = apps.map(app => {
-    const label = app === "sonarr" ? t("Sonarr") : t("Radarr");
+    const fallbackLabel = (provider === "jellyfin" || provider === "plex")
+      ? (app === "sonarr" ? t("Series", "Series") : t("Movies", "Movies"))
+      : (app === "sonarr" ? t("Sonarr") : t("Radarr"));
     const appHealth = matchHealth.apps?.[app] || {};
-    const counts = appHealth.counts || {};
-    const total = Number(counts.total || 0);
-    const buckets = Array.isArray(appHealth.buckets) ? appHealth.buckets : [];
-    const reasons = Array.isArray(appHealth.reasons) ? appHealth.reasons : [];
+    const { label, counts, total, buckets, reasons } = normalizeInsightsMatchHealth(appHealth, fallbackLabel);
     if (!total) {
       return `
         <div class="plex-match-card">
@@ -16156,6 +16501,17 @@ function renderPlexMatchHealth(matchHealth) {
 function renderPlexInsights() {
   if (!plexOverlayEl) return;
   const data = plexInsightsState.data || {};
+  const provider = currentInsightsProvider();
+  updatePlexTitle();
+  if (plexPrimaryTitleEl) {
+    plexPrimaryTitleEl.textContent = provider === "jellyfin" ? t("Sessions") : t("Hubs");
+  }
+  if (plexSecondaryTitleEl) {
+    plexSecondaryTitleEl.textContent = provider === "jellyfin" ? t("Libraries") : t("Butler");
+  }
+  if (plexLiveBtn) {
+    setElementVisible(plexLiveBtn, insightsProviderSupportsLive(provider));
+  }
   renderPlexSections(data.sections || []);
   renderPlexHubChips(data.hubs || []);
   renderPlexHubItems(data.hubs || []);
@@ -16166,6 +16522,12 @@ function renderPlexInsights() {
 
 function updatePlexLiveButton() {
   if (!plexLiveBtn) return;
+  if (!insightsProviderSupportsLive(currentInsightsProvider())) {
+    plexLiveBtn.classList.remove("is-active");
+    plexLiveBtn.textContent = t("Live");
+    plexLiveBtn.removeAttribute("title");
+    return;
+  }
   plexLiveBtn.classList.toggle("is-active", plexInsightsState.live);
   plexLiveBtn.textContent = plexInsightsState.live ? t("Live on") : t("Live");
   if (plexInsightsState.liveStatus) {
@@ -16186,6 +16548,11 @@ function schedulePlexInsightsRefresh() {
 
 function startPlexLive() {
   if (plexLiveSource) return;
+  if (!insightsProviderSupportsLive(currentInsightsProvider())) {
+    plexInsightsState.liveStatus = t("Live unavailable");
+    updatePlexLiveButton();
+    return;
+  }
   if (!window.EventSource) {
     plexInsightsState.liveStatus = t("Live unavailable");
     updatePlexLiveButton();
@@ -16219,31 +16586,43 @@ function stopPlexLive() {
 }
 
 async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
-  if (!configState.plexConfigured) return;
+  const provider = getInsightsProvider();
+  const providerLabel = getInsightsProviderLabel(provider);
+  const includeValue = getInsightsIncludeValue(provider);
+  const configured = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  if (!configured) return;
   ensurePlexOverlay();
-  if (!silent) updatePlexMeta(t("Fetching Plex insights..."));
+  updatePlexTitle();
+  if (!silent) {
+    updatePlexMeta(
+      providerLabel
+        ? tp("fetchingProviderInsights", { label: providerLabel }, "Fetching %(label)s insights...")
+        : t("Fetching Plex insights...")
+    );
+  }
   plexInsightsState.loading = true;
   try {
     const payload = {
       hub_count: 6,
       item_count: 8,
-      include: "hubs,activities,butler,sections,match_health",
+      include: includeValue,
       ...(plexInsightsState.sectionId ? { section_id: plexInsightsState.sectionId } : {}),
     };
     let res;
     if (refresh) {
-      res = await fetch(apiUrl("/api/plex/insights"), {
+      res = await fetch(apiUrl("/api/playback/insights"), {
         method: "POST",
         headers: withCsrfHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, provider }),
       });
     } else {
       const params = new URLSearchParams();
       params.set("hub_count", "6");
       params.set("item_count", "8");
-      params.set("include", "hubs,activities,butler,sections,match_health");
+      params.set("include", includeValue);
+      if (provider) params.set("provider", provider);
       if (plexInsightsState.sectionId) params.set("section_id", plexInsightsState.sectionId);
-      res = await fetch(apiUrl(`/api/plex/insights?${params.toString()}`));
+      res = await fetch(apiUrl(`/api/playback/insights?${params.toString()}`));
     }
     if (!res.ok) {
       throw new Error(await res.text());
@@ -16264,16 +16643,25 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
     updatePlexMeta(metaBits.join(" · "));
   } catch (err) {
     plexInsightsState.loading = false;
-    updatePlexMeta(t("Plex insights unavailable."), true);
+    updatePlexMeta(
+      providerLabel
+        ? tp("providerInsightsUnavailable", { label: providerLabel }, "%(label)s insights unavailable.")
+        : t("Plex insights unavailable."),
+      true
+    );
   }
 }
 
 function openPlexInsights() {
-  if (!configState.plexConfigured) return;
+  const provider = getInsightsProvider();
+  const configured = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  if (!configured) return;
   ensurePlexOverlay();
+  updatePlexTitle();
   plexInsightsState.open = true;
   if (plexOverlayEl) plexOverlayEl.classList.remove("hidden");
-  if (!plexInsightsState.data) {
+  if (!plexInsightsState.data || String(plexInsightsState.data.provider || "").trim().toLowerCase() !== provider) {
+    plexInsightsState.data = null;
     fetchPlexInsights({ refresh: true });
   } else {
     renderPlexInsights();
@@ -16402,6 +16790,7 @@ function ensureMismatchCenterOverlay() {
 function mismatchProviderLabel(provider) {
   if (provider === "tautulli") return "Tautulli";
   if (provider === "plex") return "Plex";
+  if (provider === "jellyfin") return "Jellyfin";
   if (provider === "jellystat") return "Jellystat";
   return String(provider || "");
 }
@@ -16411,6 +16800,7 @@ function mismatchCategoryLabel(category) {
   if (key === "provider_conflict") return t("Provider conflict", "Provider conflict");
   if (key === "unmatched_all") return t("Unmatched all", "Unmatched all");
   if (key === "skipped_all") return t("Skipped all", "Skipped all");
+  if (key === "pending_all") return t("Pending", "Pending");
   if (key === "unavailable_all") return t("Unavailable all", "Unavailable all");
   return key || t("Unknown", "Unknown");
 }
@@ -16420,6 +16810,7 @@ function mismatchStatusClass(status) {
   if (key === "matched") return "is-matched";
   if (key === "unmatched") return "is-unmatched";
   if (key === "skipped") return "is-skipped";
+  if (key === "pending") return "is-pending";
   return "is-unavailable";
 }
 
@@ -16531,7 +16922,22 @@ function populateMismatchProviderFilter(data) {
 function renderMismatchRows(rows, data) {
   if (!mismatchBodyEl) return;
   if (!rows.length) {
-    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(t("No mismatch rows found.", "No mismatch rows found."))}</div>`;
+    const providers = Array.isArray(data?.providers) ? data.providers : [];
+    const warmingProviders = providers
+      .filter(provider => {
+        const status = String(provider?.status || "").trim().toLowerCase();
+        const error = String(provider?.error || "").trim().toLowerCase();
+        return status === "pending" || Boolean(provider?.refresh_in_progress) || error.includes("refresh queued");
+      })
+      .map(provider => provider.label || mismatchProviderLabel(provider.provider));
+    const message = warmingProviders.length
+      ? t(
+        "Mismatch data is still warming up for %(providers)s. Refresh again shortly.",
+        "Mismatch data is still warming up for %(providers)s. Refresh again shortly.",
+        { providers: warmingProviders.join(", ") }
+      )
+      : t("No mismatch rows found.", "No mismatch rows found.");
+    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(message)}</div>`;
     return;
   }
 
@@ -16981,11 +17387,11 @@ function scheduleDeferredUiBindings() {
     } else {
       updateLastUpdatedDisplay();
     }
-  } else if (configState.plexConfigured) {
-    setStatus(t("noArrMediaSourcePlexAvailable", "No Sonarr/Radarr media source configured. Plex features are available."));
+  } else if (configState.plexConfigured || configState.jellyfinConfigured) {
+    setStatus(t("noArrMediaSourceProviderAvailable", "No Sonarr/Radarr media source configured. Direct provider features are available."));
     setLoading(false);
   } else {
-    setStatus(t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, or Plex."));
+    setStatus(t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin."));
     setLoading(false);
   }
 

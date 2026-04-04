@@ -51,7 +51,16 @@ if [ -n "$PUID" ] && [ -n "$PGID" ]; then
     if [ -d "/config" ]; then
         safe_chown "/config"
     fi
-    for path in "$CONFIG_PATH" "$ENV_FILE_PATH" "$TAUTULLI_METADATA_CACHE" "$SONARR_CACHE_PATH" "$RADARR_CACHE_PATH"; do
+    for path in \
+        "$CONFIG_PATH" \
+        "$ENV_FILE_PATH" \
+        "$TAUTULLI_METADATA_CACHE" \
+        "$SONARR_CACHE_PATH" \
+        "$RADARR_CACHE_PATH" \
+        "$PLEX_CACHE_PATH" \
+        "$JELLYFIN_CACHE_PATH" \
+        "$JELLYSTAT_CACHE_PATH" \
+        "$STREAMYSTATS_CACHE_PATH"; do
         if [ -n "$path" ]; then
             safe_chown "$(dirname "$path")"
         fi

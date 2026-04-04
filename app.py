@@ -17,7 +17,7 @@ import tempfile
 import threading
 import zlib
 import math
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
 
@@ -37,7 +37,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.8"
+APP_VERSION = "0.8.9"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -79,7 +79,7 @@ app.config["BABEL_TRANSLATION_DIRECTORIES"] = os.path.join(app.root_path, "trans
 # Make get_locale() available in Jinja templates
 app.jinja_env.globals["get_locale"] = get_locale
 
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from flask_babel import gettext as _
 
 @app.route("/set-lang/<lang>", methods=["POST"])
@@ -1595,6 +1595,7 @@ class CacheManager:
             "sonarr": {},
             "radarr": {},
             "tautulli": {"ts": 0, "data": {}},
+            "jellyfin": {"ts": 0, "data": {}},
             "jellystat": {"ts": 0, "data": {}},
             "plex": {"ts": 0, "data": {}},
         }
@@ -1619,11 +1620,75 @@ class CacheManager:
             return []
         return [dict(row) for row in rows]
 
+    @staticmethod
+    def _normalize_match_counts(match_counts, rows: list[dict] | None = None) -> dict:
+        counts = dict(match_counts) if isinstance(match_counts, dict) else {}
+        if not counts:
+            counts = _summarize_match_counts(rows or [])
+        total = max(CacheManager._safe_int(counts.get("total")), len(rows or []))
+        matched = CacheManager._safe_int(counts.get("matched"))
+        unmatched = CacheManager._safe_int(counts.get("unmatched"))
+        skipped = CacheManager._safe_int(counts.get("skipped"))
+        unavailable = CacheManager._safe_int(counts.get("unavailable"))
+        pending_value = counts.get("pending")
+        if pending_value is None:
+            pending = max(total - (matched + unmatched + skipped + unavailable), 0)
+        else:
+            pending = max(CacheManager._safe_int(pending_value), 0)
+        return {
+            "total": total,
+            "matched": matched,
+            "unmatched": unmatched,
+            "skipped": skipped,
+            "unavailable": unavailable,
+            "pending": pending,
+        }
+
+    @staticmethod
+    def _normalize_match_health_summary(summary, rows: list[dict] | None = None) -> dict:
+        if not isinstance(summary, dict):
+            summary = _summarize_existing_match_health(rows or [])
+        counts = CacheManager._normalize_match_counts(summary.get("counts"), rows or [])
+        buckets = summary.get("buckets") if isinstance(summary.get("buckets"), list) else []
+        reasons = summary.get("reasons") if isinstance(summary.get("reasons"), list) else []
+        def normalize_items(items):
+            out = []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                label = str(item.get("label") or "").strip()
+                count = CacheManager._safe_int(item.get("count"))
+                if not label or count <= 0:
+                    continue
+                out.append({"label": label, "count": count})
+            return out
+        return {
+            "counts": counts,
+            "buckets": normalize_items(buckets),
+            "reasons": normalize_items(reasons),
+        }
+
     def _clone_entry(self, entry: dict) -> dict:
         return {
             "ts": self._safe_ts(entry.get("ts")),
             "tautulli_index_ts": self._safe_int(entry.get("tautulli_index_ts")),
+            "match_counts": self._normalize_match_counts(entry.get("match_counts"), entry.get("data") or []),
+            "match_health_summary": self._normalize_match_health_summary(
+                entry.get("match_health_summary"),
+                entry.get("data") or [],
+            ),
             "data": self._clone_rows(entry.get("data") or []),
+        }
+
+    def _clone_entry_meta(self, entry: dict) -> dict:
+        return {
+            "ts": self._safe_ts(entry.get("ts")),
+            "tautulli_index_ts": self._safe_int(entry.get("tautulli_index_ts")),
+            "match_counts": self._normalize_match_counts(entry.get("match_counts"), entry.get("data") or []),
+            "match_health_summary": self._normalize_match_health_summary(
+                entry.get("match_health_summary"),
+                entry.get("data") or [],
+            ),
         }
 
     def clear_app(self, app_name: str) -> None:
@@ -1637,7 +1702,9 @@ class CacheManager:
             self._store["sonarr"].clear()
             self._store["radarr"].clear()
             self._store["tautulli"] = {"ts": 0, "data": {}}
+            self._store["jellyfin"] = {"ts": 0, "data": {}}
             self._store["jellystat"] = {"ts": 0, "data": {}}
+            self._store["streamystats"] = {"ts": 0, "data": {}}
             self._store["plex"] = {"ts": 0, "data": {}}
 
     def get_app_snapshot(self, app_name: str) -> dict[str, dict]:
@@ -1645,6 +1712,14 @@ class CacheManager:
             store = self._store.get(app_name, {})
             return {
                 str(instance_id): self._clone_entry(entry)
+                for instance_id, entry in store.items()
+            }
+
+    def get_app_meta_snapshot(self, app_name: str) -> dict[str, dict]:
+        with self._lock:
+            store = self._store.get(app_name, {})
+            return {
+                str(instance_id): self._clone_entry_meta(entry)
                 for instance_id, entry in store.items()
             }
 
@@ -1661,14 +1736,19 @@ class CacheManager:
         data: list[dict],
         ts: float | int = 0,
         tautulli_index_ts: int = 0,
+        match_counts: dict | None = None,
+        match_health_summary: dict | None = None,
     ) -> None:
         key = str(instance_id)
         with self._lock:
             store = self._store.setdefault(app_name, {})
+            rows = self._clone_rows(data)
             store[key] = {
                 "ts": self._safe_ts(ts),
                 "tautulli_index_ts": self._safe_int(tautulli_index_ts),
-                "data": self._clone_rows(data),
+                "match_counts": self._normalize_match_counts(match_counts, rows),
+                "match_health_summary": self._normalize_match_health_summary(match_health_summary, rows),
+                "data": rows,
             }
 
     def update_app_entry(
@@ -1678,15 +1758,33 @@ class CacheManager:
         data: list[dict] | None = None,
         ts: float | int | None = None,
         tautulli_index_ts: int | None = None,
+        match_counts: dict | None = None,
+        match_health_summary: dict | None = None,
     ) -> None:
         key = str(instance_id)
         with self._lock:
             store = self._store.setdefault(app_name, {})
             entry = store.get(key)
             if not entry:
-                entry = {"ts": 0, "tautulli_index_ts": 0, "data": []}
+                entry = {
+                    "ts": 0,
+                    "tautulli_index_ts": 0,
+                    "match_counts": self._normalize_match_counts({}, []),
+                    "match_health_summary": self._normalize_match_health_summary({}, []),
+                    "data": [],
+                }
             if data is not None:
-                entry["data"] = self._clone_rows(data)
+                rows = self._clone_rows(data)
+                entry["data"] = rows
+                entry["match_counts"] = self._normalize_match_counts(match_counts, rows)
+                entry["match_health_summary"] = self._normalize_match_health_summary(match_health_summary, rows)
+            elif match_counts is not None:
+                entry["match_counts"] = self._normalize_match_counts(match_counts, entry.get("data") or [])
+            elif match_health_summary is not None:
+                entry["match_health_summary"] = self._normalize_match_health_summary(
+                    match_health_summary,
+                    entry.get("data") or [],
+                )
             if ts is not None:
                 entry["ts"] = self._safe_ts(ts)
             if tautulli_index_ts is not None:
@@ -1715,6 +1813,34 @@ class CacheManager:
             data = entry.get("data") or None
             ts = self._safe_int(entry.get("ts")) if data else 0
             return data, ts
+
+    def get_jellyfin_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["jellyfin"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
+    def get_streamystats_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["streamystats"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
+    def set_jellyfin(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            self._store["jellyfin"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
+
+    def set_streamystats(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            self._store["streamystats"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
 
     def set_jellystat(self, data: dict | None, ts: float | int) -> None:
         with self._lock:
@@ -1825,8 +1951,29 @@ except OSError:
 _env_state = {"loaded": False, "mtime": None}
 _env_lock = threading.Lock()
 _upgrade_setup_required = False
-_startup_state = {"migrated": False, "lints_emitted": False}
-_playback_refresh_state = {"tautulli_seen": None, "jellystat_seen": None, "plex_seen": None}
+_startup_state = {"migrated": False, "migrating": False, "lints_emitted": False}
+_playback_refresh_state = {
+    "tautulli_seen": None,
+    "jellyfin_seen": None,
+    "jellystat_seen": None,
+    "streamystats_seen": None,
+    "plex_seen": None,
+}
+_jellyfin_auth_cache: dict[str, str | int] = {
+    "base_url": "",
+    "username": "",
+    "password": "",
+    "token": "",
+    "user_id": "",
+}
+_streamystats_auth_cache: dict[str, str | int] = {
+    "jellyfin_url": "",
+    "username": "",
+    "password": "",
+    "token": "",
+    "user_id": "",
+}
+_streamystats_server_cache: dict[str, dict] = {}
 _plex_insights_cache: dict[str, dict] = {}
 _PLEX_INSIGHTS_CACHE_SECONDS = 30
 _arr_refresh_state = {
@@ -2172,6 +2319,8 @@ _SECRET_ENV_KEYS = [
     "RADARR_API_KEY_2",
     "RADARR_API_KEY_3",
     "PLEX_TOKEN",
+    "JELLYFIN_API_KEY",
+    "JELLYFIN_PASSWORD",
     "TAUTULLI_API_KEY",
     "JELLYSTAT_API_KEY",
     "BASIC_AUTH_PASS",
@@ -3458,6 +3607,12 @@ def _normalize_url(value: str) -> str:
     return value.rstrip("/")
 
 
+def _urls_match(left: str, right: str) -> bool:
+    normalized_left = _normalize_url(left or "")
+    normalized_right = _normalize_url(right or "")
+    return bool(normalized_left and normalized_left == normalized_right)
+
+
 def _validated_service_base_url(base_url: str, service_label: str = "service") -> str:
     normalized = _normalize_url(base_url)
     if not normalized:
@@ -3768,6 +3923,22 @@ def _write_env_file(path: str, values: dict):
         "PLEX_HISTORY_LAST_VIEWED_AT",
         "PLEX_REFRESH_STALE_SECONDS",
         "PLEX_CACHE_PATH",
+        "JELLYFIN_URL",
+        "JELLYFIN_API_KEY",
+        "JELLYFIN_API_KEY_FILE",
+        "JELLYFIN_API_KEY_CRED_TARGET",
+        "JELLYFIN_USERNAME",
+        "JELLYFIN_PASSWORD",
+        "JELLYFIN_PASSWORD_FILE",
+        "JELLYFIN_PASSWORD_CRED_TARGET",
+        "JELLYFIN_USER_ID",
+        "JELLYFIN_LIBRARY_IDS_SONARR",
+        "JELLYFIN_LIBRARY_IDS_RADARR",
+        "JELLYFIN_TIMEOUT_SECONDS",
+        "JELLYFIN_PAGE_SIZE",
+        "JELLYFIN_HISTORY_PAGE_SIZE",
+        "JELLYFIN_REFRESH_STALE_SECONDS",
+        "JELLYFIN_CACHE_PATH",
         "TAUTULLI_URL",
         "TAUTULLI_API_KEY",
         "TAUTULLI_API_KEY_FILE",
@@ -3961,12 +4132,23 @@ def _maybe_migrate_env_defaults(path: str) -> set[str]:
     legacy_timeout_default = 60
     timeout_value = _read_int_env("TAUTULLI_TIMEOUT_SECONDS", legacy_timeout_default)
     legacy_fetch_default = max(timeout_value * 2, 300)
+    proxy_mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
+    legacy_proxy_keys = {
+        "SORTARR_PROXY_HOPS",
+        "SORTARR_PROXY_HOPS_FOR",
+        "SORTARR_PROXY_HOPS_HOST",
+        "SORTARR_PROXY_HOPS_PROTO",
+        "SORTARR_PROXY_HOPS_PORT",
+        "SORTARR_PROXY_HOPS_PREFIX",
+    }
 
     def should_remove(key: str, value: str) -> bool:
+        if proxy_mode and proxy_mode != "custom" and key in legacy_proxy_keys:
+            return True
         if key == "TAUTULLI_METADATA_LOOKUP_LIMIT":
-            return value == "200"
+            return value in {"200", str(REQUIRED_TAUTULLI_LOOKUP_LIMIT)}
         if key == "TAUTULLI_METADATA_LOOKUP_SECONDS":
-            return value == "5"
+            return value in {"5", str(REQUIRED_TAUTULLI_LOOKUP_SECONDS)}
         if key == "TAUTULLI_TIMEOUT_SECONDS":
             return value == str(legacy_timeout_default)
         if key == "TAUTULLI_FETCH_SECONDS":
@@ -4045,12 +4227,18 @@ def _wipe_cache_files() -> None:
         os.environ.get("SONARR_CACHE_PATH", _default_arr_cache_path("sonarr")),
         os.environ.get("RADARR_CACHE_PATH", _default_arr_cache_path("radarr")),
         os.environ.get("TAUTULLI_METADATA_CACHE", _default_tautulli_metadata_cache_path()),
+        os.environ.get("JELLYFIN_CACHE_PATH", _default_jellyfin_cache_path()),
         os.environ.get("JELLYSTAT_CACHE_PATH", _default_jellystat_cache_path()),
+        os.environ.get("STREAMYSTATS_CACHE_PATH", _default_streamystats_cache_path()),
         os.environ.get("PLEX_CACHE_PATH", _default_plex_cache_path()),
         _tautulli_refresh_lock_path(),
         _tautulli_refresh_marker_path(),
+        _jellyfin_refresh_lock_path(),
+        _jellyfin_refresh_marker_path(),
         _jellystat_refresh_lock_path(),
         _jellystat_refresh_marker_path(),
+        _streamystats_refresh_lock_path(),
+        _streamystats_refresh_marker_path(),
         _plex_refresh_lock_path(),
         _plex_refresh_marker_path(),
     ]
@@ -4120,52 +4308,40 @@ def _apply_startup_migrations() -> None:
     if _startup_state["migrated"]:
         return
     _startup_state["migrated"] = True
+    _startup_state["migrating"] = True
 
-    state_path = _startup_state_path()
-    state = _load_startup_state(state_path)
-    previous_version = str(state.get("app_version") or "").strip()
-    version_changed = previous_version != APP_VERSION
-    upgrade_setup_required = bool(state.get("upgrade_setup_required", False))
-    enforced = _enforce_tautulli_lookup_defaults(ENV_FILE_PATH)
-    plex_enforced = _ensure_plex_client_id(ENV_FILE_PATH)
-    migrated_plaintext = _migrate_plaintext_secrets(ENV_FILE_PATH)
-    shadow_plaintext_cleaned = _enforce_shadow_plaintext_secret_cleanup(ENV_FILE_PATH)
-    plaintext_policy_enforced = _ensure_plaintext_secret_policy(ENV_FILE_PATH)
-    recovery_window_enforced = _enforce_unsafe_recovery_window(ENV_FILE_PATH)
-    secret_policy_flags_enforced = _enforce_secret_policy_flags(ENV_FILE_PATH)
-    cfg = _get_config()
-    if version_changed and _version_lt(previous_version, "0.8.3"):
-        # Existing installs upgraded from <=0.8.2.x must re-save setup once so
-        # the new secure defaults are persisted in a controlled UI flow.
-        if _config_complete(cfg):
-            upgrade_setup_required = True
-    if (
-        enforced
-        or plex_enforced
-        or plaintext_policy_enforced
-        or migrated_plaintext
-        or shadow_plaintext_cleaned
-        or recovery_window_enforced
-        or secret_policy_flags_enforced
-    ):
-        try:
-            _env_state["mtime"] = os.path.getmtime(ENV_FILE_PATH)
-        except OSError:
-            _env_state["mtime"] = None
-    if (
-        not version_changed
-        and not enforced
-        and not plex_enforced
-        and not plaintext_policy_enforced
-        and not migrated_plaintext
-        and not shadow_plaintext_cleaned
-        and not recovery_window_enforced
-        and not secret_policy_flags_enforced
-    ):
-        _upgrade_setup_required = bool(upgrade_setup_required)
-        return
-
-    if version_changed:
+    try:
+        state_path = _startup_state_path()
+        state = _load_startup_state(state_path)
+        previous_version = str(state.get("app_version") or "").strip()
+        version_changed = previous_version != APP_VERSION
+        upgrade_setup_required = bool(state.get("upgrade_setup_required", False))
+        enforced = _enforce_tautulli_lookup_defaults(ENV_FILE_PATH)
+        plex_enforced = _ensure_plex_client_id(ENV_FILE_PATH)
+        migrated_plaintext = _migrate_plaintext_secrets(ENV_FILE_PATH)
+        shadow_plaintext_cleaned = _enforce_shadow_plaintext_secret_cleanup(ENV_FILE_PATH)
+        plaintext_policy_enforced = _ensure_plaintext_secret_policy(ENV_FILE_PATH)
+        recovery_window_enforced = _enforce_unsafe_recovery_window(ENV_FILE_PATH)
+        secret_policy_flags_enforced = _enforce_secret_policy_flags(ENV_FILE_PATH)
+        cfg = _get_config()
+        if version_changed and _version_lt(previous_version, "0.8.3"):
+            # Existing installs upgraded from <=0.8.2.x must re-save setup once so
+            # the new secure defaults are persisted in a controlled UI flow.
+            if _config_complete(cfg):
+                upgrade_setup_required = True
+        if (
+            enforced
+            or plex_enforced
+            or plaintext_policy_enforced
+            or migrated_plaintext
+            or shadow_plaintext_cleaned
+            or recovery_window_enforced
+            or secret_policy_flags_enforced
+        ):
+            try:
+                _env_state["mtime"] = os.path.getmtime(ENV_FILE_PATH)
+            except OSError:
+                _env_state["mtime"] = None
         removed = _maybe_migrate_env_defaults(ENV_FILE_PATH)
         for key in removed:
             os.environ.pop(key, None)
@@ -4174,17 +4350,32 @@ def _apply_startup_migrations() -> None:
                 _env_state["mtime"] = os.path.getmtime(ENV_FILE_PATH)
             except OSError:
                 _env_state["mtime"] = None
+        if (
+            not version_changed
+            and not enforced
+            and not plex_enforced
+            and not plaintext_policy_enforced
+            and not migrated_plaintext
+            and not shadow_plaintext_cleaned
+            and not recovery_window_enforced
+            and not secret_policy_flags_enforced
+            and not removed
+        ):
+            _upgrade_setup_required = bool(upgrade_setup_required)
+            return
 
-    _cache.clear_all()
-    if version_changed or bool(state.get("upgrade_setup_required", False)) != bool(upgrade_setup_required):
-        _save_startup_state(
-            state_path,
-            {
-                "app_version": APP_VERSION,
-                "upgrade_setup_required": bool(upgrade_setup_required),
-            },
-        )
-    _upgrade_setup_required = bool(upgrade_setup_required)
+        _cache.clear_all()
+        if version_changed or bool(state.get("upgrade_setup_required", False)) != bool(upgrade_setup_required):
+            _save_startup_state(
+                state_path,
+                {
+                    "app_version": APP_VERSION,
+                    "upgrade_setup_required": bool(upgrade_setup_required),
+                },
+            )
+        _upgrade_setup_required = bool(upgrade_setup_required)
+    finally:
+        _startup_state["migrating"] = False
 
 
 def _collect_instance_indexes(prefix: str) -> list[int]:
@@ -4330,6 +4521,9 @@ def _get_config():
         tautulli_fetch_seconds = default_fetch_seconds
     else:
         tautulli_fetch_seconds = _read_int_env("TAUTULLI_FETCH_SECONDS", default_fetch_seconds)
+    jellyfin_timeout_seconds = _read_int_env("JELLYFIN_TIMEOUT_SECONDS", 60)
+    jellyfin_page_size = _read_int_env("JELLYFIN_PAGE_SIZE", 250)
+    jellyfin_history_page_size = _read_int_env("JELLYFIN_HISTORY_PAGE_SIZE", 250)
     jellystat_timeout_seconds = _read_int_env("JELLYSTAT_TIMEOUT_SECONDS", 60)
     jellystat_stats_page_size = _read_int_env("JELLYSTAT_STATS_PAGE_SIZE", 500)
     jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
@@ -4398,11 +4592,40 @@ def _get_config():
         "plex_history_last_viewed_at": _read_int_env("PLEX_HISTORY_LAST_VIEWED_AT", 0),
         "plex_cache_path": os.environ.get("PLEX_CACHE_PATH", _default_plex_cache_path()),
         "plex_refresh_stale_seconds": _read_int_env("PLEX_REFRESH_STALE_SECONDS", 3600),
+        "jellyfin_url": _normalize_url(os.environ.get("JELLYFIN_URL", "")),
+        "jellyfin_api_key": _resolve_secret_env("JELLYFIN_API_KEY", ""),
+        "jellyfin_api_key_configured": bool(_resolve_secret_env("JELLYFIN_API_KEY", "")),
+        "jellyfin_username": os.environ.get("JELLYFIN_USERNAME", "").strip(),
+        "jellyfin_password": _resolve_secret_env("JELLYFIN_PASSWORD", ""),
+        "jellyfin_password_configured": bool(_resolve_secret_env("JELLYFIN_PASSWORD", "")),
+        "jellyfin_user_id": os.environ.get("JELLYFIN_USER_ID", "").strip(),
+        "jellyfin_library_ids_sonarr": os.environ.get("JELLYFIN_LIBRARY_IDS_SONARR", "").strip(),
+        "jellyfin_library_ids_radarr": os.environ.get("JELLYFIN_LIBRARY_IDS_RADARR", "").strip(),
+        "jellyfin_cache_path": os.environ.get("JELLYFIN_CACHE_PATH", _default_jellyfin_cache_path()),
+        "jellyfin_timeout_seconds": jellyfin_timeout_seconds,
+        "jellyfin_page_size": jellyfin_page_size,
+        "jellyfin_history_page_size": jellyfin_history_page_size,
+        "jellyfin_refresh_stale_seconds": _read_int_env("JELLYFIN_REFRESH_STALE_SECONDS", 3600),
+        "streamystats_url": _normalize_url(os.environ.get("STREAMYSTATS_URL", "")),
+        "streamystats_api_key": _resolve_secret_env("STREAMYSTATS_API_KEY", ""),
+        "streamystats_api_key_configured": bool(_resolve_secret_env("STREAMYSTATS_API_KEY", "")),
+        "streamystats_server_id": os.environ.get("STREAMYSTATS_SERVER_ID", "").strip(),
+        "streamystats_username": os.environ.get("STREAMYSTATS_USERNAME", "").strip(),
+        "streamystats_password": _resolve_secret_env("STREAMYSTATS_PASSWORD", ""),
+        "streamystats_password_configured": bool(_resolve_secret_env("STREAMYSTATS_PASSWORD", "")),
+        "streamystats_cache_path": os.environ.get("STREAMYSTATS_CACHE_PATH", _default_streamystats_cache_path()),
+        "streamystats_timeout_seconds": _read_int_env("STREAMYSTATS_TIMEOUT_SECONDS", 45),
+        "streamystats_search_limit": _read_int_env("STREAMYSTATS_SEARCH_LIMIT", 8),
+        "streamystats_workers": max(_read_int_env("STREAMYSTATS_WORKERS", 4), 1),
+        "streamystats_refresh_stale_seconds": _read_int_env("STREAMYSTATS_REFRESH_STALE_SECONDS", 3600),
         "media_source_preference": _normalize_media_source_preference(
             os.environ.get("MEDIA_SOURCE_PREFERENCE", "arr")
         ),
         "history_source_preference": _normalize_history_source_preference(
             os.environ.get("HISTORY_SOURCE_PREFERENCE", "auto")
+        ),
+        "insights_provider_preference": _normalize_insights_provider_preference(
+            os.environ.get("INSIGHTS_PROVIDER_PREFERENCE", "auto")
         ),
         "tautulli_url": _normalize_url(os.environ.get("TAUTULLI_URL", "")),
         "tautulli_api_key": _resolve_secret_env("TAUTULLI_API_KEY", ""),
@@ -4629,6 +4852,8 @@ def _setup_test_slot_secret(cfg: dict, slot: str) -> tuple[str, str, str]:
         "radarr_3": ("radarr", str(cfg.get("radarr_url_3") or "").strip(), str(cfg.get("radarr_api_key_3") or "").strip()),
         "tautulli": ("tautulli", str(cfg.get("tautulli_url") or "").strip(), str(cfg.get("tautulli_api_key") or "").strip()),
         "jellystat": ("jellystat", str(cfg.get("jellystat_url") or "").strip(), str(cfg.get("jellystat_api_key") or "").strip()),
+        "streamystats": ("streamystats", str(cfg.get("streamystats_url") or "").strip(), str(cfg.get("streamystats_api_key") or "").strip()),
+        "jellyfin": ("jellyfin", str(cfg.get("jellyfin_url") or "").strip(), str(cfg.get("jellyfin_api_key") or "").strip()),
         "plex": ("plex", str(cfg.get("plex_url") or "").strip(), str(cfg.get("plex_token") or "").strip()),
     }
     return slot_map.get(normalized_slot, ("", "", ""))
@@ -4659,14 +4884,21 @@ def _resolve_setup_test_secret(
 
 def _normalize_media_source_preference(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "arr", "plex"}:
+    if normalized in {"auto", "arr", "plex", "jellyfin"}:
         return normalized
     return "arr"
 
 
 def _normalize_history_source_preference(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "tautulli", "jellystat", "plex"}:
+    if normalized in {"auto", "tautulli", "jellystat", "streamystats", "plex"}:
+        return normalized
+    return "auto"
+
+
+def _normalize_insights_provider_preference(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"auto", "plex", "jellyfin"}:
         return normalized
     return "auto"
 
@@ -4675,6 +4907,8 @@ def _configured_media_sources(cfg: dict) -> list[str]:
     sources: list[str] = []
     if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
         sources.append("arr")
+    if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        sources.append("jellyfin")
     if cfg.get("plex_url") and cfg.get("plex_token"):
         sources.append("plex")
     return sources
@@ -4686,6 +4920,8 @@ def _configured_history_sources(cfg: dict) -> list[str]:
         available.append("tautulli")
     if cfg.get("jellystat_url") and cfg.get("jellystat_api_key"):
         available.append("jellystat")
+    if cfg.get("streamystats_url") and cfg.get("streamystats_api_key") and _streamystats_credentials_ready_cfg(cfg):
+        available.append("streamystats")
     if cfg.get("plex_url") and cfg.get("plex_token"):
         available.append("plex")
     return available
@@ -4703,15 +4939,21 @@ def _playback_provider(cfg: dict) -> str:
 
 def _effective_media_source(cfg: dict) -> str:
     preferred = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+    if preferred == "jellyfin" and cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        return "jellyfin"
     if preferred == "plex" and cfg.get("plex_url") and cfg.get("plex_token"):
         return "plex"
     if preferred == "auto":
         if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
             return "arr"
+        if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+            return "jellyfin"
         if cfg.get("plex_url") and cfg.get("plex_token"):
             return "plex"
     if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
         return "arr"
+    if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        return "jellyfin"
     if cfg.get("plex_url") and cfg.get("plex_token"):
         return "plex"
     return ""
@@ -4724,7 +4966,8 @@ def _provider_option_set(cfg: dict) -> dict:
     history_selected = _playback_provider(cfg)
     has_arr = "arr" in media_available
     has_plex = "plex" in media_available
-    supports_tables = has_arr or media_selected == "plex"
+    has_jellyfin = "jellyfin" in media_available or "jellyfin" in history_available
+    supports_tables = has_arr or media_selected in {"plex", "jellyfin"}
     return {
         "configured": {
             "media_sources": media_available,
@@ -4740,17 +4983,47 @@ def _provider_option_set(cfg: dict) -> dict:
             "playback_overlay": bool(history_selected),
             "plex_insights": has_plex,
             "plex_live_events": has_plex,
+            "provider_insights": has_plex or has_jellyfin,
+            "provider_live_events": has_plex,
         },
     }
 
 
+def _playback_insights_provider(cfg: dict) -> str:
+    preferred = _normalize_insights_provider_preference(cfg.get("insights_provider_preference", "auto"))
+    if preferred == "plex" and cfg.get("plex_url") and cfg.get("plex_token"):
+        return "plex"
+    if preferred == "jellyfin" and cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        return "jellyfin"
+    provider = _playback_provider(cfg)
+    if provider in {"plex", "jellyfin"}:
+        return provider
+    media_source = _effective_media_source(cfg)
+    if media_source in {"plex", "jellyfin"}:
+        return media_source
+    if cfg.get("plex_url") and cfg.get("plex_token"):
+        return "plex"
+    if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        return "jellyfin"
+    return ""
+
+
 def _emit_startup_config_lints(cfg: dict) -> None:
+    if _startup_state.get("migrating"):
+        return
     if _startup_state["lints_emitted"]:
         return
     _startup_state["lints_emitted"] = True
 
     for key, replacement in _DEPRECATED_ENV_REPLACEMENTS.items():
-        if str(os.environ.get(key) or "").strip():
+        raw_value = str(os.environ.get(key) or "").strip()
+        if not raw_value:
+            continue
+        if key == "TAUTULLI_METADATA_LOOKUP_LIMIT" and raw_value == str(REQUIRED_TAUTULLI_LOOKUP_LIMIT):
+            continue
+        if key == "TAUTULLI_METADATA_LOOKUP_SECONDS" and raw_value == str(REQUIRED_TAUTULLI_LOOKUP_SECONDS):
+            continue
+        if raw_value:
             logger.warning(
                 "Deprecated config key in use: %s. Prefer %s.",
                 key,
@@ -4894,8 +5167,12 @@ def _emit_startup_config_lints(cfg: dict) -> None:
 
 
 def _playback_label(provider: str) -> str:
+    if provider == "jellyfin":
+        return "Jellyfin"
     if provider == "jellystat":
         return "Jellystat"
+    if provider == "streamystats":
+        return "Streamystats"
     if provider == "tautulli":
         return "Tautulli"
     if provider == "plex":
@@ -4909,8 +5186,12 @@ def _playback_enabled(cfg: dict) -> bool:
 
 def _get_playback_index_state(cfg: dict) -> tuple[str, dict | None, int]:
     provider = _playback_provider(cfg)
-    if provider == "jellystat":
+    if provider == "jellyfin":
+        data, ts = _cache.get_jellyfin_state()
+    elif provider == "jellystat":
         data, ts = _cache.get_jellystat_state()
+    elif provider == "streamystats":
+        data, ts = _cache.get_streamystats_state()
     elif provider == "tautulli":
         data, ts = _cache.get_tautulli_state()
     elif provider == "plex":
@@ -4922,10 +5203,14 @@ def _get_playback_index_state(cfg: dict) -> tuple[str, dict | None, int]:
 
 def _playback_refresh_in_progress(cfg: dict, provider: str | None = None) -> bool:
     provider = provider or _playback_provider(cfg)
+    if provider == "jellyfin":
+        return _jellyfin_refresh_in_progress(cfg)
     if provider == "tautulli":
         return _tautulli_refresh_in_progress(cfg)
     if provider == "jellystat":
         return _jellystat_refresh_in_progress(cfg)
+    if provider == "streamystats":
+        return _streamystats_refresh_in_progress(cfg)
     if provider == "plex":
         return _plex_refresh_in_progress(cfg)
     return False
@@ -4968,7 +5253,9 @@ def _invalidate_cache():
     for path in (
         cfg.get("sonarr_cache_path"),
         cfg.get("radarr_cache_path"),
+        cfg.get("jellyfin_cache_path"),
         cfg.get("jellystat_cache_path"),
+        cfg.get("streamystats_cache_path"),
         cfg.get("plex_cache_path"),
     ):
         if not path:
@@ -5040,12 +5327,126 @@ def _collect_cached_rows(app_name: str) -> tuple[list[dict], int]:
     return rows, latest_ts
 
 
+def _collect_rows_for_match_health(app_name: str, cfg: dict) -> tuple[list[dict], int]:
+    rows, latest_ts = _collect_cached_rows(app_name)
+    if rows:
+        return rows, latest_ts
+    provider = _media_fallback_provider(cfg, app_name)
+    if not provider:
+        return rows, latest_ts
+    try:
+        fallback_rows, _warning, _notice, _cold_cache = _get_media_fallback_rows(app_name, cfg, force=False)
+    except Exception:
+        return rows, latest_ts
+    fallback_ts = _collect_cache_latest_ts(app_name)
+    return fallback_rows or [], max(latest_ts, fallback_ts)
+
+
 def _collect_cache_latest_ts(app_name: str) -> int:
     latest_ts = 0
-    store = _cache.get_app_snapshot(app_name)
+    store = _cache.get_app_meta_snapshot(app_name)
     for entry in store.values():
         latest_ts = max(latest_ts, _safe_int(entry.get("ts")))
     return latest_ts
+
+
+def _collect_cached_counts(app_name: str) -> tuple[dict, int]:
+    latest_ts = 0
+    counts = {
+        "total": 0,
+        "matched": 0,
+        "unmatched": 0,
+        "skipped": 0,
+        "unavailable": 0,
+        "pending": 0,
+    }
+    store = _cache.get_app_meta_snapshot(app_name)
+    for entry in store.values():
+        latest_ts = max(latest_ts, _safe_int(entry.get("ts")))
+        match_counts = entry.get("match_counts") if isinstance(entry, dict) else {}
+        if not isinstance(match_counts, dict):
+            continue
+        for key in counts:
+            counts[key] += _safe_int(match_counts.get(key))
+    return counts, latest_ts
+
+
+def _merge_count_item_lists(*lists: list[dict]) -> list[dict]:
+    counts: dict[str, int] = {}
+    for items in lists:
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = str(item.get("label") or "").strip()
+            count = _safe_int(item.get("count"))
+            if not label or count <= 0:
+                continue
+            counts[label] = counts.get(label, 0) + count
+    return _sorted_count_items(counts)
+
+
+def _collect_cached_existing_match_health(app_name: str) -> tuple[dict, int]:
+    latest_ts = 0
+    combined_counts = {
+        "total": 0,
+        "matched": 0,
+        "unmatched": 0,
+        "skipped": 0,
+        "unavailable": 0,
+        "pending": 0,
+    }
+    all_buckets: list[dict] = []
+    all_reasons: list[dict] = []
+    merged_entries: dict[str, dict] = {}
+    store = _cache.get_app_meta_snapshot(app_name)
+    for key, entry in store.items():
+        if isinstance(entry, dict):
+            merged_entries[str(key)] = entry
+    cfg = _get_config()
+    disk_cache = _load_arr_cache(cfg.get(f"{app_name}_cache_path") or "")
+    for key, entry in disk_cache.items():
+        if str(key) not in merged_entries and isinstance(entry, dict):
+            merged_entries[str(key)] = entry
+    for entry in merged_entries.values():
+        latest_ts = max(latest_ts, _safe_int(entry.get("ts")))
+        summary = entry.get("match_health_summary") if isinstance(entry, dict) else {}
+        if not isinstance(summary, dict):
+            continue
+        counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+        for key in combined_counts:
+            combined_counts[key] += _safe_int(counts.get(key))
+        all_buckets.extend(summary.get("buckets") if isinstance(summary.get("buckets"), list) else [])
+        all_reasons.extend(summary.get("reasons") if isinstance(summary.get("reasons"), list) else [])
+    return {
+        "counts": combined_counts,
+        "buckets": _merge_count_item_lists(all_buckets),
+        "reasons": _merge_count_item_lists(all_reasons),
+    }, latest_ts
+
+
+def _fallback_media_cache_info(app_name: str, cfg: dict) -> dict:
+    provider = _media_fallback_provider(cfg, app_name)
+    if provider == "jellyfin":
+        memory_data, memory_ts = _cache.get_jellyfin_state()
+        disk_info = _cache_file_info(cfg.get("jellyfin_cache_path"))
+        return {
+            "provider": provider,
+            "memory_ts": _safe_int(memory_ts) if memory_data else 0,
+            "disk_ts": _safe_int(disk_info.get("ts")),
+            "disk_age_seconds": disk_info.get("age_seconds"),
+        }
+    if provider == "plex":
+        memory_data, memory_ts = _cache.get_plex_state()
+        disk_info = _cache_file_info(cfg.get("plex_cache_path"))
+        return {
+            "provider": provider,
+            "memory_ts": _safe_int(memory_ts) if memory_data else 0,
+            "disk_ts": _safe_int(disk_info.get("ts")),
+            "disk_age_seconds": disk_info.get("age_seconds"),
+        }
+    return {"provider": "", "memory_ts": 0, "disk_ts": 0, "disk_age_seconds": None}
 
 
 def _reset_tautulli_match_progress() -> None:
@@ -5112,6 +5513,28 @@ def _summarize_match_counts(rows: list[dict]) -> dict:
     counted = counts["matched"] + counts["unmatched"] + counts["skipped"] + counts["unavailable"]
     counts["pending"] = max(counts["total"] - counted, 0)
     return counts
+
+
+def _summarize_existing_match_health(rows: list[dict]) -> dict:
+    counts = _summarize_match_counts(rows or [])
+    bucket_counts: dict[str, int] = {}
+    reason_counts: dict[str, int] = {}
+    for row in rows or []:
+        status = str(row.get("TautulliMatchStatus") or "").strip().lower()
+        reason = str(row.get("TautulliMatchReason") or "").strip()
+        if not reason:
+            continue
+        if status == "matched":
+            label = reason[11:].strip() if reason.lower().startswith("matched by ") else reason
+            if label:
+                bucket_counts[label] = bucket_counts.get(label, 0) + 1
+        elif status in {"unmatched", "skipped", "unavailable"}:
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+    return {
+        "counts": counts,
+        "buckets": _sorted_count_items(bucket_counts),
+        "reasons": _sorted_count_items(reason_counts),
+    }
 
 
 def _sorted_count_items(counts: dict, limit: int = 6) -> list[dict]:
@@ -6285,7 +6708,9 @@ def _build_strict_title_year_id_map(
 
 
 TAUTULLI_METADATA_CACHE_VERSION = 1
+JELLYFIN_CACHE_VERSION = 1
 JELLYSTAT_CACHE_VERSION = 1
+STREAMYSTATS_CACHE_VERSION = 1
 PLEX_CACHE_VERSION = 1
 ARR_CACHE_VERSION = 1
 
@@ -6298,6 +6723,16 @@ def _default_tautulli_metadata_cache_path() -> str:
 def _default_jellystat_cache_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH)
     return os.path.join(base_dir, "Sortarr.jellystat_cache.json")
+
+
+def _default_jellyfin_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.jellyfin_cache.json")
+
+
+def _default_streamystats_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.streamystats_cache.json")
 
 
 def _default_plex_cache_path() -> str:
@@ -6414,6 +6849,112 @@ def _save_jellystat_cache(path: str, index: dict, ts: float | int) -> None:
         os.replace(tmp_path, path)
     except OSError:
         logger.warning("Failed to write Jellystat cache (path redacted).")
+
+
+def _load_jellyfin_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, JELLYFIN_CACHE_VERSION):
+        return None
+
+    if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
+        return {
+            "index": _restore_index_keys(payload.get("index")),
+            "ts": _safe_int(payload.get("ts")),
+        }
+    if isinstance(payload, dict):
+        return {"index": _restore_index_keys(payload), "ts": 0}
+    return None
+
+
+def _save_jellyfin_cache(path: str, index: dict, ts: float | int) -> None:
+    if not path:
+        return
+    payload = {
+        "version": JELLYFIN_CACHE_VERSION,
+        "ts": _safe_int(ts),
+        "index": _stringify_index_keys(index),
+    }
+    tmp_path = ""
+    try:
+        cache_dir = os.path.dirname(path) or os.getcwd()
+        os.makedirs(cache_dir, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=cache_dir,
+            prefix=f"{os.path.basename(path)}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            tmp_path = handle.name
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        last_error = None
+        for attempt in range(5):
+            try:
+                os.replace(tmp_path, path)
+                tmp_path = ""
+                break
+            except OSError as exc:
+                last_error = exc
+                if attempt >= 4:
+                    raise
+                time.sleep(0.1 * (attempt + 1))
+        if last_error:
+            logger.debug("Jellyfin cache replace recovered after retry (%s).", type(last_error).__name__)
+    except OSError:
+        if tmp_path:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+        logger.warning("Failed to write Jellyfin cache (path redacted).")
+
+
+def _load_streamystats_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, STREAMYSTATS_CACHE_VERSION):
+        return None
+
+    if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
+        index = _restore_index_keys(payload.get("index"))
+        ts = _safe_int(payload.get("ts"))
+        return {"index": index, "ts": ts}
+    if isinstance(payload, dict):
+        return {"index": _restore_index_keys(payload), "ts": 0}
+    return None
+
+
+def _save_streamystats_cache(path: str, index: dict, ts: float | int) -> None:
+    if not path:
+        return
+    payload = {
+        "version": STREAMYSTATS_CACHE_VERSION,
+        "ts": _safe_int(ts),
+        "index": _stringify_index_keys(index),
+    }
+    try:
+        cache_dir = os.path.dirname(path) or os.getcwd()
+        os.makedirs(cache_dir, exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.warning("Failed to write Streamystats cache (path redacted).")
 
 
 def _load_plex_cache(path: str) -> dict | None:
@@ -6574,6 +7115,11 @@ def _load_arr_cache(path: str) -> dict[str, dict]:
         cache[str(key)] = {
             "ts": _safe_int(entry.get("ts")),
             "tautulli_index_ts": _safe_int(entry.get("tautulli_index_ts")),
+            "match_counts": CacheManager._normalize_match_counts(entry.get("match_counts"), data),
+            "match_health_summary": CacheManager._normalize_match_health_summary(
+                entry.get("match_health_summary"),
+                data,
+            ),
             "data": data,
         }
     return cache
@@ -6590,6 +7136,11 @@ def _clone_arr_cache(cache: dict[str, dict]) -> dict[str, dict]:
         snapshot[str(key)] = {
             "ts": _safe_int(entry.get("ts")),
             "tautulli_index_ts": _safe_int(entry.get("tautulli_index_ts")),
+            "match_counts": CacheManager._normalize_match_counts(entry.get("match_counts"), data if isinstance(data, list) else []),
+            "match_health_summary": CacheManager._normalize_match_health_summary(
+                entry.get("match_health_summary"),
+                data if isinstance(data, list) else [],
+            ),
             "data": _clone_rows(data if isinstance(data, list) else []),
         }
     return snapshot
@@ -6736,6 +7287,475 @@ def _jellystat_request(
     if isinstance(data, dict) and data.get("error"):
         raise RuntimeError(data.get("error") or "Jellystat request failed")
     return data
+
+
+def _streamystats_request(
+    base_url: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    method: str = "GET",
+    headers: dict | None = None,
+):
+    base_url = _validated_service_base_url(base_url, "Streamystats")
+    route = path if path.startswith("/") else f"/{path}"
+    url = f"{base_url.rstrip('/')}{route}"
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
+    http = session or _http
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    r = http.request(
+        method,
+        url,
+        params=params,
+        json=payload if method.upper() != "GET" else None,
+        headers=request_headers,
+        timeout=request_timeout,
+    )
+    r.raise_for_status()
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise RuntimeError("Streamystats response was not JSON") from exc
+
+
+def _streamystats_get(
+    base_url: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    headers: dict | None = None,
+):
+    return _streamystats_request(
+        base_url,
+        path,
+        params=params,
+        timeout=timeout,
+        session=session,
+        method="GET",
+        headers=headers,
+    )
+
+
+def _streamystats_post(
+    base_url: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    headers: dict | None = None,
+):
+    return _streamystats_request(
+        base_url,
+        path,
+        params=params,
+        payload=payload,
+        timeout=timeout,
+        session=session,
+        method="POST",
+        headers=headers,
+    )
+
+
+def _streamystats_api_key_header(api_key: str) -> dict[str, str]:
+    secret = str(api_key or "").strip()
+    if not secret:
+        raise RuntimeError("Streamystats API key is not set")
+    return {"Authorization": f"Bearer {secret}"}
+
+
+def _streamystats_media_browser_headers(token: str) -> dict[str, str]:
+    access_token = str(token or "").strip()
+    if not access_token:
+        raise RuntimeError("Streamystats Jellyfin user token is not set")
+    return {"Authorization": _jellyfin_auth_header(token=access_token)}
+
+
+def _streamystats_fetch_servers(
+    base_url: str,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    data = _streamystats_get(base_url, "/api/servers", timeout=timeout, session=session)
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        items = data.get("servers") or data.get("data")
+        if isinstance(items, list):
+            return [item for item in items if isinstance(item, dict)]
+    raise RuntimeError("Streamystats servers response was not an array")
+
+
+def _streamystats_resolve_server(
+    cfg: dict,
+    *,
+    session: requests.Session | None = None,
+    timeout: int | float | None = None,
+    force: bool = False,
+) -> dict:
+    base_url = str(cfg.get("streamystats_url") or "").strip()
+    if not base_url:
+        raise RuntimeError("Streamystats URL is not configured")
+    cache_key = base_url.rstrip("/")
+    if not force and isinstance(_streamystats_server_cache.get(cache_key), dict):
+        return dict(_streamystats_server_cache[cache_key])
+
+    servers = _streamystats_fetch_servers(base_url, timeout=timeout, session=session)
+    if not servers:
+        raise RuntimeError("Streamystats has no configured servers")
+
+    wanted_server_id = str(cfg.get("streamystats_server_id") or "").strip()
+    jellyfin_url = _normalize_url(cfg.get("jellyfin_url") or "")
+    match = None
+    if wanted_server_id:
+        match = next(
+            (item for item in servers if str(item.get("id") or item.get("serverId") or "").strip() == wanted_server_id),
+            None,
+        )
+    if match is None and jellyfin_url:
+        match = next(
+            (
+                item
+                for item in servers
+                if _normalize_url(item.get("url") or item.get("serverUrl") or "") == jellyfin_url
+            ),
+            None,
+        )
+    if match is None and len(servers) == 1:
+        match = servers[0]
+    if match is None:
+        raise RuntimeError("Unable to resolve Streamystats server. Set STREAMYSTATS_SERVER_ID.")
+    _streamystats_server_cache[cache_key] = dict(match)
+    return dict(match)
+
+
+def _streamystats_jellyfin_credentials(cfg: dict) -> tuple[str, str]:
+    username = str(cfg.get("streamystats_username") or cfg.get("jellyfin_username") or "").strip()
+    password = str(cfg.get("streamystats_password") or cfg.get("jellyfin_password") or "").strip()
+    return username, password
+
+
+def _streamystats_credentials_ready_cfg(cfg: dict) -> bool:
+    username, password = _streamystats_jellyfin_credentials(cfg)
+    return bool(username and password)
+
+
+def _streamystats_user_access_token(
+    cfg: dict,
+    *,
+    force: bool = False,
+    session: requests.Session | None = None,
+    timeout: int | float | None = None,
+) -> tuple[str, str]:
+    server = _streamystats_resolve_server(cfg, session=session, timeout=timeout, force=force)
+    jellyfin_url = _normalize_url(server.get("url") or server.get("serverUrl") or cfg.get("jellyfin_url") or "")
+    username, password = _streamystats_jellyfin_credentials(cfg)
+    if not (jellyfin_url and username and password):
+        return "", ""
+    cache_key = {
+        "jellyfin_url": jellyfin_url,
+        "username": username,
+        "password": password,
+    }
+    if (
+        not force
+        and _streamystats_auth_cache.get("token")
+        and _streamystats_auth_cache.get("user_id")
+        and all(_streamystats_auth_cache.get(k) == v for k, v in cache_key.items())
+    ):
+        return str(_streamystats_auth_cache.get("token") or ""), str(_streamystats_auth_cache.get("user_id") or "")
+    payload = _jellyfin_authenticate(jellyfin_url, username, password, timeout=timeout, session=session)
+    token = str(payload.get("AccessToken") or "").strip()
+    user = payload.get("User") if isinstance(payload.get("User"), dict) else {}
+    user_id = str(user.get("Id") or "").strip()
+    _streamystats_auth_cache.update({**cache_key, "token": token, "user_id": user_id})
+    return token, user_id
+
+
+def _streamystats_search(
+    base_url: str,
+    token: str,
+    query: str,
+    media_type: str,
+    *,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    limit: int = 8,
+) -> list[dict]:
+    filter_type = "series" if media_type == "show" else "movies"
+    data = _streamystats_get(
+        base_url,
+        "/api/search",
+        params={
+            "q": query,
+            "type": filter_type,
+            "limit": max(int(limit or 1), 1),
+        },
+        timeout=timeout,
+        session=session,
+        headers=_streamystats_media_browser_headers(token),
+    )
+    payload = data.get("data") if isinstance(data, dict) else None
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+    return [item for item in items if isinstance(item, dict)]
+
+
+def _streamystats_get_item_details(
+    base_url: str,
+    api_key: str,
+    server_id: str,
+    item_id: str,
+    *,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> dict:
+    return _streamystats_get(
+        base_url,
+        f"/api/get-item-details/{quote(str(item_id or '').strip())}",
+        params={"serverId": str(server_id or "").strip()},
+        timeout=timeout,
+        session=session,
+        headers=_streamystats_api_key_header(api_key),
+    )
+
+
+def _streamystats_test_connection(
+    cfg: dict,
+    *,
+    timeout: int = 10,
+) -> str | None:
+    try:
+        base_url = str(cfg.get("streamystats_url") or "").strip()
+        api_key = str(cfg.get("streamystats_api_key") or "").strip()
+        if not base_url:
+            return "Connection failed. URL must use http:// or https://."
+        if not api_key:
+            return "Connection failed. API key is required."
+        if not _streamystats_credentials_ready_cfg(cfg):
+            return "Connection failed. Jellyfin username and password are required."
+        with requests.Session() as session:
+            server = _streamystats_resolve_server(cfg, session=session, timeout=timeout, force=True)
+            server_id = str(server.get("id") or server.get("serverId") or "").strip()
+            if not server_id:
+                raise RuntimeError("Streamystats did not return a server id")
+            token, _ = _streamystats_user_access_token(cfg, force=True, session=session, timeout=timeout)
+            if token:
+                _streamystats_search(
+                    base_url,
+                    token,
+                    "matrix",
+                    "movie",
+                    timeout=timeout,
+                    session=session,
+                    limit=1,
+                )
+            return None
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"Connection failed (HTTP {status})."
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Streamystats connection test failed (%s).", type(exc).__name__)
+        return _sanitize_connection_test_failure(_safe_exception_message(exc), "credentials")
+
+
+def _jellyfin_auth_header(
+    token: str | None = None,
+    client: str = APP_NAME,
+    device: str = "Sortarr",
+    device_id: str = "sortarr-local",
+    version: str = APP_VERSION,
+) -> str:
+    parts = [
+        f'Client="{str(client or APP_NAME).replace(chr(34), "")}"',
+        f'Device="{str(device or "Sortarr").replace(chr(34), "")}"',
+        f'DeviceId="{str(device_id or "sortarr-local").replace(chr(34), "")}"',
+        f'Version="{str(version or APP_VERSION).replace(chr(34), "")}"',
+    ]
+    if token:
+        parts.append(f'Token="{str(token).replace(chr(34), "")}"')
+    return "MediaBrowser " + ", ".join(parts)
+
+
+def _jellyfin_request(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str = "",
+    access_token: str = "",
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    method: str = "GET",
+    auth_mode: str = "api_key",
+    headers: dict | None = None,
+):
+    base_url = _validated_service_base_url(base_url, "Jellyfin")
+    route = path if path.startswith("/") else f"/{path}"
+    url = f"{base_url.rstrip('/')}{route}"
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
+    http = session or _http
+    request_params = dict(params or {})
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    if auth_mode == "user_token":
+        if not access_token:
+            raise RuntimeError("Jellyfin user access token is not set")
+        request_headers["Authorization"] = _jellyfin_auth_header(token=access_token)
+    elif auth_mode == "api_key":
+        if not api_key:
+            raise RuntimeError("Jellyfin API key is not set")
+        request_params["api_key"] = api_key
+    r = http.request(
+        method,
+        url,
+        params=request_params,
+        json=payload if method.upper() != "GET" else None,
+        headers=request_headers,
+        timeout=request_timeout,
+    )
+    r.raise_for_status()
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise RuntimeError("Jellyfin response was not JSON") from exc
+
+
+def _jellyfin_get(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str = "",
+    access_token: str = "",
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    auth_mode: str = "api_key",
+):
+    return _jellyfin_request(
+        base_url,
+        path,
+        api_key=api_key,
+        access_token=access_token,
+        params=params,
+        timeout=timeout,
+        session=session,
+        method="GET",
+        auth_mode=auth_mode,
+    )
+
+
+def _jellyfin_post(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str = "",
+    access_token: str = "",
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    auth_mode: str = "api_key",
+    headers: dict | None = None,
+):
+    return _jellyfin_request(
+        base_url,
+        path,
+        api_key=api_key,
+        access_token=access_token,
+        params=params,
+        payload=payload,
+        timeout=timeout,
+        session=session,
+        method="POST",
+        auth_mode=auth_mode,
+        headers=headers,
+    )
+
+
+def _jellyfin_authenticate(
+    base_url: str,
+    username: str,
+    password: str,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> dict:
+    base_url = _validated_service_base_url(base_url, "Jellyfin")
+    if not username or not password:
+        raise RuntimeError("Jellyfin username and password are not set")
+    return _jellyfin_post(
+        base_url,
+        "/Users/AuthenticateByName",
+        payload={"Username": username, "Pw": password},
+        timeout=timeout,
+        session=session,
+        auth_mode="none",
+        headers={"Authorization": _jellyfin_auth_header()},
+    )
+
+
+def _jellyfin_user_access_token(cfg: dict, force: bool = False) -> tuple[str, str]:
+    base_url = str(cfg.get("jellyfin_url") or "").strip()
+    username = str(cfg.get("jellyfin_username") or "").strip()
+    password = str(cfg.get("jellyfin_password") or "").strip()
+    if not (base_url and username and password):
+        return "", ""
+    cache_key = {
+        "base_url": base_url,
+        "username": username,
+        "password": password,
+    }
+    if (
+        not force
+        and _jellyfin_auth_cache.get("token")
+        and _jellyfin_auth_cache.get("user_id")
+        and all(_jellyfin_auth_cache.get(k) == v for k, v in cache_key.items())
+    ):
+        return str(_jellyfin_auth_cache.get("token") or ""), str(_jellyfin_auth_cache.get("user_id") or "")
+    payload = _jellyfin_authenticate(base_url, username, password, timeout=_safe_int(cfg.get("jellyfin_timeout_seconds")))
+    token = str(payload.get("AccessToken") or "").strip()
+    user = payload.get("User") if isinstance(payload.get("User"), dict) else {}
+    user_id = str(user.get("Id") or "").strip()
+    _jellyfin_auth_cache.update({**cache_key, "token": token, "user_id": user_id})
+    return token, user_id
+
+
+def _jellyfin_test_connection(
+    base_url: str,
+    api_key: str,
+    username: str = "",
+    password: str = "",
+    timeout: int = 10,
+) -> str | None:
+    try:
+        _jellyfin_get(base_url, "/Users", api_key=api_key, timeout=timeout)
+        if username and password:
+            auth = _jellyfin_authenticate(base_url, username, password, timeout=timeout)
+            token = str(auth.get("AccessToken") or "").strip()
+            if token:
+                _jellyfin_get(base_url, "/Users/Me", access_token=token, auth_mode="user_token", timeout=timeout)
+        return None
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"Connection failed (HTTP {status})."
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Jellyfin connection test failed (%s).", type(exc).__name__)
+        return _sanitize_connection_test_failure(_safe_exception_message(exc), "credentials")
 
 
 def _plex_request(
@@ -7302,6 +8322,398 @@ def _jellystat_build_history_index(
         seen = set()
         _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
     return index
+
+
+def _jellyfin_item_year(item: dict) -> str:
+    year = str(item.get("ProductionYear") or "").strip()
+    if year and year.isdigit():
+        return year
+    date_value = item.get("PremiereDate") or item.get("DateCreated") or item.get("LastPlayedDate") or ""
+    date_text = str(date_value or "").strip()
+    if len(date_text) >= 4 and date_text[:4].isdigit():
+        return date_text[:4]
+    return ""
+
+
+def _jellyfin_ticks_to_seconds(value) -> int:
+    ticks = _safe_int(value)
+    if ticks <= 0:
+        return 0
+    return int(round(ticks / 10_000_000.0))
+
+
+def _format_seconds_hhmmss(value) -> str:
+    total_seconds = _safe_int(value)
+    if total_seconds <= 0:
+        return ""
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:d}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes:d}:{seconds:02d}"
+
+
+def _jellyfin_provider_ids(item: dict) -> dict[str, str]:
+    provider_ids = item.get("ProviderIds") if isinstance(item.get("ProviderIds"), dict) else {}
+    ids = {
+        "tvdb": str(provider_ids.get("Tvdb") or provider_ids.get("tvdb") or "").strip(),
+        "tmdb": str(provider_ids.get("Tmdb") or provider_ids.get("tmdb") or "").strip(),
+        "imdb": str(provider_ids.get("Imdb") or provider_ids.get("imdb") or "").strip(),
+    }
+    return {key: value for key, value in ids.items() if value}
+
+
+def _jellyfin_raw_stats_from_item(item: dict) -> dict:
+    user_data = item.get("UserData") if isinstance(item.get("UserData"), dict) else {}
+    play_count = _safe_int(user_data.get("PlayCount"))
+    last_epoch = _parse_iso_epoch(user_data.get("LastPlayedDate"))
+    users_watched = 1 if play_count > 0 or last_epoch > 0 else 0
+    return {
+        "play_count": play_count,
+        "users_watched": users_watched,
+        "last_epoch": last_epoch,
+        "total_seconds": 0,
+        "duration_seconds": 0,
+        "total_seconds_source": "",
+    }
+
+
+def _jellyfin_build_index(items: list[dict], media_type: str) -> dict:
+    index = {
+        "tvdb": {},
+        "tmdb": {},
+        "imdb": {},
+        "title_year": {},
+        "title": {},
+        "title_year_relaxed": {},
+        "title_relaxed": {},
+        "title_year_variant": {},
+        "title_variant": {},
+    }
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    for item in items or []:
+        item_type = str(item.get("Type") or "").strip().lower()
+        if media_type == "show" and item_type != "series":
+            continue
+        if media_type == "movie" and item_type != "movie":
+            continue
+        raw = _jellyfin_raw_stats_from_item(item)
+        ids = _jellyfin_provider_ids(item)
+        if ids.get("tvdb"):
+            _tautulli_merge_raw(index["tvdb"].setdefault(str(ids["tvdb"]), {}), raw)
+        if ids.get("tmdb"):
+            _tautulli_merge_raw(index["tmdb"].setdefault(str(ids["tmdb"]), {}), raw)
+        if ids.get("imdb"):
+            _tautulli_merge_raw(index["imdb"].setdefault(str(ids["imdb"]), {}), raw)
+        title = str(item.get("Name") or "").strip()
+        year = _jellyfin_item_year(item)
+        seen = set()
+        _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
+    return index
+
+
+def _jellyfin_build_id_map(items: list[dict], media_type: str) -> dict[str, dict]:
+    id_map: dict[str, dict] = {}
+    for item in items or []:
+        item_id = str(item.get("Id") or "").strip()
+        if not item_id:
+            continue
+        id_map[item_id] = {
+            "title": str(item.get("Name") or "").strip(),
+            "year": _jellyfin_item_year(item),
+            "media_type": media_type,
+        }
+    return id_map
+
+
+def _jellyfin_resolution_label(stream: dict) -> str:
+    width = _safe_int(stream.get("Width"))
+    height = _safe_int(stream.get("Height"))
+    if width > 0 and height > 0:
+        return f"{width}x{height}p"
+    if height > 0:
+        return f"{height}p"
+    return ""
+
+
+def _jellyfin_video_quality(stream: dict) -> str:
+    height = _safe_int(stream.get("Height"))
+    if height >= 2160:
+        return "4K"
+    if height >= 1440:
+        return "1440p"
+    if height >= 1080:
+        return "1080p"
+    if height >= 720:
+        return "720p"
+    if height > 0:
+        return f"{height}p"
+    return ""
+
+
+def _jellyfin_video_hdr(stream: dict) -> str:
+    value = str(stream.get("VideoRangeType") or stream.get("VideoRange") or "").strip()
+    if value.lower() in {"", "unknown", "sdr"}:
+        return ""
+    return value
+
+
+def _jellyfin_item_file_bytes(item: dict) -> int:
+    media_sources = item.get("MediaSources") if isinstance(item.get("MediaSources"), list) else []
+    for source in media_sources:
+        if not isinstance(source, dict):
+            continue
+        size = _safe_int(source.get("Size"))
+        if size > 0:
+            return size
+    size = _safe_int(item.get("Size"))
+    if size > 0:
+        return size
+    path = str(item.get("Path") or "").strip()
+    if not path:
+        return 0
+    try:
+        if os.path.exists(path):
+            return os.path.getsize(path)
+    except OSError:
+        return 0
+    return 0
+
+
+def _jellyfin_media_summary_from_item(item: dict) -> dict:
+    streams = item.get("MediaStreams") if isinstance(item.get("MediaStreams"), list) else []
+    media_sources = item.get("MediaSources") if isinstance(item.get("MediaSources"), list) else []
+    primary_source = media_sources[0] if media_sources and isinstance(media_sources[0], dict) else {}
+    video_streams = [stream for stream in streams if str(stream.get("Type") or "").lower() == "video"]
+    audio_streams = [stream for stream in streams if str(stream.get("Type") or "").lower() == "audio"]
+    subtitle_streams = [stream for stream in streams if str(stream.get("Type") or "").lower() == "subtitle"]
+    primary_video = video_streams[0] if video_streams else {}
+    primary_audio = audio_streams[0] if audio_streams else {}
+    duration_seconds = _jellyfin_ticks_to_seconds(item.get("RunTimeTicks") or item.get("CumulativeRunTimeTicks"))
+    resolution = _jellyfin_resolution_label(primary_video)
+    bitrate_mbps = 0.0
+    video_bitrate_mbps = 0.0
+    audio_bitrate_mbps = 0.0
+    video_bit_rate = _safe_int(primary_video.get("BitRate"))
+    audio_bit_rate = _safe_int(primary_audio.get("BitRate"))
+    total_bit_rate = _safe_int(primary_source.get("Bitrate")) or video_bit_rate or audio_bit_rate
+    if video_bit_rate > 0:
+        video_bitrate_mbps = round(video_bit_rate / 1_000_000.0, 2)
+    if audio_bit_rate > 0:
+        audio_bitrate_mbps = round(audio_bit_rate / 1_000_000.0, 2)
+    bit_rate = total_bit_rate
+    if bit_rate > 0:
+        bitrate_mbps = round(bit_rate / 1_000_000.0, 2)
+    return {
+        "durationSeconds": duration_seconds,
+        "fileBytes": _jellyfin_item_file_bytes(item),
+        "videoQuality": _jellyfin_video_quality(primary_video),
+        "resolution": resolution,
+        "videoCodec": str(primary_video.get("Codec") or "").strip(),
+        "videoHDR": _jellyfin_video_hdr(primary_video),
+        "audioCodec": str(primary_audio.get("Codec") or "").strip(),
+        "audioChannels": _plex_audio_channels_label(primary_audio.get("Channels")),
+        "audioLanguages": [str(stream.get("Language") or "").strip() for stream in audio_streams if stream.get("Language")],
+        "subtitleLanguages": [str(stream.get("Language") or "").strip() for stream in subtitle_streams if stream.get("Language")],
+        "bitrateMbps": bitrate_mbps,
+        "videoBitrateMbps": video_bitrate_mbps,
+        "audioBitrateMbps": audio_bitrate_mbps,
+        "frameRateFps": _normalize_frame_rate_fps(
+            primary_video.get("RealFrameRate") or primary_video.get("AverageFrameRate")
+        ),
+    }
+
+
+def _jellyfin_build_media_index(series_items: list[dict], episode_items: list[dict], movie_items: list[dict]) -> dict:
+    shows_index = _jellyfin_build_index(series_items, "show")
+    movies_index = _jellyfin_build_index(movie_items, "movie")
+    episodes_by_series: dict[str, list[dict]] = {}
+    for item in episode_items or []:
+        series_id = str(item.get("SeriesId") or "").strip()
+        if not series_id:
+            continue
+        episodes_by_series.setdefault(series_id, []).append(item)
+    shows_index["_meta_items"] = series_items
+    shows_index["_episodes_by_series"] = episodes_by_series
+    movies_index["_meta_items"] = movie_items
+    return {
+        "shows": shows_index,
+        "movies": movies_index,
+        "meta": {
+            "show_id_map": _jellyfin_build_id_map(series_items, "show"),
+            "movie_id_map": _jellyfin_build_id_map(movie_items, "movie"),
+        },
+    }
+
+
+def _jellyfin_episode_payload(item: dict) -> dict:
+    summary = _jellyfin_media_summary_from_item(item)
+    duration_seconds = _safe_int(summary.get("durationSeconds"))
+    file_bytes = _safe_int(summary.get("fileBytes"))
+    file_size_gib = _bytes_to_gib(file_bytes) if file_bytes > 0 else ""
+    episode_number = _safe_int(item.get("IndexNumber"))
+    season_number = _safe_int(item.get("ParentIndexNumber"))
+    return {
+        "episodeId": _stable_media_item_id("jellyfin-episode", str(item.get("Id") or "").strip(), season_number, episode_number),
+        "seasonNumber": season_number,
+        "episodeNumber": episode_number,
+        "title": str(item.get("Name") or "").strip(),
+        "overview": str(item.get("Overview") or "").strip(),
+        "airDate": str(item.get("PremiereDate") or "").strip(),
+        "airDateUtc": str(item.get("PremiereDate") or "").strip(),
+        "runtimeMins": round(duration_seconds / 60.0, 2) if duration_seconds > 0 else 0,
+        "lastSearchTime": "",
+        "monitored": True,
+        "hasFile": bool(item.get("Path") or file_bytes > 0),
+        "fileSizeGiB": file_size_gib,
+        "quality": str(summary.get("videoQuality") or ""),
+        "resolution": str(summary.get("resolution") or ""),
+        "videoCodec": str(summary.get("videoCodec") or ""),
+        "audioCodec": str(summary.get("audioCodec") or ""),
+        "audioChannels": str(summary.get("audioChannels") or ""),
+        "audioLanguages": _merge_language_values([summary.get("audioLanguages") or []]),
+        "subtitleLanguages": _merge_language_values([summary.get("subtitleLanguages") or []]),
+        "bitrateMbps": _safe_float(summary.get("bitrateMbps")) or "",
+        "bitrateEstimated": False,
+        "frameRateFps": _safe_float(summary.get("frameRateFps")) or "",
+        "frameRateEstimated": False,
+        "bitsPerPixelPerFrame": _bits_per_pixel_per_frame(
+            _safe_float(summary.get("bitrateMbps")),
+            str(summary.get("resolution") or ""),
+            _safe_float(summary.get("frameRateFps")),
+        ) or "",
+        "bitsPerPixelPerFrameEstimated": False,
+        "customFormats": "",
+        "customFormatScore": "",
+        "qualityCutoffNotMet": False,
+        "releaseGroup": "",
+        "path": str(item.get("Path") or "").strip(),
+    }
+
+
+def _jellyfin_season_payloads(index: dict, series_item_id: str, include_specials: bool = True) -> list[dict]:
+    shows_index = index.get("shows") if isinstance(index, dict) else {}
+    episodes_by_series = shows_index.get("_episodes_by_series") if isinstance(shows_index, dict) else {}
+    episodes = episodes_by_series.get(str(series_item_id or "").strip(), []) if isinstance(episodes_by_series, dict) else []
+    seasons: dict[int, dict] = {}
+    for item in episodes:
+        if not isinstance(item, dict):
+            continue
+        season_number = _safe_int(item.get("ParentIndexNumber"))
+        if season_number < 0:
+            continue
+        if not include_specials and season_number == 0:
+            continue
+        summary = _jellyfin_media_summary_from_item(item)
+        season = seasons.setdefault(
+            season_number,
+            {
+                "seasonNumber": season_number,
+                "episodeCount": 0,
+                "episodeFileCount": 0,
+                "sizeBytes": 0,
+                "monitored": True,
+                "isSpecials": season_number == 0,
+                "lowestCustomFormatScore": "",
+                "highestCustomFormatScore": "",
+            },
+        )
+        season["episodeCount"] += 1
+        file_bytes = _safe_int(summary.get("fileBytes"))
+        if file_bytes > 0:
+            season["episodeFileCount"] += 1
+            season["sizeBytes"] += file_bytes
+    payloads: list[dict] = []
+    for season_number, season in seasons.items():
+        size_bytes = _safe_int(season.get("sizeBytes"))
+        episode_count = _safe_int(season.get("episodeCount"))
+        size_gib = _bytes_to_gib(size_bytes) if size_bytes > 0 else ""
+        avg_gib = round(size_gib / episode_count, 2) if size_gib != "" and episode_count > 0 else ""
+        payloads.append(
+            {
+                "seasonNumber": season_number,
+                "episodeCount": episode_count,
+                "episodeFileCount": _safe_int(season.get("episodeFileCount")),
+                "sizeOnDiskGiB": size_gib,
+                "avgEpisodeSizeGiB": avg_gib,
+                "monitored": True,
+                "isSpecials": bool(season.get("isSpecials")),
+                "lowestCustomFormatScore": "",
+                "highestCustomFormatScore": "",
+            }
+        )
+    payloads.sort(key=lambda item: item.get("seasonNumber", 0))
+    return payloads
+
+
+def _jellyfin_episode_payloads(index: dict, series_item_id: str, season_number: int) -> list[dict]:
+    shows_index = index.get("shows") if isinstance(index, dict) else {}
+    episodes_by_series = shows_index.get("_episodes_by_series") if isinstance(shows_index, dict) else {}
+    episodes = episodes_by_series.get(str(series_item_id or "").strip(), []) if isinstance(episodes_by_series, dict) else []
+    payloads = []
+    for item in episodes:
+        if not isinstance(item, dict):
+            continue
+        if _safe_int(item.get("ParentIndexNumber")) != season_number:
+            continue
+        payloads.append(_jellyfin_episode_payload(item))
+    payloads.sort(key=lambda item: (item.get("episodeNumber", 0), item.get("episodeId", 0)))
+    return payloads
+
+
+def _jellyfin_series_item_id_for_row(cfg: dict, series_id: int | str, provider_item_id: str = "") -> str:
+    direct = str(provider_item_id or "").strip()
+    if direct:
+        return direct
+    index = _get_jellyfin_index(cfg, force=False, include_history=False) or {}
+    rows = _jellyfin_rows_from_index("sonarr", index)
+    wanted = str(series_id or "").strip()
+    for row in rows:
+        if str(row.get("SeriesId") or "").strip() == wanted:
+            return str(row.get("JellyfinItemId") or "").strip()
+    return ""
+
+
+def _jellyfin_stream_image(base_url: str, api_key: str, item_id: str, image_type: str = "Primary", max_width: int = 320):
+    base_url = _validated_service_base_url(base_url, "Jellyfin")
+    item_id = str(item_id or "").strip()
+    if not item_id:
+        return jsonify({"error": "invalid id"}), 400
+    url = f"{base_url.rstrip('/')}/Items/{quote(item_id)}/Images/{quote(str(image_type or 'Primary'))}"
+    params = {"api_key": api_key}
+    if max_width > 0:
+        params["maxWidth"] = max_width
+    try:
+        upstream = requests.get(url, params=params, stream=True, timeout=30)  # nosec
+    except Exception as exc:
+        logging.warning("Jellyfin asset proxy upstream error: %s", exc)
+        return jsonify({"error": "upstream fetch failed"}), 502
+    if upstream.status_code != 200:
+        try:
+            upstream.close()
+        except Exception:
+            logger.debug("Jellyfin asset upstream close failed after non-200 response.")
+        if upstream.status_code == 404:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"error": "upstream fetch failed"}), 502
+    content_type = upstream.headers.get("Content-Type") or "application/octet-stream"
+    content_length = upstream.headers.get("Content-Length")
+    headers_out = {"Content-Type": content_type, "Cache-Control": "private, max-age=3600"}
+    if content_length:
+        headers_out["Content-Length"] = content_length
+
+    def _generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=65536):
+                if chunk:
+                    yield chunk
+        finally:
+            try:
+                upstream.close()
+            except Exception:
+                logger.debug("Jellyfin asset upstream close failed after stream iteration.")
+
+    return Response(_generate(), headers=headers_out)
 
 
 def _plex_section_filter_ids(raw: str) -> set[str]:
@@ -7993,6 +9405,7 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
             "SubtitleLanguagesMixed": _languages_mixed(subtitle_language_values),
             "TmdbId": tmdb_id,
             "ImdbId": imdb_id,
+            "PlexItemId": str(plex_meta.get("ratingKey") or "").strip(),
             "TautulliMeta": {"Plex": plex_meta} if plex_meta else {},
         }
         if app_name == "sonarr":
@@ -8127,6 +9540,14 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
 
 
 def _get_playback_index(cfg: dict, provider: str, force: bool = False) -> tuple[dict | None, int]:
+    if provider == "jellyfin":
+        data = _get_jellyfin_index(cfg, force=force)
+        _, ts = _cache.get_jellyfin_state()
+        return data, _safe_int(ts)
+    if provider == "streamystats":
+        data = _get_streamystats_index(cfg, force=force)
+        _, ts = _cache.get_streamystats_state()
+        return data, _safe_int(ts)
     if provider == "tautulli":
         data = _get_tautulli_index(cfg, force=force)
         _, ts = _cache.get_tautulli_state()
@@ -8150,6 +9571,90 @@ def _is_plex_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
     if not (cfg.get("plex_url") and cfg.get("plex_token")):
         return False
     return _effective_media_source(cfg) == "plex"
+
+
+def _is_jellyfin_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
+    if app_name not in ("sonarr", "radarr"):
+        return False
+    if cfg.get(f"{app_name}_instances"):
+        return False
+    if not (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")):
+        return False
+    return _effective_media_source(cfg) == "jellyfin"
+
+
+def _media_fallback_provider(cfg: dict, app_name: str) -> str:
+    if _is_jellyfin_media_fallback_enabled(cfg, app_name):
+        return "jellyfin"
+    if _is_plex_media_fallback_enabled(cfg, app_name):
+        return "plex"
+    return ""
+
+
+def _get_media_fallback_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
+    provider = _media_fallback_provider(cfg, app_name)
+    if provider == "jellyfin":
+        return _get_jellyfin_media_rows(app_name, cfg, force=force)
+    if provider == "plex":
+        return _get_plex_media_rows(app_name, cfg, force=force)
+    return [], "", "", False
+
+
+def _start_media_fallback_refresh(cfg: dict, app_name: str) -> tuple[bool, str, bool]:
+    provider = _media_fallback_provider(cfg, app_name)
+    if provider == "jellyfin":
+        started = _start_jellyfin_background_refresh(cfg)
+        return bool(started), provider, _jellyfin_refresh_in_progress(cfg)
+    if provider == "plex":
+        started = _start_plex_background_refresh(cfg)
+        return bool(started), provider, _plex_refresh_in_progress(cfg)
+    return False, "", False
+
+
+def _get_jellyfin_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
+    cached_index = _get_jellyfin_index_cached()
+    had_cached_index = bool(cached_index)
+    if not had_cached_index:
+        disk_cache = _load_jellyfin_cache(cfg.get("jellyfin_cache_path") or "")
+        had_cached_index = bool(disk_cache and isinstance(disk_cache.get("index"), dict))
+    warning = ""
+    notice = ""
+    media_type = "shows" if app_name == "sonarr" else "movies"
+    provider = _playback_provider(cfg)
+    provider_label = _playback_label(provider)
+    index = _get_jellyfin_index(cfg, force=force, include_history=True)
+    if not index:
+        return [], "Jellyfin media data is unavailable.", "", not had_cached_index
+    rows = _jellyfin_rows_from_index(app_name, index)
+    cold_cache = not had_cached_index
+
+    if provider:
+        playback_index = index if provider == "jellyfin" else None
+        if not playback_index:
+            try:
+                playback_index, _ = _get_playback_index(cfg, provider, force=force)
+            except Exception as exc:
+                warning = _append_warning(warning, f"{provider_label} data unavailable.")
+                logger.warning("Configured playback index fetch failed (%s).", type(exc).__name__)
+                playback_index = None
+        _apply_tautulli_stats(rows, playback_index or {}, media_type, provider_label=provider_label)
+        refresh_needed = force or not playback_index
+        started = False
+        if refresh_needed:
+            if provider == "jellyfin":
+                started = _start_jellyfin_background_refresh(cfg)
+            elif provider == "tautulli":
+                started = _start_tautulli_background_refresh(cfg)
+            elif provider == "jellystat":
+                started = _start_jellystat_background_refresh(cfg)
+            elif provider == "streamystats":
+                started = _start_streamystats_background_refresh(cfg)
+            elif provider == "plex":
+                started = _start_plex_background_refresh(cfg)
+        if started or _playback_refresh_in_progress(cfg, provider):
+            notice = f"{provider_label} matching in progress."
+
+    return rows, warning, notice, cold_cache
 
 
 def _get_plex_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
@@ -8186,6 +9691,8 @@ def _get_plex_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple
                 started = _start_tautulli_background_refresh(cfg)
             elif provider == "jellystat":
                 started = _start_jellystat_background_refresh(cfg)
+            elif provider == "streamystats":
+                started = _start_streamystats_background_refresh(cfg)
             elif provider == "plex":
                 started = _start_plex_background_refresh(cfg)
         if started or _playback_refresh_in_progress(cfg, provider):
@@ -8797,6 +10304,46 @@ def _get_plex_index_cached() -> dict | None:
     return data
 
 
+def _get_plex_index_ready(cfg: dict) -> tuple[dict | None, int]:
+    data, ts = _cache.get_plex_state()
+    if data:
+        return data, ts
+    cache_path = cfg.get("plex_cache_path") or ""
+    disk_cache = _load_plex_cache(cache_path)
+    if disk_cache and isinstance(disk_cache.get("index"), dict):
+        index = disk_cache.get("index")
+        meta = index.get("meta") if isinstance(index, dict) else None
+        cached_url = ""
+        if isinstance(meta, dict):
+            cached_url = _normalize_url(meta.get("server_url") or "")
+        current_url = _normalize_url(cfg.get("plex_url") or "")
+        if not cached_url or not current_url or cached_url == current_url:
+            ts = _safe_int(disk_cache.get("ts"))
+            _cache.set_plex(index, ts)
+            return index, ts
+    return None, 0
+
+
+def _provider_index_ready(cfg: dict, provider: str) -> tuple[dict | None, int, bool]:
+    name = str(provider or "").strip().lower()
+    if name == "tautulli":
+        data, ts = _cache.get_tautulli_state()
+        return data, ts, bool(data) or _start_tautulli_background_refresh(cfg)
+    if name == "jellyfin":
+        data, ts = _cache.get_jellyfin_state()
+        return data, ts, bool(data) or _start_jellyfin_background_refresh(cfg)
+    if name == "plex":
+        data, ts = _get_plex_index_ready(cfg)
+        return data, ts, bool(data) or _start_plex_background_refresh(cfg)
+    if name == "jellystat":
+        data, ts = _cache.get_jellystat_state()
+        return data, ts, bool(data) or _start_jellystat_background_refresh(cfg)
+    if name == "streamystats":
+        data, ts = _cache.get_streamystats_state()
+        return data, ts, bool(data) or _start_streamystats_background_refresh(cfg)
+    return None, 0, False
+
+
 def _parse_id_list(raw) -> list[str]:
     if isinstance(raw, list):
         values = [str(item or "").strip() for item in raw]
@@ -9239,6 +10786,928 @@ def _jellystat_fetch_history(
             break
         page += 1
     return items, max_ts
+
+
+def _jellyfin_library_ids_for_media(cfg: dict, libraries: list[dict], media_type: str) -> list[str]:
+    if media_type == "show":
+        raw = cfg.get("jellyfin_library_ids_sonarr") or ""
+        allowed_types = {"tvshows", "tvshow", "series", "show"}
+    else:
+        raw = cfg.get("jellyfin_library_ids_radarr") or ""
+        allowed_types = {"movies", "movie"}
+    override = _split_csv_values(raw)
+    if override:
+        return override
+    ids: list[str] = []
+    for lib in libraries or []:
+        lib_id = str(lib.get("Id") or "").strip()
+        if not lib_id:
+            continue
+        collection = str(lib.get("CollectionType") or lib.get("Type") or "").strip().lower()
+        if collection in allowed_types:
+            ids.append(lib_id)
+    return ids
+
+
+def _jellyfin_resolve_user_id(cfg: dict, timeout: int | float | None = None) -> str:
+    configured = str(cfg.get("jellyfin_user_id") or "").strip()
+    if configured:
+        return configured
+    base_url = str(cfg.get("jellyfin_url") or "").strip()
+    api_key = str(cfg.get("jellyfin_api_key") or "").strip()
+    username = str(cfg.get("jellyfin_username") or "").strip()
+    password = str(cfg.get("jellyfin_password") or "").strip()
+    if username and password:
+        try:
+            _, user_id = _jellyfin_user_access_token(cfg)
+            if user_id:
+                return user_id
+        except Exception as exc:
+            logger.warning("Jellyfin user auth lookup failed (%s).", type(exc).__name__)
+    if not (base_url and api_key):
+        return ""
+    users = _jellyfin_get(base_url, "/Users", api_key=api_key, timeout=timeout)
+    if not isinstance(users, list):
+        return ""
+    if username:
+        for user in users:
+            if isinstance(user, dict) and str(user.get("Name") or "").strip().lower() == username.lower():
+                return str(user.get("Id") or "").strip()
+    if len(users) == 1 and isinstance(users[0], dict):
+        return str(users[0].get("Id") or "").strip()
+    return ""
+
+
+def _jellyfin_fetch_libraries(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    data = _jellyfin_get(
+        base_url,
+        "/Items",
+        api_key=api_key,
+        params={"userId": user_id, "Recursive": "false", "EnableUserData": "true"},
+        timeout=timeout,
+    )
+    items = data.get("Items") if isinstance(data, dict) else []
+    return items if isinstance(items, list) else []
+
+
+def _jellyfin_fetch_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    *,
+    parent_id: str = "",
+    include_item_types: list[str] | None = None,
+    fields: list[str] | None = None,
+    page_size: int = 250,
+    recursive: bool = True,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    items: list[dict] = []
+    start_index = 0
+    size = max(1, _safe_int(page_size))
+    while True:
+        params = {
+            "userId": user_id,
+            "StartIndex": start_index,
+            "Limit": size,
+            "Recursive": "true" if recursive else "false",
+            "EnableUserData": "true",
+        }
+        if parent_id:
+            params["ParentId"] = parent_id
+        if include_item_types:
+            params["IncludeItemTypes"] = ",".join(include_item_types)
+        if fields:
+            params["Fields"] = ",".join(fields)
+        data = _jellyfin_get(base_url, "/Items", api_key=api_key, params=params, timeout=timeout)
+        if not isinstance(data, dict):
+            break
+        chunk = data.get("Items") or []
+        if not isinstance(chunk, list) or not chunk:
+            break
+        items.extend(chunk)
+        total = _safe_int(data.get("TotalRecordCount"))
+        start_index += len(chunk)
+        if total <= 0 or start_index >= total:
+            break
+    return items
+
+
+def _jellyfin_rows_from_index(app_name: str, index: dict) -> list[dict]:
+    media_type = "shows" if app_name == "sonarr" else "movies"
+    media_index = index.get(media_type) if isinstance(index, dict) else {}
+    if not isinstance(media_index, dict):
+        return []
+    rows: list[dict] = []
+    instance_id = f"jellyfin-{app_name}"
+    if app_name == "sonarr":
+        series_items = media_index.get("_meta_items") if isinstance(media_index.get("_meta_items"), list) else []
+        episodes_by_series = (
+            media_index.get("_episodes_by_series") if isinstance(media_index.get("_episodes_by_series"), dict) else {}
+        )
+        for item in series_items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("Name") or "").strip()
+            if not title:
+                continue
+            ids = _jellyfin_provider_ids(item)
+            year = _jellyfin_item_year(item)
+            episodes = episodes_by_series.get(str(item.get("Id") or "").strip(), [])
+            episode_summaries = [_jellyfin_media_summary_from_item(ep) for ep in episodes if isinstance(ep, dict)]
+            total_bytes = sum(_safe_int(summary.get("fileBytes")) for summary in episode_summaries)
+            total_seconds = sum(_safe_int(summary.get("durationSeconds")) for summary in episode_summaries)
+            content_hours = round(total_seconds / 3600.0, 2) if total_seconds > 0 else 0
+            total_size_gb = _bytes_to_gib(total_bytes) if total_bytes > 0 else 0
+            video_quality_values = [str(summary.get("videoQuality") or "") for summary in episode_summaries]
+            resolution_values = [str(summary.get("resolution") or "") for summary in episode_summaries]
+            video_codec_values = [str(summary.get("videoCodec") or "") for summary in episode_summaries]
+            video_hdr_values = [str(summary.get("videoHDR") or "") for summary in episode_summaries]
+            audio_codec_values = [str(summary.get("audioCodec") or "") for summary in episode_summaries]
+            audio_channel_values = [str(summary.get("audioChannels") or "") for summary in episode_summaries]
+            audio_language_values = [summary.get("audioLanguages") or [] for summary in episode_summaries]
+            subtitle_language_values = [summary.get("subtitleLanguages") or [] for summary in episode_summaries]
+            bitrate_values = [_safe_float(summary.get("bitrateMbps")) for summary in episode_summaries]
+            video_bitrate_values = [_safe_float(summary.get("videoBitrateMbps")) for summary in episode_summaries]
+            audio_bitrate_values = [_safe_float(summary.get("audioBitrateMbps")) for summary in episode_summaries]
+            episodes_counted = len(episode_summaries)
+            avg_episode_size = round(total_size_gb / episodes_counted, 2) if episodes_counted and total_size_gb > 0 else 0
+            valid_bitrate_values = [value for value in bitrate_values if value > 0]
+            valid_video_bitrate_values = [value for value in video_bitrate_values if value > 0]
+            valid_audio_bitrate_values = [value for value in audio_bitrate_values if value > 0]
+            row = {
+                "Title": title,
+                "DateAdded": str(item.get("DateCreated") or "").replace("+00:00", "Z"),
+                "Year": year,
+                "Path": str(item.get("Path") or "").strip(),
+                "RootFolder": os.path.dirname(str(item.get("Path") or "").strip()) if item.get("Path") else "",
+                "InstanceId": instance_id,
+                "InstanceName": "Jellyfin",
+                "Status": str(item.get("Status") or "Available"),
+                "Monitored": True,
+                "QualityProfile": "",
+                "Tags": "",
+                "ReleaseGroup": "",
+                "VideoQuality": _most_common(video_quality_values),
+                "Resolution": _most_common(resolution_values),
+                "VideoCodec": _most_common(video_codec_values),
+                "VideoHDR": _most_common(video_hdr_values),
+                "AudioCodec": _most_common(audio_codec_values),
+                "AudioChannels": _most_common(audio_channel_values),
+                "AudioLanguages": _merge_language_values(audio_language_values),
+                "SubtitleLanguages": _merge_language_values(subtitle_language_values),
+                "AudioCodecMixed": _is_mixed(audio_codec_values),
+                "AudioCodecAll": _format_unique_values(audio_codec_values),
+                "AudioLanguagesAll": _merge_language_values(audio_language_values),
+                "SubtitleLanguagesAll": _merge_language_values(subtitle_language_values),
+                "AudioLanguagesMixed": _languages_mixed(audio_language_values),
+                "SubtitleLanguagesMixed": _languages_mixed(subtitle_language_values),
+                "SeriesId": _safe_int(ids.get("tvdb")) or _safe_int(ids.get("tmdb")) or _stable_media_item_id("jellyfin", title.lower(), year),
+                "JellyfinItemId": str(item.get("Id") or "").strip(),
+                "TitleSlug": _plex_title_slug(title),
+                "TvdbId": str(ids.get("tvdb") or "").strip(),
+                "TmdbId": str(ids.get("tmdb") or "").strip(),
+                "ImdbId": str(ids.get("imdb") or "").strip(),
+                "SeriesType": "",
+                "Studio": str(((item.get("Studios") or [{}])[0] or {}).get("Name") or "").strip() if isinstance(item.get("Studios"), list) else "",
+                "OriginalLanguage": "",
+                "Genres": ", ".join(item.get("Genres") or []) if isinstance(item.get("Genres"), list) else "",
+                "LastAired": str(item.get("EndDate") or item.get("PremiereDate") or "").strip(),
+                "MissingCount": "",
+                "CutoffUnmetCount": 0,
+                "RecentlyGrabbed": False,
+                "UseSceneNumbering": False,
+                "Airing": False,
+                "SeasonCount": len({str(ep.get("SeasonId") or ep.get("ParentIndexNumber") or "") for ep in episodes if isinstance(ep, dict)}),
+                "EpisodesCounted": episodes_counted,
+                "TotalSizeGB": total_size_gb,
+                "AvgEpisodeSizeGB": avg_episode_size,
+                "GBPerHour": round(total_size_gb / content_hours, 2) if content_hours > 0 and total_size_gb > 0 else "",
+                "BitrateMbps": "",
+                "VideoBitrateMbps": round(sum(valid_video_bitrate_values) / len(valid_video_bitrate_values), 2)
+                if valid_video_bitrate_values
+                else "",
+                "AudioBitrateMbps": round(sum(valid_audio_bitrate_values) / len(valid_audio_bitrate_values), 2)
+                if valid_audio_bitrate_values
+                else "",
+                "BitrateEstimated": False,
+                "ContentHours": content_hours or "",
+                "VideoQualityMixed": _is_mixed(video_quality_values),
+                "VideoQualityAll": _format_unique_values(video_quality_values),
+                "ResolutionMixed": _is_mixed(resolution_values),
+                "ResolutionAll": _format_unique_values(resolution_values),
+                "VideoCodecMixed": _is_mixed(video_codec_values),
+                "VideoCodecAll": _format_unique_values(video_codec_values),
+                "AudioChannelsMixed": _is_mixed(audio_channel_values),
+                "AudioChannelsAll": _format_unique_values(audio_channel_values),
+            }
+            if valid_bitrate_values:
+                row["BitrateMbps"] = round(sum(valid_bitrate_values) / len(valid_bitrate_values), 2)
+            rows.append(row)
+    else:
+        movie_items = media_index.get("_meta_items") if isinstance(media_index.get("_meta_items"), list) else []
+        for item in movie_items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("Name") or "").strip()
+            if not title:
+                continue
+            ids = _jellyfin_provider_ids(item)
+            year = _jellyfin_item_year(item)
+            summary = _jellyfin_media_summary_from_item(item)
+            file_size_gb = _bytes_to_gib(_safe_int(summary.get("fileBytes"))) if _safe_int(summary.get("fileBytes")) > 0 else 0
+            runtime_mins = round(_safe_int(summary.get("durationSeconds")) / 60.0, 2) if _safe_int(summary.get("durationSeconds")) > 0 else 0
+            content_hours = round(_safe_int(summary.get("durationSeconds")) / 3600.0, 2) if _safe_int(summary.get("durationSeconds")) > 0 else 0
+            bitrate_mbps = _safe_float(summary.get("bitrateMbps"))
+            video_bitrate_mbps = _safe_float(summary.get("videoBitrateMbps"))
+            audio_bitrate_mbps = _safe_float(summary.get("audioBitrateMbps"))
+            row = {
+                "Title": title,
+                "DateAdded": str(item.get("DateCreated") or "").replace("+00:00", "Z"),
+                "Year": year,
+                "Path": str(item.get("Path") or "").strip(),
+                "RootFolder": os.path.dirname(str(item.get("Path") or "").strip()) if item.get("Path") else "",
+                "InstanceId": instance_id,
+                "InstanceName": "Jellyfin",
+                "Status": "Available",
+                "Monitored": True,
+                "QualityProfile": "",
+                "Tags": "",
+                "ReleaseGroup": "",
+                "VideoQuality": str(summary.get("videoQuality") or ""),
+                "Resolution": str(summary.get("resolution") or ""),
+                "VideoCodec": str(summary.get("videoCodec") or ""),
+                "VideoHDR": str(summary.get("videoHDR") or ""),
+                "AudioCodec": str(summary.get("audioCodec") or ""),
+                "AudioChannels": str(summary.get("audioChannels") or ""),
+                "AudioLanguages": _merge_language_values([summary.get("audioLanguages") or []]),
+                "SubtitleLanguages": _merge_language_values([summary.get("subtitleLanguages") or []]),
+                "AudioCodecMixed": False,
+                "AudioCodecAll": str(summary.get("audioCodec") or ""),
+                "AudioLanguagesAll": _merge_language_values([summary.get("audioLanguages") or []]),
+                "SubtitleLanguagesAll": _merge_language_values([summary.get("subtitleLanguages") or []]),
+                "AudioLanguagesMixed": False,
+                "SubtitleLanguagesMixed": False,
+                "MovieId": _safe_int(ids.get("tmdb")) or _stable_media_item_id("jellyfin", title.lower(), year),
+                "JellyfinItemId": str(item.get("Id") or "").strip(),
+                "TmdbId": str(ids.get("tmdb") or "").strip(),
+                "ImdbId": str(ids.get("imdb") or "").strip(),
+                "Studio": str(((item.get("Studios") or [{}])[0] or {}).get("Name") or "").strip() if isinstance(item.get("Studios"), list) else "",
+                "OriginalLanguage": "",
+                "Genres": ", ".join(item.get("Genres") or []) if isinstance(item.get("Genres"), list) else "",
+                "MissingCount": "",
+                "CutoffUnmetCount": 0,
+                "RecentlyGrabbed": False,
+                "HasFile": bool(item.get("Path")),
+                "IsAvailable": bool(item.get("Path")),
+                "InCinemas": "",
+                "LastSearchTime": "",
+                "Edition": "",
+                "CustomFormats": "",
+                "CustomFormatScore": 0,
+                "QualityCutoffNotMet": False,
+                "Languages": "",
+                "Scene": False,
+                "Airing": False,
+                "RuntimeMins": runtime_mins or "",
+                "ContentHours": content_hours or "",
+                "FileSizeGB": file_size_gb or "",
+                "GBPerHour": round(file_size_gb / content_hours, 2) if content_hours > 0 and file_size_gb > 0 else "",
+                "BitrateMbps": bitrate_mbps or "",
+                "VideoBitrateMbps": video_bitrate_mbps or "",
+                "AudioBitrateMbps": audio_bitrate_mbps or "",
+                "BitrateEstimated": False,
+                "FrameRateFps": _safe_float(summary.get("frameRateFps")) or "",
+                "FrameRateEstimated": False,
+                "BitsPerPixelPerFrame": _bits_per_pixel_per_frame(
+                    bitrate_mbps,
+                    str(summary.get("resolution") or ""),
+                    _safe_float(summary.get("frameRateFps")),
+                ) or "",
+                "BitsPerPixelPerFrameEstimated": False,
+            }
+            rows.append(row)
+    rows.sort(key=lambda row: (str(row.get("Title") or "").lower(), str(row.get("Year") or "")))
+    return rows
+
+
+def _plex_series_item_id_for_row(cfg: dict, series_id: int | str, provider_item_id: str = "") -> str:
+    direct = str(provider_item_id or "").strip()
+    if direct:
+        return direct
+    try:
+        target_series_id = int(series_id)
+    except (TypeError, ValueError):
+        return ""
+    index = _get_plex_index(cfg, force=False, include_history=False) or {}
+    shows_index = index.get("shows") if isinstance(index, dict) else {}
+    meta_items = shows_index.get("_meta_items") if isinstance(shows_index, dict) else []
+    if not isinstance(meta_items, list):
+        return ""
+    for item in meta_items:
+        if not isinstance(item, dict):
+            continue
+        ids = _tautulli_extract_ids(item)
+        stable_series_id = (
+            _safe_int(ids.get("tvdb"))
+            or _safe_int(ids.get("tmdb"))
+            or _stable_media_item_id(
+                "sonarr",
+                str(item.get("title") or "").strip().lower(),
+                str(item.get("year") or "").strip(),
+                str((_plex_item_files(item) or [""])[0] or "").strip(),
+                str(ids.get("imdb") or "").strip(),
+            )
+        )
+        if stable_series_id == target_series_id:
+            return str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+    return ""
+
+
+def _plex_fetch_children_items(
+    base_url: str,
+    token: str,
+    client_id: str,
+    rating_key: str,
+    *,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+) -> list[dict]:
+    key = str(rating_key or "").strip()
+    if not key:
+        return []
+    include_fields = ",".join(
+        [
+            "ratingKey",
+            "guid",
+            "type",
+            "title",
+            "year",
+            "index",
+            "parentIndex",
+            "parentTitle",
+            "parentRatingKey",
+            "grandparentTitle",
+            "grandparentRatingKey",
+            "librarySectionID",
+            "duration",
+            "addedAt",
+            "originallyAvailableAt",
+            "summary",
+            "studio",
+            "originalLanguage",
+            "releaseGroup",
+            "leafCount",
+            "childCount",
+            "thumb",
+            "art",
+        ]
+    )
+    payload = _plex_request(
+        base_url,
+        token,
+        client_id,
+        f"/library/metadata/{key}/children",
+        params={"includeFields": include_fields, "includeElements": "Guid,Media,Stream"},
+        timeout=timeout,
+        session=session,
+    )
+    container = payload.get("MediaContainer") if isinstance(payload, dict) else None
+    metadata = container.get("Metadata") if isinstance(container, dict) else None
+    return metadata if isinstance(metadata, list) else []
+
+
+def _plex_episode_payload_from_item(item: dict) -> dict:
+    media_summary = _plex_media_summary_from_item(item)
+    file_bytes = _plex_item_total_bytes(item)
+    files = _plex_item_files(item)
+    file_path = str(files[0]).strip() if files else ""
+    duration_seconds = _normalize_duration_seconds(item.get("duration"))
+    runtime_mins = int(round(duration_seconds / 60.0)) if duration_seconds > 0 else 0
+    frame_rate_fps = _normalize_frame_rate_fps(media_summary.get("frameRateFps"))
+    bitrate_mbps = _safe_float(media_summary.get("bitrateMbps"))
+    bits_per_pixel_per_frame = _bits_per_pixel_per_frame(
+        bitrate_mbps,
+        str(media_summary.get("resolution") or ""),
+        frame_rate_fps,
+    )
+    return {
+        "episodeId": _safe_int(item.get("ratingKey") or item.get("rating_key")),
+        "seasonNumber": _safe_int(item.get("parentIndex") or item.get("seasonNumber")),
+        "episodeNumber": _safe_int(item.get("index") or item.get("episodeNumber")),
+        "title": str(item.get("title") or "").strip(),
+        "overview": str(item.get("summary") or "").strip(),
+        "airDate": str(item.get("originallyAvailableAt") or "").strip(),
+        "airDateUtc": "",
+        "runtimeMins": runtime_mins or "",
+        "lastSearchTime": "",
+        "monitored": True,
+        "hasFile": bool(file_path or file_bytes > 0),
+        "fileSizeGiB": _bytes_to_gib(file_bytes) if file_bytes > 0 else "",
+        "quality": str(media_summary.get("videoQuality") or ""),
+        "resolution": str(media_summary.get("resolution") or ""),
+        "videoCodec": str(media_summary.get("videoCodec") or ""),
+        "audioCodec": str(media_summary.get("audioCodec") or ""),
+        "audioChannels": str(media_summary.get("audioChannels") or ""),
+        "audioLanguages": str(media_summary.get("audioLanguages") or ""),
+        "subtitleLanguages": str(media_summary.get("subtitleLanguages") or ""),
+        "bitrateMbps": bitrate_mbps if bitrate_mbps > 0 else "",
+        "bitrateEstimated": False,
+        "frameRateFps": frame_rate_fps if frame_rate_fps > 0 else "",
+        "frameRateEstimated": False,
+        "bitsPerPixelPerFrame": bits_per_pixel_per_frame if bits_per_pixel_per_frame > 0 else "",
+        "bitsPerPixelPerFrameEstimated": False,
+        "customFormats": "",
+        "customFormatScore": "",
+        "qualityCutoffNotMet": "",
+        "releaseGroup": str(item.get("releaseGroup") or "").strip(),
+        "path": file_path,
+    }
+
+
+def _plex_season_payloads(
+    cfg: dict,
+    series_item_id: str,
+    *,
+    include_specials: bool = True,
+) -> list[dict]:
+    base_url = str(cfg.get("plex_url") or "").strip()
+    token = str(cfg.get("plex_token") or "").strip()
+    client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
+    if not (base_url and token):
+        return []
+    request_timeout = _safe_int(cfg.get("plex_timeout_seconds")) or 45
+    seasons: list[dict] = []
+    with requests.Session() as session:
+        season_items = _plex_fetch_children_items(
+            base_url,
+            token,
+            client_id,
+            series_item_id,
+            timeout=request_timeout,
+            session=session,
+        )
+        for item in season_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip().lower() != "season":
+                continue
+            season_number = _safe_int(item.get("index"))
+            if season_number == 0 and not include_specials:
+                continue
+            season_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+            episodes = _plex_fetch_children_items(
+                base_url,
+                token,
+                client_id,
+                season_key,
+                timeout=request_timeout,
+                session=session,
+            ) if season_key else []
+            episode_payloads = [
+                _plex_episode_payload_from_item(ep)
+                for ep in episodes
+                if isinstance(ep, dict) and str(ep.get("type") or "").strip().lower() == "episode"
+            ]
+            file_sizes = [float(ep.get("fileSizeGiB") or 0) for ep in episode_payloads if _safe_float(ep.get("fileSizeGiB")) > 0]
+            episode_count = len(episode_payloads)
+            episode_file_count = sum(1 for ep in episode_payloads if ep.get("hasFile"))
+            total_size_gib = round(sum(file_sizes), 2) if file_sizes else 0
+            avg_size = round(total_size_gib / episode_file_count, 2) if episode_file_count > 0 and total_size_gib > 0 else 0
+            seasons.append(
+                {
+                    "seasonNumber": season_number,
+                    "episodeCount": episode_count,
+                    "episodeFileCount": episode_file_count,
+                    "sizeOnDiskGiB": total_size_gib,
+                    "avgEpisodeSizeGiB": avg_size,
+                    "lowestCustomFormatScore": "",
+                    "highestCustomFormatScore": "",
+                    "monitored": True,
+                    "isSpecials": season_number == 0,
+                }
+            )
+    seasons.sort(key=lambda item: item.get("seasonNumber", 0))
+    return seasons
+
+
+def _plex_episode_payloads(cfg: dict, series_item_id: str, season_number: int) -> list[dict]:
+    base_url = str(cfg.get("plex_url") or "").strip()
+    token = str(cfg.get("plex_token") or "").strip()
+    client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
+    if not (base_url and token):
+        return []
+    request_timeout = _safe_int(cfg.get("plex_timeout_seconds")) or 45
+    with requests.Session() as session:
+        season_items = _plex_fetch_children_items(
+            base_url,
+            token,
+            client_id,
+            series_item_id,
+            timeout=request_timeout,
+            session=session,
+        )
+        season_key = ""
+        for item in season_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").strip().lower() != "season":
+                continue
+            if _safe_int(item.get("index")) == int(season_number):
+                season_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+                break
+        if not season_key:
+            return []
+        episodes = _plex_fetch_children_items(
+            base_url,
+            token,
+            client_id,
+            season_key,
+            timeout=request_timeout,
+            session=session,
+        )
+    payloads = [
+        _plex_episode_payload_from_item(item)
+        for item in episodes
+        if isinstance(item, dict) and str(item.get("type") or "").strip().lower() == "episode"
+    ]
+    payloads.sort(key=lambda item: (_safe_int(item.get("episodeNumber")), _safe_int(item.get("episodeId"))))
+    return payloads
+
+
+def _plex_request_binary(
+    base_url: str,
+    token: str,
+    client_id: str,
+    path: str,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    base_url = _validated_service_base_url(base_url, "Plex")
+    route = path if path.startswith("/") else f"/{path}"
+    url = f"{base_url.rstrip('/')}{route}"
+    http = session or _http
+    request_headers = {
+        "X-Plex-Token": token,
+        "X-Plex-Client-Identifier": client_id,
+    }
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
+    response = http.get(url, params=params, headers=request_headers, timeout=request_timeout, stream=True)
+    response.raise_for_status()
+    return response
+
+
+def _plex_stream_image(cfg: dict, item_id: str, image_type: str):
+    base_url = str(cfg.get("plex_url") or "").strip()
+    token = str(cfg.get("plex_token") or "").strip()
+    client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
+    if not (base_url and token):
+        raise RuntimeError("Plex is not configured.")
+    normalized_type = str(image_type or "Primary").strip().lower()
+    image_path = ""
+    index = _get_plex_index(cfg, force=False, include_history=False) or {}
+    for media_type in ("shows", "movies"):
+        media_index = index.get(media_type) if isinstance(index, dict) else {}
+        meta_items = media_index.get("_meta_items") if isinstance(media_index, dict) else []
+        if not isinstance(meta_items, list):
+            continue
+        for item in meta_items:
+            if not isinstance(item, dict):
+                continue
+            rating_key = str(item.get("ratingKey") or item.get("rating_key") or "").strip()
+            if rating_key != str(item_id or "").strip():
+                continue
+            if normalized_type in {"art", "backdrop", "background"}:
+                image_path = str(item.get("art") or "").strip()
+            else:
+                image_path = str(item.get("thumb") or "").strip()
+            break
+        if image_path:
+            break
+    if not image_path:
+        image_path = f"/library/metadata/{item_id}/art" if normalized_type in {"art", "backdrop", "background"} else f"/library/metadata/{item_id}/thumb"
+    upstream = _plex_request_binary(base_url, token, client_id, image_path, timeout=30)
+    content_type = upstream.headers.get("Content-Type", "image/jpeg")
+
+    def _generate():
+        try:
+            for chunk in upstream.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return Response(stream_with_context(_generate()), content_type=content_type)
+
+
+def _streamystats_empty_media_index() -> dict:
+    return {
+        "tvdb": {},
+        "tmdb": {},
+        "imdb": {},
+        "title_year": {},
+        "title": {},
+        "title_year_relaxed": {},
+        "title_relaxed": {},
+        "title_year_variant": {},
+        "title_variant": {},
+    }
+
+
+def _streamystats_empty_index() -> dict:
+    return {
+        "show": _streamystats_empty_media_index(),
+        "movie": _streamystats_empty_media_index(),
+        "meta": {"provider": "streamystats", "server": {}, "stats": {}},
+    }
+
+
+def _streamystats_row_token(row: dict, media_type: str) -> tuple:
+    return (
+        media_type,
+        str(row.get("TvdbId") or "").strip(),
+        str(row.get("TmdbId") or "").strip(),
+        str(row.get("ImdbId") or "").strip(),
+        _normalize_title_key(row.get("Title") or ""),
+        str(row.get("Year") or "").strip(),
+        str(row.get("Path") or "").strip().lower(),
+    )
+
+
+def _streamystats_collect_cached_rows(cfg: dict, app_name: str) -> list[dict]:
+    rows: list[dict] = []
+    snapshot = _cache.get_app_snapshot(app_name)
+    for entry in snapshot.values():
+        rows.extend(_clone_rows(entry.get("data") or []))
+    if not rows:
+        disk_cache = _load_arr_cache(cfg.get(f"{app_name}_cache_path") or "")
+        for entry in disk_cache.values():
+            if isinstance(entry, dict):
+                rows.extend(_clone_rows(entry.get("data") or []))
+    if not rows:
+        fallback_provider = _media_fallback_provider(cfg, app_name)
+        if fallback_provider:
+            try:
+                fallback_rows, _, _, _ = _get_media_fallback_rows(app_name, cfg, force=False)
+                rows.extend(_clone_rows(fallback_rows or []))
+            except Exception:
+                logger.exception("Streamystats failed to collect %s rows from %s fallback.", app_name, fallback_provider)
+    return rows
+
+
+def _streamystats_item_provider_ids(item: dict) -> dict[str, str]:
+    raw_ids = item.get("providerIds") if isinstance(item.get("providerIds"), dict) else item.get("ProviderIds")
+    if not isinstance(raw_ids, dict):
+        return {}
+    ids = {}
+    for key, value in raw_ids.items():
+        text = str(value or "").strip()
+        if not text:
+            continue
+        lowered = str(key or "").strip().lower()
+        if lowered in {"tvdb", "thetvdb"}:
+            ids["tvdb"] = text
+        elif lowered in {"tmdb", "themoviedb"}:
+            ids["tmdb"] = text
+        elif lowered == "imdb":
+            ids["imdb"] = text
+    return ids
+
+
+def _streamystats_candidate_score(row: dict, item: dict, media_type: str) -> int:
+    score = 0
+    row_ids = {
+        "tvdb": str(row.get("TvdbId") or "").strip(),
+        "tmdb": str(row.get("TmdbId") or "").strip(),
+        "imdb": str(row.get("ImdbId") or "").strip(),
+    }
+    item_ids = _streamystats_item_provider_ids(item)
+    for key, value in row_ids.items():
+        if value and value == str(item_ids.get(key) or "").strip():
+            score += 100
+
+    row_title = str(row.get("Title") or "").strip()
+    item_title = str(item.get("name") or item.get("Name") or "").strip()
+    if row_title and item_title:
+        if _normalize_title_key(row_title) == _normalize_title_key(item_title):
+            score += 20
+        elif _relaxed_title_key(row_title) == _relaxed_title_key(item_title):
+            score += 10
+
+    row_year = str(row.get("Year") or "").strip()
+    item_year = str(item.get("productionYear") or item.get("ProductionYear") or "").strip()
+    if row_year and item_year and row_year == item_year:
+        score += 10
+
+    item_type = str(item.get("type") or item.get("Type") or "").strip().lower()
+    if media_type == "show" and item_type == "series":
+        score += 5
+    if media_type == "movie" and item_type == "movie":
+        score += 5
+    return score
+
+
+def _streamystats_raw_from_item_details(details: dict) -> dict:
+    item = details.get("item") if isinstance(details.get("item"), dict) else {}
+    total_views = _safe_int(details.get("totalViews") or details.get("watchCount"))
+    total_watch_time = _safe_int(details.get("totalWatchTime"))
+    last_watched = _parse_iso_epoch(details.get("lastWatched"))
+    users_raw = details.get("usersWatched")
+    users = users_raw if isinstance(users_raw, list) else []
+    user_ids = []
+    for entry in users:
+        if not isinstance(entry, dict):
+            continue
+        user = entry.get("user") if isinstance(entry.get("user"), dict) else {}
+        user_id = str(user.get("id") or user.get("Id") or "").strip()
+        if user_id:
+            user_ids.append(user_id)
+    users_watched = len(set(user_ids))
+    if not users_watched and not users and users_raw not in (None, ""):
+        users_watched = _safe_int(users_raw)
+    return {
+        "play_count": total_views,
+        "users_watched": users_watched,
+        "user_ids": sorted(set(user_ids)),
+        "last_epoch": last_watched,
+        "total_seconds": total_watch_time,
+        "duration_seconds": _normalize_duration_seconds(item.get("runtimeTicks")),
+        "total_seconds_source": "streamystats_total",
+        "streamystats_meta": {
+            "item_id": str(item.get("id") or item.get("Id") or "").strip(),
+            "item": item,
+            "completion_rate": details.get("completionRate"),
+            "first_watched": details.get("firstWatched"),
+            "last_watched": details.get("lastWatched"),
+            "users_watched": users,
+        },
+    }
+
+
+def _streamystats_add_row_match(index: dict, row: dict, media_type: str, raw: dict) -> None:
+    target = index.get(media_type)
+    if not isinstance(target, dict):
+        return
+    if media_type == "show":
+        tvdb_id = str(row.get("TvdbId") or "").strip()
+        if tvdb_id:
+            _tautulli_merge_into(target["tvdb"], tvdb_id, raw)
+    tmdb_id = str(row.get("TmdbId") or "").strip()
+    imdb_id = str(row.get("ImdbId") or "").strip()
+    if tmdb_id:
+        _tautulli_merge_into(target["tmdb"], tmdb_id, raw)
+    if imdb_id:
+        _tautulli_merge_into(target["imdb"], imdb_id, raw)
+    seen = set()
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    for title in _tautulli_title_candidates(row.get("Title")):
+        _merge_title_keys_cached(target, raw, title, str(row.get("Year") or "").strip(), title_key_cache, seen)
+
+
+def _streamystats_lookup_row(
+    cfg: dict,
+    row: dict,
+    media_type: str,
+    *,
+    session: requests.Session | None = None,
+    base_url: str,
+    api_key: str,
+    server_id: str,
+    token: str,
+    timeout: int,
+    search_limit: int,
+) -> tuple[dict | None, str]:
+    query = str(row.get("Title") or "").strip()
+    if not query:
+        return None, "missing_title"
+    candidates = _streamystats_search(
+        base_url,
+        token,
+        query,
+        media_type,
+        timeout=timeout,
+        session=session,
+        limit=search_limit,
+    )
+    best_details = None
+    best_score = -1
+    best_item_id = ""
+    for candidate in candidates:
+        item_id = str(candidate.get("id") or "").strip()
+        if not item_id:
+            continue
+        try:
+            details = _streamystats_get_item_details(
+                base_url,
+                api_key,
+                server_id,
+                item_id,
+                timeout=timeout,
+                session=session,
+            )
+        except Exception:
+            continue
+        item = details.get("item") if isinstance(details.get("item"), dict) else {}
+        score = _streamystats_candidate_score(row, item, media_type)
+        if score > best_score:
+            best_score = score
+            best_details = details
+            best_item_id = item_id
+    if best_details is None or best_score < 15:
+        return None, "no_match"
+    raw = _streamystats_raw_from_item_details(best_details)
+    meta = raw.get("streamystats_meta") if isinstance(raw.get("streamystats_meta"), dict) else {}
+    meta["match_score"] = best_score
+    meta["match_item_id"] = best_item_id
+    raw["streamystats_meta"] = meta
+    return raw, "matched"
+
+
+def _streamystats_build_index_from_rows(cfg: dict, show_rows: list[dict], movie_rows: list[dict]) -> dict:
+    index = _streamystats_empty_index()
+    base_url = str(cfg.get("streamystats_url") or "").strip()
+    api_key = str(cfg.get("streamystats_api_key") or "").strip()
+    timeout = _safe_int(cfg.get("streamystats_timeout_seconds")) or 45
+    search_limit = max(_safe_int(cfg.get("streamystats_search_limit")) or 8, 1)
+    workers = max(_safe_int(cfg.get("streamystats_workers")) or 4, 1)
+    if not (base_url and api_key):
+        return index
+
+    with requests.Session() as session:
+        server = _streamystats_resolve_server(cfg, session=session, timeout=timeout)
+        server_id = str(server.get("id") or server.get("serverId") or "").strip()
+        token, user_id = _streamystats_user_access_token(cfg, session=session, timeout=timeout)
+        if not (server_id and token):
+            raise RuntimeError("Streamystats requires Jellyfin user credentials for search")
+
+        index["meta"]["server"] = {
+            "id": server_id,
+            "name": str(server.get("name") or server.get("serverName") or "").strip(),
+            "url": str(server.get("url") or "").strip(),
+            "user_id": user_id,
+        }
+
+        stats = {
+            "shows_total": 0,
+            "shows_matched": 0,
+            "movies_total": 0,
+            "movies_matched": 0,
+        }
+
+        def process_rows(rows: list[dict], media_type: str) -> None:
+            if not rows:
+                return
+            total_key = "shows_total" if media_type == "show" else "movies_total"
+            matched_key = "shows_matched" if media_type == "show" else "movies_matched"
+            deduped: list[dict] = []
+            seen_tokens = set()
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                token_key = _streamystats_row_token(row, media_type)
+                if token_key in seen_tokens:
+                    continue
+                seen_tokens.add(token_key)
+                deduped.append(row)
+            stats[total_key] = len(deduped)
+            if not deduped:
+                return
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(
+                        _streamystats_lookup_row,
+                        cfg,
+                        row,
+                        media_type,
+                        base_url=base_url,
+                        api_key=api_key,
+                        server_id=server_id,
+                        token=token,
+                        timeout=timeout,
+                        search_limit=search_limit,
+                    ): row
+                    for row in deduped
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    row = futures[future]
+                    try:
+                        raw, status = future.result()
+                    except Exception:
+                        raw, status = None, "error"
+                    if raw and status == "matched":
+                        _streamystats_add_row_match(index, row, media_type, raw)
+                        stats[matched_key] += 1
+
+        process_rows(show_rows, "show")
+        process_rows(movie_rows, "movie")
+        index["meta"]["stats"] = stats
+    return index
 
 
 def _tautulli_refresh_library_media_info(
@@ -10004,6 +12473,150 @@ def _get_tautulli_index_state() -> tuple[dict | None, int]:
     return _cache.get_tautulli_state()
 
 
+def _get_jellyfin_index_state() -> tuple[dict | None, int]:
+    return _cache.get_jellyfin_state()
+
+
+def _get_jellyfin_index_cached() -> dict | None:
+    data, _ = _cache.get_jellyfin_state()
+    return data
+
+
+def _get_streamystats_index_state() -> tuple[dict | None, int]:
+    return _cache.get_streamystats_state()
+
+
+def _get_streamystats_index_cached() -> dict | None:
+    data, _ = _cache.get_streamystats_state()
+    return data
+
+
+def _get_streamystats_index(
+    cfg: dict,
+    force: bool = False,
+    include_history: bool = True,
+) -> dict | None:
+    del include_history
+    if not (cfg.get("streamystats_url") and cfg.get("streamystats_api_key")):
+        return None
+
+    cached_data, _ = _cache.get_streamystats_state()
+    if not force and cached_data:
+        return cached_data
+
+    cache_path = cfg.get("streamystats_cache_path") or ""
+    disk_cache = None if force else _load_streamystats_cache(cache_path)
+    if not force and disk_cache and disk_cache.get("index"):
+        index = disk_cache.get("index")
+        ts = _safe_int(disk_cache.get("ts")) or time.time()
+        _cache.set_streamystats(index, ts)
+        return index
+
+    show_rows = _streamystats_collect_cached_rows(cfg, "sonarr")
+    movie_rows = _streamystats_collect_cached_rows(cfg, "radarr")
+    index = _streamystats_build_index_from_rows(cfg, show_rows, movie_rows)
+    now = time.time()
+    _save_streamystats_cache(cache_path, index, now)
+    _cache.set_streamystats(index, now)
+    return index
+
+
+def _get_jellyfin_index(
+    cfg: dict,
+    force: bool = False,
+    include_history: bool = True,
+) -> dict | None:
+    if not (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")):
+        return None
+
+    cached_data, _ = _cache.get_jellyfin_state()
+    if not force and cached_data:
+        return cached_data
+
+    cache_path = cfg.get("jellyfin_cache_path") or ""
+    disk_cache = None if force else _load_jellyfin_cache(cache_path)
+    if not force and disk_cache and disk_cache.get("index"):
+        index = disk_cache.get("index")
+        ts = _safe_int(disk_cache.get("ts")) or time.time()
+        _cache.set_jellyfin(index, ts)
+        return index
+
+    base_url = cfg.get("jellyfin_url") or ""
+    api_key = cfg.get("jellyfin_api_key") or ""
+    request_timeout = _safe_int(cfg.get("jellyfin_timeout_seconds"))
+    if request_timeout <= 0:
+        request_timeout = 45
+    page_size = _safe_int(cfg.get("jellyfin_page_size"))
+    if page_size <= 0:
+        page_size = 250
+    user_id = _jellyfin_resolve_user_id(cfg, timeout=request_timeout)
+    if not user_id:
+        raise RuntimeError("Jellyfin user id could not be resolved")
+    libraries = _jellyfin_fetch_libraries(base_url, api_key, user_id, timeout=request_timeout)
+    show_lib_ids = _jellyfin_library_ids_for_media(cfg, libraries, "show")
+    movie_lib_ids = _jellyfin_library_ids_for_media(cfg, libraries, "movie")
+    fields = ["ProviderIds", "Path", "MediaStreams", "MediaSources", "DateCreated", "Genres", "Studios", "PremiereDate"]
+    show_items: list[dict] = []
+    episode_items: list[dict] = []
+    for lib_id in show_lib_ids:
+        show_items.extend(
+            _jellyfin_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Series"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+        episode_items.extend(
+            _jellyfin_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Episode"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+    movie_items: list[dict] = []
+    for lib_id in movie_lib_ids:
+        movie_items.extend(
+            _jellyfin_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Movie"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+    index = _jellyfin_build_media_index(show_items, episode_items, movie_items)
+    meta = index.get("meta") if isinstance(index.get("meta"), dict) else {}
+    meta.update(
+        {
+            "user_id": user_id,
+            "library_ids": {"shows": show_lib_ids, "movies": movie_lib_ids},
+            "server_url": _normalize_url(base_url),
+            "history_ts": 0,
+        }
+    )
+    index["meta"] = meta
+    now = time.time()
+    _save_jellyfin_cache(cache_path, index, now)
+    _cache.set_jellyfin(index, now)
+    return index
+
+
 def _get_jellystat_index_state() -> tuple[dict | None, int]:
     return _cache.get_jellystat_state()
 
@@ -10181,9 +12794,49 @@ def _touch_tautulli_refresh_marker() -> None:
         logger.warning("Failed to write Tautulli refresh marker (path redacted).")
 
 
+def _jellyfin_refresh_lock_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.jellyfin_refresh.lock")
+
+
+def _jellyfin_refresh_marker_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.jellyfin_refresh.done")
+
+
+def _touch_jellyfin_refresh_marker() -> None:
+    path = _jellyfin_refresh_marker_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        logger.warning("Failed to write Jellyfin refresh marker (path redacted).")
+
+
 def _jellystat_refresh_lock_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
     return os.path.join(base_dir, "Sortarr.jellystat_refresh.lock")
+
+
+def _streamystats_refresh_lock_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.streamystats_refresh.lock")
+
+
+def _streamystats_refresh_marker_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.streamystats_refresh.done")
+
+
+def _touch_streamystats_refresh_marker() -> None:
+    path = _streamystats_refresh_marker_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        logger.warning("Failed to write Streamystats refresh marker (path redacted).")
 
 
 def _jellystat_refresh_marker_path() -> str:
@@ -10233,6 +12886,18 @@ def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
         _cache.clear_app("radarr")
 
 
+def _maybe_bust_arr_cache_on_jellyfin_refresh() -> None:
+    marker_path = _jellyfin_refresh_marker_path()
+    try:
+        mtime = os.path.getmtime(marker_path)
+    except OSError:
+        return
+    if _playback_refresh_state["jellyfin_seen"] is None or mtime > _playback_refresh_state["jellyfin_seen"]:
+        _playback_refresh_state["jellyfin_seen"] = mtime
+        _cache.clear_app("sonarr")
+        _cache.clear_app("radarr")
+
+
 def _maybe_bust_arr_cache_on_jellystat_refresh() -> None:
     marker_path = _jellystat_refresh_marker_path()
     try:
@@ -10241,6 +12906,18 @@ def _maybe_bust_arr_cache_on_jellystat_refresh() -> None:
         return
     if _playback_refresh_state["jellystat_seen"] is None or mtime > _playback_refresh_state["jellystat_seen"]:
         _playback_refresh_state["jellystat_seen"] = mtime
+        _cache.clear_app("sonarr")
+        _cache.clear_app("radarr")
+
+
+def _maybe_bust_arr_cache_on_streamystats_refresh() -> None:
+    marker_path = _streamystats_refresh_marker_path()
+    try:
+        mtime = os.path.getmtime(marker_path)
+    except OSError:
+        return
+    if _playback_refresh_state["streamystats_seen"] is None or mtime > _playback_refresh_state["streamystats_seen"]:
+        _playback_refresh_state["streamystats_seen"] = mtime
         _cache.clear_app("sonarr")
         _cache.clear_app("radarr")
 
@@ -10259,8 +12936,12 @@ def _maybe_bust_arr_cache_on_plex_refresh() -> None:
 
 def _maybe_bust_arr_cache_on_playback_refresh(cfg: dict) -> None:
     provider = _playback_provider(cfg)
-    if provider == "jellystat":
+    if provider == "jellyfin":
+        _maybe_bust_arr_cache_on_jellyfin_refresh()
+    elif provider == "jellystat":
         _maybe_bust_arr_cache_on_jellystat_refresh()
+    elif provider == "streamystats":
+        _maybe_bust_arr_cache_on_streamystats_refresh()
     elif provider == "tautulli":
         _maybe_bust_arr_cache_on_tautulli_refresh()
     elif provider == "plex":
@@ -10268,6 +12949,14 @@ def _maybe_bust_arr_cache_on_playback_refresh(cfg: dict) -> None:
 
 
 def _tautulli_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def _jellyfin_refresh_lock_age(lock_path: str) -> float | None:
     try:
         mtime = os.path.getmtime(lock_path)
     except OSError:
@@ -10283,6 +12972,14 @@ def _jellystat_refresh_lock_age(lock_path: str) -> float | None:
     return max(0.0, time.time() - mtime)
 
 
+def _streamystats_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
 def _plex_refresh_lock_age(lock_path: str) -> float | None:
     try:
         mtime = os.path.getmtime(lock_path)
@@ -10291,7 +12988,46 @@ def _plex_refresh_lock_age(lock_path: str) -> float | None:
     return max(0.0, time.time() - mtime)
 
 
+def _refresh_lock_owner_pid(lock_path: str) -> int:
+    try:
+        with open(lock_path, "r", encoding="utf-8") as handle:
+            raw = handle.read().strip()
+    except OSError:
+        return 0
+    return _safe_int(raw)
+
+
+def _refresh_lock_owner_alive(lock_path: str) -> bool:
+    pid = _refresh_lock_owner_pid(lock_path)
+    if pid <= 0:
+        return True
+    if pid == os.getpid():
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return True
+
+
+def _clear_dead_refresh_lock(lock_path: str, label: str, release_fn) -> bool:
+    if not os.path.exists(lock_path):
+        return False
+    if _refresh_lock_owner_alive(lock_path):
+        return False
+    pid = _refresh_lock_owner_pid(lock_path)
+    logger.warning("Abandoned %s refresh lock detected (pid %s not running); clearing.", label, pid)
+    release_fn(lock_path, None)
+    return True
+
+
 def _clear_stale_tautulli_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Tautulli", _release_tautulli_refresh_lock):
+        return True
     if stale_seconds <= 0:
         return False
     age = _tautulli_refresh_lock_age(lock_path)
@@ -10302,7 +13038,22 @@ def _clear_stale_tautulli_refresh_lock(lock_path: str, stale_seconds: int) -> bo
     return True
 
 
+def _clear_stale_jellyfin_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Jellyfin", _release_jellyfin_refresh_lock):
+        return True
+    if stale_seconds <= 0:
+        return False
+    age = _jellyfin_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Jellyfin refresh lock detected (age %.0fs); clearing.", age)
+    _release_jellyfin_refresh_lock(lock_path, None)
+    return True
+
+
 def _clear_stale_jellystat_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Jellystat", _release_jellystat_refresh_lock):
+        return True
     if stale_seconds <= 0:
         return False
     age = _jellystat_refresh_lock_age(lock_path)
@@ -10313,7 +13064,22 @@ def _clear_stale_jellystat_refresh_lock(lock_path: str, stale_seconds: int) -> b
     return True
 
 
+def _clear_stale_streamystats_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Streamystats", _release_streamystats_refresh_lock):
+        return True
+    if stale_seconds <= 0:
+        return False
+    age = _streamystats_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Streamystats refresh lock detected (age %.0fs); clearing.", age)
+    _release_streamystats_refresh_lock(lock_path, None)
+    return True
+
+
 def _clear_stale_plex_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Plex", _release_plex_refresh_lock):
+        return True
     if stale_seconds <= 0:
         return False
     age = _plex_refresh_lock_age(lock_path)
@@ -10333,6 +13099,18 @@ def _tautulli_refresh_in_progress(cfg: dict | None = None) -> bool:
     else:
         stale_seconds = _safe_int(cfg.get("tautulli_refresh_stale_seconds"))
     if _clear_stale_tautulli_refresh_lock(lock_path, stale_seconds):
+        return False
+    return os.path.exists(lock_path)
+
+
+def _jellyfin_refresh_in_progress(cfg: dict | None = None) -> bool:
+    lock_path = _jellyfin_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    stale_seconds = 3600
+    if cfg is not None:
+        stale_seconds = _safe_int(cfg.get("jellyfin_refresh_stale_seconds") or stale_seconds)
+    if _clear_stale_jellyfin_refresh_lock(lock_path, stale_seconds):
         return False
     return os.path.exists(lock_path)
 
@@ -10362,6 +13140,18 @@ def _jellystat_refresh_in_progress(cfg: dict | None = None) -> bool:
     return os.path.exists(lock_path)
 
 
+def _streamystats_refresh_in_progress(cfg: dict | None = None) -> bool:
+    lock_path = _streamystats_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    stale_seconds = 3600
+    if cfg is not None:
+        stale_seconds = _safe_int(cfg.get("streamystats_refresh_stale_seconds") or stale_seconds)
+    if _clear_stale_streamystats_refresh_lock(lock_path, stale_seconds):
+        return False
+    return os.path.exists(lock_path)
+
+
 def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
     _clear_stale_tautulli_refresh_lock(lock_path, stale_seconds)
     try:
@@ -10379,6 +13169,22 @@ def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
     return lock_path
 
 
+def _acquire_jellyfin_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_jellyfin_refresh_lock(lock_path, stale_seconds)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
+        pass
+    return lock_path
+
+
 def _acquire_jellystat_refresh_lock(lock_path: str, stale_seconds: int = 0):
     _clear_stale_jellystat_refresh_lock(lock_path, stale_seconds)
     try:
@@ -10392,6 +13198,22 @@ def _acquire_jellystat_refresh_lock(lock_path: str, stale_seconds: int = 0):
             handle.write(str(os.getpid()))
     except OSError:
         # The lock file itself is sufficient; a missing pid payload is non-fatal.
+        pass
+    return lock_path
+
+
+def _acquire_streamystats_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_streamystats_refresh_lock(lock_path, stale_seconds)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
         pass
     return lock_path
 
@@ -10421,11 +13243,25 @@ def _release_tautulli_refresh_lock(lock_path: str, _lock_token=None) -> None:
         pass
 
 
+def _release_jellyfin_refresh_lock(lock_path: str, _lock_token=None) -> None:
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
 def _release_jellystat_refresh_lock(lock_path: str, _lock_token=None) -> None:
     try:
         os.remove(lock_path)
     except OSError:
         # Best-effort lock cleanup.
+        pass
+
+
+def _release_streamystats_refresh_lock(lock_path: str, _lock_token=None) -> None:
+    try:
+        os.remove(lock_path)
+    except OSError:
         pass
 
 
@@ -10435,6 +13271,77 @@ def _release_plex_refresh_lock(lock_path: str, _lock_token=None) -> None:
     except OSError:
         # Best-effort lock cleanup.
         pass
+
+
+def _apply_jellyfin_to_caches(cfg: dict, index: dict) -> None:
+    _, index_ts = _cache.get_jellyfin_state()
+    provider_label = _playback_label("jellyfin")
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        memory_snapshot = _cache.get_app_snapshot(app_name)
+        for instance_id in list(memory_snapshot.keys()):
+            entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+            if not entry:
+                continue
+            if _apply_tautulli_stats_once(
+                entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=media_type,
+                provider_label=provider_label,
+            ):
+                _cache.update_app_entry(
+                    app_name,
+                    instance_id,
+                    data=entry.get("data") or [],
+                    ts=entry.get("ts") or 0,
+                    tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                )
+
+        cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
+        disk_cache = _load_arr_cache(cache_path)
+        updated = False
+        for instance_id, cached_entry in disk_cache.items():
+            if _apply_tautulli_stats_once(
+                cached_entry,
+                index,
+                media_type,
+                index_ts,
+                provider_label=provider_label,
+            ):
+                updated = True
+        if updated:
+            _queue_arr_cache_save(app_name, cache_path, disk_cache, "jellyfin_refresh")
+
+
+def _start_jellyfin_background_refresh(cfg: dict) -> bool:
+    if not (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")):
+        return False
+    lock_path = _jellyfin_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("jellyfin_refresh_stale_seconds"))
+    fd = _acquire_jellyfin_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            index = _get_jellyfin_index(cfg, force=True)
+            if index:
+                _apply_jellyfin_to_caches(cfg, index)
+                _touch_jellyfin_refresh_marker()
+        except Exception as exc:
+            logger.warning("Jellyfin refresh failed: %s", exc)
+        finally:
+            _release_jellyfin_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-jellyfin-refresh", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_jellyfin_refresh_lock(lock_path, fd)
+        raise
+    return True
 
 
 def _apply_tautulli_to_caches(cfg: dict, index: dict) -> None:
@@ -10736,6 +13643,150 @@ def _apply_jellystat_to_caches(cfg: dict, index: dict) -> None:
             _queue_arr_cache_save(app_name, cache_path, disk_cache, "jellystat_refresh")
 
 
+def _apply_streamystats_to_caches(cfg: dict, index: dict) -> None:
+    _, index_ts = _cache.get_streamystats_state()
+    totals = {"shows": 0, "movies": 0}
+    progress_instances: dict[str, dict[str, set[str]]] = {}
+    disk_caches: dict[str, dict[str, dict]] = {}
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        memory_snapshot = _cache.get_app_snapshot(app_name)
+        memory_ids: set[str] = set()
+        memory_total = 0
+        for instance_id, entry in memory_snapshot.items():
+            data = entry.get("data")
+            if isinstance(data, list) and data:
+                memory_ids.add(str(instance_id))
+                memory_total += len(data)
+
+        cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
+        disk_cache = _load_arr_cache(cache_path)
+        disk_caches[app_name] = {"path": cache_path, "cache": disk_cache}
+
+        disk_only_ids: set[str] = set()
+        disk_only_total = 0
+        for instance_id, cached_entry in disk_cache.items():
+            if str(instance_id) in memory_ids:
+                continue
+            data = cached_entry.get("data")
+            if isinstance(data, list) and data:
+                disk_only_ids.add(str(instance_id))
+                disk_only_total += len(data)
+
+        totals[media_type] = memory_total + disk_only_total
+        progress_instances[app_name] = {
+            "disk_only": disk_only_ids,
+            "memory_ids": memory_ids,
+        }
+
+    _init_tautulli_match_progress(totals)
+    provider_label = _playback_label("streamystats")
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        disk_only_ids = progress_instances.get(app_name, {}).get("disk_only", set())
+        memory_ids = progress_instances.get(app_name, {}).get("memory_ids", set())
+
+        for instance_id in memory_ids:
+            entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+            if not entry:
+                continue
+            if _apply_tautulli_stats_once(
+                entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=media_type,
+                provider_label=provider_label,
+            ):
+                _cache.update_app_entry(
+                    app_name,
+                    instance_id,
+                    data=entry.get("data") or [],
+                    ts=entry.get("ts") or 0,
+                    tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                )
+
+        cache_info = disk_caches.get(app_name, {})
+        cache_path = cache_info.get("path")
+        disk_cache = cache_info.get("cache", {})
+        updated = False
+        for instance_id, cached_entry in disk_cache.items():
+            progress_media = media_type if str(instance_id) in disk_only_ids else None
+            if _apply_tautulli_stats_once(
+                cached_entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=progress_media,
+                provider_label=provider_label,
+            ):
+                updated = True
+        if updated:
+            _queue_arr_cache_save(app_name, cache_path, disk_cache, "streamystats_refresh")
+
+
+def _start_streamystats_background_apply(cfg: dict, index: dict | None) -> bool:
+    if not index:
+        return False
+    lock_path = _streamystats_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("streamystats_refresh_stale_seconds"))
+    fd = _acquire_streamystats_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            _apply_streamystats_to_caches(cfg, index)
+        except Exception as exc:
+            logger.warning("Streamystats background apply failed: %s", exc)
+        finally:
+            _release_streamystats_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-streamystats-apply", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_streamystats_refresh_lock(lock_path, fd)
+        raise
+    return True
+
+
+def _start_streamystats_background_refresh(cfg: dict) -> bool:
+    if not (cfg.get("streamystats_url") and cfg.get("streamystats_api_key")):
+        return False
+    lock_path = _streamystats_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("streamystats_refresh_stale_seconds"))
+    fd = _acquire_streamystats_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    cache_path = cfg.get("streamystats_cache_path") or ""
+    existing_cache = _load_streamystats_cache(cache_path)
+
+    def worker():
+        try:
+            index = _get_streamystats_index(cfg, force=True, include_history=True)
+            if index:
+                _apply_streamystats_to_caches(cfg, index)
+                if not existing_cache:
+                    _save_streamystats_cache(cache_path, index, time.time())
+                _touch_streamystats_refresh_marker()
+        except Exception as exc:
+            logger.warning("Streamystats refresh failed: %s", exc)
+        finally:
+            _release_streamystats_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-streamystats-refresh", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_streamystats_refresh_lock(lock_path, fd)
+        raise
+    return True
+
+
 def _start_jellystat_background_apply(cfg: dict, index: dict | None) -> bool:
     if not index:
         return False
@@ -10971,6 +14022,16 @@ def _row_is_available(row: dict, media_type: str) -> bool:
             return int(row.get("EpisodesCounted") or 0) > 0
         except (TypeError, ValueError):
             return False
+    has_file = row.get("HasFile")
+    if has_file is not None:
+        if isinstance(has_file, str):
+            normalized = has_file.strip().lower()
+            if normalized in {"", "0", "false", "no", "off"}:
+                return False
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+        else:
+            return bool(has_file)
     try:
         return float(row.get("FileSizeGB") or 0) > 0
     except (TypeError, ValueError):
@@ -13243,10 +16304,14 @@ def _get_cached_instance(
             temp_entry.get("data") or [],
             ts=temp_entry.get("ts") or 0,
             tautulli_index_ts=temp_entry.get("tautulli_index_ts") or 0,
+            match_counts=_summarize_match_counts(temp_entry.get("data") or []),
+            match_health_summary=_summarize_existing_match_health(temp_entry.get("data") or []),
         )
         disk_cache[instance_id] = {
             "ts": temp_entry.get("ts") or 0,
             "tautulli_index_ts": _safe_int(temp_entry.get("tautulli_index_ts")),
+            "match_counts": _summarize_match_counts(temp_entry.get("data") or []),
+            "match_health_summary": _summarize_existing_match_health(temp_entry.get("data") or []),
             "data": temp_entry.get("data") or [],
         }
         if defer_wanted and not wanted_cached:
@@ -13350,6 +16415,8 @@ def _refresh_arr_item_cache(
         entry_rows,
         ts=now,
         tautulli_index_ts=playback_index_ts,
+        match_counts=_summarize_match_counts(entry_rows),
+        match_health_summary=_summarize_existing_match_health(entry_rows),
     )
 
     cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
@@ -13361,6 +16428,8 @@ def _refresh_arr_item_cache(
     disk_cache[instance_id] = {
         "ts": now,
         "tautulli_index_ts": playback_index_ts,
+        "match_counts": _summarize_match_counts(disk_rows),
+        "match_health_summary": _summarize_existing_match_health(disk_rows),
         "data": disk_rows,
     }
     _queue_arr_cache_save(app_name, cache_path, disk_cache, "item_refresh")
@@ -13591,6 +16660,8 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 apply_started = _start_tautulli_background_apply(cfg, cached_playback)
             elif provider == "jellystat":
                 apply_started = _start_jellystat_background_apply(cfg, cached_playback)
+            elif provider == "streamystats":
+                apply_started = _start_streamystats_background_apply(cfg, cached_playback)
             elif provider == "plex":
                 apply_started = _start_plex_background_apply(cfg, cached_playback)
         refresh_needed = force or not cached_playback
@@ -13600,12 +16671,16 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 started = _start_tautulli_background_refresh(cfg)
             elif provider == "jellystat":
                 started = _start_jellystat_background_refresh(cfg)
+            elif provider == "streamystats":
+                started = _start_streamystats_background_refresh(cfg)
             elif provider == "plex":
                 started = _start_plex_background_refresh(cfg)
         if provider == "tautulli":
             in_progress = _tautulli_refresh_in_progress(cfg)
         elif provider == "jellystat":
             in_progress = _jellystat_refresh_in_progress(cfg)
+        elif provider == "streamystats":
+            in_progress = _streamystats_refresh_in_progress(cfg)
         elif provider == "plex":
             in_progress = _plex_refresh_in_progress(cfg)
         else:
@@ -13650,6 +16725,19 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
     values.setdefault("sortarr_auth_method", "basic")
     values.setdefault("sortarr_upstream_auth_header", DEFAULT_UPSTREAM_AUTH_HEADER)
     values.setdefault("clear_basic_auth_pass", False)
+    values.setdefault("insights_provider_preference", _normalize_insights_provider_preference(values.get("insights_provider_preference", "auto")))
+    for key in (
+        "clear_plex_connection",
+        "clear_jellyfin_connection",
+        "clear_tautulli_connection",
+        "clear_jellystat_connection",
+        "clear_streamystats_connection",
+        "clear_sonarr_instance_2",
+        "clear_sonarr_instance_3",
+        "clear_radarr_instance_2",
+        "clear_radarr_instance_3",
+    ):
+        values.setdefault(key, False)
     if form is not None:
         def form_value(name: str, default: str = "") -> str:
             return str(form.get(name, default) or "").strip()
@@ -13663,9 +16751,15 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             "radarr_name_3",
             "plex_client_id",
             "plex_section_filters",
+            "jellyfin_username",
+            "jellyfin_user_id",
+            "jellyfin_library_ids_sonarr",
+            "jellyfin_library_ids_radarr",
             "tautulli_url",
             "jellystat_library_ids_sonarr",
             "jellystat_library_ids_radarr",
+            "streamystats_server_id",
+            "streamystats_username",
             "basic_auth_user",
             "sortarr_upstream_auth_header",
             "sortarr_proxy_hops",
@@ -13679,12 +16773,19 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             "tautulli_timeout_seconds",
             "tautulli_fetch_seconds",
             "tautulli_metadata_workers",
+            "jellyfin_timeout_seconds",
+            "jellyfin_page_size",
+            "jellyfin_history_page_size",
+            "streamystats_timeout_seconds",
+            "streamystats_search_limit",
+            "streamystats_workers",
             "sonarr_timeout_seconds",
             "radarr_timeout_seconds",
             "sonarr_episodefile_workers",
             "radarr_wanted_workers",
             "radarr_instance_workers",
             "plex_history_page_size",
+            "insights_provider_preference",
         ):
             values[key] = form_value(key, str(values.get(key) or ""))
 
@@ -13708,7 +16809,9 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             "radarr_url_api_3",
             "radarr_url_external_3",
             "plex_url",
+            "jellyfin_url",
             "jellystat_url",
+            "streamystats_url",
         ):
             values[key] = _normalize_url(form_value(key, str(values.get(key) or "")))
 
@@ -13717,6 +16820,9 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         )
         values["history_source_preference"] = _normalize_history_source_preference(
             form_value("history_source_preference", str(values.get("history_source_preference") or "auto"))
+        )
+        values["insights_provider_preference"] = _normalize_insights_provider_preference(
+            form_value("insights_provider_preference", str(values.get("insights_provider_preference") or "auto"))
         )
         values["sortarr_auth_method"] = _normalize_auth_method(
             form_value("sortarr_auth_method", str(values.get("sortarr_auth_method") or "basic"))
@@ -13728,6 +16834,18 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         values["sortarr_proxy_mode"] = proxy_preset
         values["sortarr_allow_unsafe_ephemeral_recovery"] = form.get("sortarr_allow_unsafe_ephemeral_recovery") == "1"
         values["clear_basic_auth_pass"] = form.get("clear_basic_auth_pass") == "1"
+        for key in (
+            "clear_plex_connection",
+            "clear_jellyfin_connection",
+            "clear_tautulli_connection",
+            "clear_jellystat_connection",
+            "clear_streamystats_connection",
+            "clear_sonarr_instance_2",
+            "clear_sonarr_instance_3",
+            "clear_radarr_instance_2",
+            "clear_radarr_instance_3",
+        ):
+            values[key] = form.get(key) == "1"
 
         for field_name, list_key in (
             ("sonarr_path_map", "sonarr_path_maps"),
@@ -13750,12 +16868,64 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         "radarr_api_key_2",
         "radarr_api_key_3",
         "plex_token",
+        "jellyfin_api_key",
+        "jellyfin_password",
         "tautulli_api_key",
         "jellystat_api_key",
+        "streamystats_api_key",
+        "streamystats_password",
         "basic_auth_pass",
         "sortarr_secret_key",
     ):
         values[key] = ""
+    values["basic_auth_pass_configured"] = bool(cfg.get("basic_auth_pass"))
+    values["sortarr_secret_key_configured"] = bool(cfg.get("sortarr_secret_key")) and not bool(cfg.get("sortarr_secret_key_ephemeral"))
+    if values.get("clear_plex_connection"):
+        values["plex_url"] = ""
+        values["plex_token_configured"] = False
+        values["plex_section_filters"] = ""
+    if values.get("clear_jellyfin_connection"):
+        values["jellyfin_url"] = ""
+        values["jellyfin_api_key_configured"] = False
+        values["jellyfin_password_configured"] = False
+        values["jellyfin_username"] = ""
+        values["jellyfin_user_id"] = ""
+        values["jellyfin_library_ids_sonarr"] = ""
+        values["jellyfin_library_ids_radarr"] = ""
+    if values.get("clear_tautulli_connection"):
+        values["tautulli_url"] = ""
+        values["tautulli_api_key_configured"] = False
+    if values.get("clear_jellystat_connection"):
+        values["jellystat_url"] = ""
+        values["jellystat_api_key_configured"] = False
+        values["jellystat_library_ids_sonarr"] = ""
+        values["jellystat_library_ids_radarr"] = ""
+    if values.get("clear_streamystats_connection"):
+        values["streamystats_url"] = ""
+        values["streamystats_api_key_configured"] = False
+        values["streamystats_password_configured"] = False
+        values["streamystats_server_id"] = ""
+        values["streamystats_username"] = ""
+    if values.get("clear_sonarr_instance_2"):
+        for key in ("sonarr_name_2", "sonarr_url_2", "sonarr_url_api_2", "sonarr_url_external_2", "sonarr_path_map_2"):
+            values[key] = ""
+        values["sonarr_api_key_2_configured"] = False
+        values["sonarr_path_maps_2"] = [""]
+    if values.get("clear_sonarr_instance_3"):
+        for key in ("sonarr_name_3", "sonarr_url_3", "sonarr_url_api_3", "sonarr_url_external_3", "sonarr_path_map_3"):
+            values[key] = ""
+        values["sonarr_api_key_3_configured"] = False
+        values["sonarr_path_maps_3"] = [""]
+    if values.get("clear_radarr_instance_2"):
+        for key in ("radarr_name_2", "radarr_url_2", "radarr_url_api_2", "radarr_url_external_2", "radarr_path_map_2"):
+            values[key] = ""
+        values["radarr_api_key_2_configured"] = False
+        values["radarr_path_maps_2"] = [""]
+    if values.get("clear_radarr_instance_3"):
+        for key in ("radarr_name_3", "radarr_url_3", "radarr_url_api_3", "radarr_url_external_3", "radarr_path_map_3"):
+            values[key] = ""
+        values["radarr_api_key_3_configured"] = False
+        values["radarr_path_maps_3"] = [""]
     return values
 
 
@@ -13770,10 +16940,12 @@ def _setup_advanced_summary(cfg: dict) -> dict:
             return True
 
     items: list[str] = []
-    if str(cfg.get("proxy_preset") or "single") != "single":
-        items.append("Proxy mode")
+    if str(cfg.get("proxy_preset") or "single") == "custom":
+        items.append("Custom proxy hops")
     if str(cfg.get("sortarr_csrf_trusted_origins") or "").strip():
         items.append("CSRF trusted origins")
+    if str(cfg.get("sortarr_waitress_trusted_proxy") or "").strip():
+        items.append("Trusted proxy")
     if bool(cfg.get("sortarr_allow_unsafe_ephemeral_recovery")):
         items.append("Unsafe recovery mode")
     if has_non_default_int("sonarr_timeout_seconds", 90):
@@ -13794,10 +16966,6 @@ def _setup_advanced_summary(cfg: dict) -> dict:
         items.append("Tautulli metadata workers")
     if has_non_default_int("plex_history_page_size", 200):
         items.append("Plex history page size")
-    if _auth_method(cfg) == "external":
-        items.append("External auth")
-    elif bool(cfg.get("basic_auth_user")):
-        items.append("Basic auth")
     count = len(items)
     preview = ", ".join(items[:3])
     if count > 3:
@@ -13807,19 +16975,513 @@ def _setup_advanced_summary(cfg: dict) -> dict:
 
 def _setup_optional_section_open(cfg: dict, field_errors: dict | None = None) -> bool:
     errors = field_errors or {}
-    if any(key in errors for key in ("plex", "tautulli", "jellystat")):
+    if any(key in errors for key in ("plex", "jellyfin", "tautulli", "jellystat", "streamystats")):
         return True
     return any(
         str(cfg.get(key) or "").strip()
         for key in (
             "plex_url",
+            "jellyfin_url",
             "tautulli_url",
             "jellystat_url",
+            "streamystats_url",
             "plex_section_filters",
+            "jellyfin_library_ids_sonarr",
+            "jellyfin_library_ids_radarr",
             "jellystat_library_ids_sonarr",
             "jellystat_library_ids_radarr",
+            "streamystats_server_id",
+            "streamystats_username",
         )
     )
+
+
+def _setup_error_key_to_field_name(key: str) -> str:
+    key = str(key or "").strip()
+    instance_map = {
+        "sonarr_1": "sonarr_url",
+        "sonarr_2": "sonarr_url_2",
+        "sonarr_3": "sonarr_url_3",
+        "radarr_1": "radarr_url",
+        "radarr_2": "radarr_url_2",
+        "radarr_3": "radarr_url_3",
+        "plex": "plex_url",
+        "jellyfin": "jellyfin_url",
+        "tautulli": "tautulli_url",
+        "jellystat": "jellystat_url",
+        "streamystats": "streamystats_url",
+    }
+    return instance_map.get(key, key)
+
+
+def _setup_error_step_for_key(key: str, cfg: dict | None = None) -> str:
+    field_name = _setup_error_key_to_field_name(key)
+    media_pref = _normalize_media_source_preference((cfg or {}).get("media_source_preference", "arr"))
+    if field_name.startswith("sonarr_") or field_name.startswith("radarr_") or field_name == "media_source_preference":
+        return "1"
+    if field_name in {
+        "history_source_preference",
+        "jellystat_url",
+        "jellystat_api_key",
+        "jellystat_library_ids_sonarr",
+        "jellystat_library_ids_radarr",
+        "streamystats_url",
+        "streamystats_api_key",
+        "streamystats_server_id",
+        "streamystats_username",
+        "streamystats_password",
+        "tautulli_url",
+        "tautulli_api_key",
+    }:
+        return "2"
+    if field_name in {
+        "plex_url",
+        "plex_token",
+        "plex_section_filters",
+    }:
+        return "1" if media_pref == "plex" else "3"
+    if field_name in {
+        "jellyfin_url",
+        "jellyfin_api_key",
+        "jellyfin_username",
+        "jellyfin_password",
+        "jellyfin_user_id",
+        "jellyfin_library_ids_sonarr",
+        "jellyfin_library_ids_radarr",
+    }:
+        return "1" if media_pref == "jellyfin" else "3"
+    if field_name in {
+        "sortarr_auth_method",
+        "basic_auth_user",
+        "basic_auth_pass",
+        "sortarr_upstream_auth_header",
+        "proxy_preset",
+        "sortarr_secret_key",
+        "clear_basic_auth_pass",
+    }:
+        return "4"
+    return "5"
+
+
+def _setup_error_steps(field_errors: dict[str, str] | None = None, cfg: dict | None = None) -> list[str]:
+    steps = {
+        _setup_error_step_for_key(key, cfg)
+        for key in (field_errors or {})
+        if str(key or "").strip()
+    }
+    return sorted(steps)
+
+
+def _setup_effective_secret_configured(cfg: dict, key: str) -> bool:
+    key = str(key or "").strip()
+    if not key:
+        return False
+    if str(cfg.get(key) or "").strip():
+        return True
+    configured_flag = f"{key}_configured"
+    return bool(cfg.get(configured_flag))
+
+
+def _setup_instance_ready(cfg: dict, prefix: str, suffix: str = "") -> bool:
+    url = str(cfg.get(f"{prefix}_url_api{suffix}") or cfg.get(f"{prefix}_url{suffix}") or "").strip()
+    return bool(url and _setup_effective_secret_configured(cfg, f"{prefix}_api_key{suffix}"))
+
+
+def _setup_provider_ready(cfg: dict, provider: str) -> bool:
+    provider = str(provider or "").strip().lower()
+    if provider == "plex":
+        return bool(str(cfg.get("plex_url") or "").strip() and _setup_effective_secret_configured(cfg, "plex_token"))
+    if provider == "jellyfin":
+        return bool(
+            str(cfg.get("jellyfin_url") or "").strip() and _setup_effective_secret_configured(cfg, "jellyfin_api_key")
+        )
+    if provider == "tautulli":
+        return bool(str(cfg.get("tautulli_url") or "").strip() and _setup_effective_secret_configured(cfg, "tautulli_api_key"))
+    if provider == "jellystat":
+        return bool(str(cfg.get("jellystat_url") or "").strip() and _setup_effective_secret_configured(cfg, "jellystat_api_key"))
+    if provider == "streamystats":
+        return bool(
+            str(cfg.get("streamystats_url") or "").strip()
+            and _setup_effective_secret_configured(cfg, "streamystats_api_key")
+            and _streamystats_credentials_ready_cfg(cfg)
+        )
+    return False
+
+
+def _setup_history_reuses_media_provider(cfg: dict, provider: str) -> bool:
+    provider = str(provider or "").strip().lower()
+    media_pref = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+    history_pref = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
+    if provider == "plex":
+        return media_pref == "plex" and history_pref in {"auto", "plex"} and _setup_provider_ready(cfg, "plex")
+    return False
+
+
+def _setup_step_states(
+    cfg: dict,
+    field_errors: dict[str, str] | None = None,
+    setup_required: bool = False,
+) -> dict[str, dict[str, str]]:
+    errors = field_errors or {}
+
+    def state_payload(state: str, label: str) -> dict[str, str]:
+        return {"state": state, "label": label}
+
+    media_error = any(_setup_error_step_for_key(key, cfg) == "1" for key in errors)
+    history_error = any(_setup_error_step_for_key(key, cfg) == "2" for key in errors)
+    playback_error = any(_setup_error_step_for_key(key, cfg) == "3" for key in errors)
+    security_error = any(_setup_error_step_for_key(key, cfg) == "4" for key in errors)
+    advanced_error = any(_setup_error_step_for_key(key, cfg) == "5" for key in errors)
+
+    has_arr_media = any(_setup_instance_ready(cfg, prefix, suffix) for prefix in ("sonarr", "radarr") for suffix in ("", "_2", "_3"))
+    has_jellyfin_media = _setup_provider_ready(cfg, "jellyfin")
+    has_plex_media = _setup_provider_ready(cfg, "plex")
+    media_pref = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+    if media_error:
+        media_state = state_payload("needs-attention", "Needs attention")
+    elif not (has_arr_media or has_jellyfin_media or has_plex_media):
+        media_state = state_payload("needs-attention", "Action needed")
+    elif media_pref == "arr" and not has_arr_media:
+        media_state = state_payload("needs-attention", "Needs attention")
+    elif media_pref == "jellyfin" and not has_jellyfin_media:
+        media_state = state_payload("needs-attention", "Needs attention")
+    elif media_pref == "plex" and not has_plex_media:
+        media_state = state_payload("needs-attention", "Needs attention")
+    else:
+        media_state = state_payload("ready", "Ready")
+
+    history_pref = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
+    history_ready = {
+        "plex": _setup_provider_ready(cfg, "plex"),
+        "tautulli": _setup_provider_ready(cfg, "tautulli"),
+        "jellystat": _setup_provider_ready(cfg, "jellystat"),
+        "streamystats": _setup_provider_ready(cfg, "streamystats"),
+    }
+    if history_error:
+        history_state = state_payload("needs-attention", "Needs attention")
+    elif history_pref == "plex" and _setup_history_reuses_media_provider(cfg, "plex"):
+        history_state = state_payload("ready", "Ready")
+    elif history_pref in history_ready and not history_ready.get(history_pref):
+        history_state = state_payload("needs-attention", "Needs attention")
+    elif any(history_ready.values()):
+        history_state = state_payload("ready", "Ready")
+    else:
+        history_state = state_payload("optional", "Optional")
+
+    playback_ready = {
+        "jellyfin": _setup_provider_ready(cfg, "jellyfin"),
+        "plex": _setup_provider_ready(cfg, "plex"),
+    }
+    playback_missing_required = history_pref == "plex" and not playback_ready["plex"] and not _setup_history_reuses_media_provider(cfg, "plex")
+    if playback_error or playback_missing_required:
+        playback_state = state_payload("needs-attention", "Needs attention")
+    elif any(playback_ready.values()):
+        playback_state = state_payload("configured", "Configured")
+    else:
+        playback_state = state_payload("optional", "Optional")
+
+    auth_method = _normalize_auth_method(cfg.get("sortarr_auth_method", "basic"))
+    basic_ready = bool(str(cfg.get("basic_auth_user") or "").strip() and _setup_effective_secret_configured(cfg, "basic_auth_pass"))
+    external_ready = bool(str(cfg.get("sortarr_upstream_auth_header") or DEFAULT_UPSTREAM_AUTH_HEADER).strip())
+    secret_ready = bool(_setup_effective_secret_configured(cfg, "sortarr_secret_key") and not bool(cfg.get("sortarr_secret_key_ephemeral")))
+    if security_error:
+        security_state = state_payload("needs-attention", "Needs attention")
+    elif auth_method == "basic" and not basic_ready:
+        security_state = state_payload("needs-attention", "Needs attention")
+    elif auth_method == "external" and not external_ready:
+        security_state = state_payload("needs-attention", "Needs attention")
+    elif setup_required and not secret_ready:
+        security_state = state_payload("configured", "Save required")
+    else:
+        security_state = state_payload("ready", "Ready")
+
+    advanced_summary = _setup_advanced_summary(cfg)
+    if advanced_error:
+        advanced_state = state_payload("needs-attention", "Needs attention")
+    elif advanced_summary.get("count"):
+        advanced_state = state_payload("configured", "Configured")
+    else:
+        advanced_state = state_payload("optional", "Optional")
+
+    return {
+        "step1": media_state,
+        "step2": history_state,
+        "step3": playback_state,
+        "step4": security_state,
+        "step5": advanced_state,
+    }
+
+
+def _setup_add_field_error(field_errors: dict[str, str], key: str, message: str) -> str:
+    normalized_key = str(key or "").strip()
+    normalized_message = str(message or "").strip()
+    if normalized_key and normalized_message:
+        field_errors.setdefault(normalized_key, normalized_message)
+    return normalized_message
+
+
+def _setup_cfg_env_value(cfg: dict, env_key: str) -> str:
+    return str(cfg.get(env_key.lower()) or "").strip()
+
+
+def _setup_has_secret_value(data: dict, cfg: dict, key: str) -> bool:
+    raw = str(data.get(key) or "").strip()
+    return bool(
+        raw
+        or str(data.get(f"{key}_FILE") or "").strip()
+        or str(data.get(f"{key}_CRED_TARGET") or "").strip()
+        or _setup_cfg_env_value(cfg, key)
+    )
+
+
+def _setup_resolve_secret_value(data: dict, cfg: dict, key: str) -> str:
+    raw = str(data.get(key) or "").strip()
+    file_ref = str(data.get(f"{key}_FILE") or "").strip()
+    if file_ref:
+        value = _read_secret_from_file(file_ref)
+        if value:
+            return value
+    target = str(data.get(f"{key}_CRED_TARGET") or "").strip()
+    if not target and raw.lower().startswith("wincred:"):
+        target = raw.split(":", 1)[1].strip()
+    if target:
+        value = _wincred_read_secret(target)
+        if value:
+            return value
+    return raw or _setup_cfg_env_value(cfg, key)
+
+
+def _setup_instance_url(data: dict, cfg: dict, prefix: str, suffix: str = "") -> str:
+    return str(
+        data.get(f"{prefix}_URL_API{suffix}")
+        or data.get(f"{prefix}_URL{suffix}")
+        or _setup_cfg_env_value(cfg, f"{prefix}_URL_API{suffix}")
+        or _setup_cfg_env_value(cfg, f"{prefix}_URL{suffix}")
+        or ""
+    ).strip()
+
+
+def _validate_setup_media_section(data: dict, cfg: dict, field_errors: dict[str, str], setup_warnings: list[str]) -> tuple[str, str]:
+    has_sonarr = any(
+        _setup_instance_url(data, cfg, "SONARR", suffix) and _setup_has_secret_value(data, cfg, f"SONARR_API_KEY{suffix}")
+        for suffix in ("", "_2", "_3")
+    )
+    has_radarr = any(
+        _setup_instance_url(data, cfg, "RADARR", suffix) and _setup_has_secret_value(data, cfg, f"RADARR_API_KEY{suffix}")
+        for suffix in ("", "_2", "_3")
+    )
+    has_sonarr = bool(has_sonarr or cfg.get("sonarr_instances"))
+    has_radarr = bool(has_radarr or cfg.get("radarr_instances"))
+    has_arr_media = bool(has_sonarr or has_radarr)
+    has_jellyfin_media = bool(
+        (data.get("JELLYFIN_URL") and _setup_has_secret_value(data, cfg, "JELLYFIN_API_KEY"))
+        or (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"))
+    )
+    has_plex_media = bool(
+        (data.get("PLEX_URL") and _setup_has_secret_value(data, cfg, "PLEX_TOKEN"))
+        or (cfg.get("plex_url") and cfg.get("plex_token"))
+    )
+    if not (has_arr_media or has_jellyfin_media or has_plex_media):
+        setup_warnings.append("Security settings saved. Continue Setup to add a media source.")
+        return "", "setup"
+
+    media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
+    if media_preference == "arr" and not has_arr_media:
+        return _setup_add_field_error(
+            field_errors,
+            "media_source_preference",
+            "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured.",
+        ), "index"
+    if media_preference == "jellyfin" and not has_jellyfin_media:
+        _setup_add_field_error(field_errors, "jellyfin", "Provide URL and API key or change preferred media source.")
+        return _setup_add_field_error(
+            field_errors,
+            "media_source_preference",
+            "Preferred media source is Jellyfin, but Jellyfin is not fully configured.",
+        ), "index"
+    if media_preference == "plex" and not has_plex_media:
+        _setup_add_field_error(field_errors, "plex", "Provide URL and token or change preferred media source.")
+        return _setup_add_field_error(
+            field_errors,
+            "media_source_preference",
+            "Preferred media source is Plex, but Plex is not fully configured.",
+        ), "index"
+
+    sonarr2 = _setup_instance_url(data, cfg, "SONARR", "_2") and _setup_has_secret_value(data, cfg, "SONARR_API_KEY_2")
+    sonarr3 = _setup_instance_url(data, cfg, "SONARR", "_3") and _setup_has_secret_value(data, cfg, "SONARR_API_KEY_3")
+    radarr2 = _setup_instance_url(data, cfg, "RADARR", "_2") and _setup_has_secret_value(data, cfg, "RADARR_API_KEY_2")
+    radarr3 = _setup_instance_url(data, cfg, "RADARR", "_3") and _setup_has_secret_value(data, cfg, "RADARR_API_KEY_3")
+
+    if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
+        return _setup_add_field_error(field_errors, "sonarr_name", "Sonarr instance 1 name is required when additional instances are configured."), "index"
+    if sonarr2 and not data.get("SONARR_NAME_2"):
+        return _setup_add_field_error(field_errors, "sonarr_name_2", "Sonarr instance 2 name is required when it is configured."), "index"
+    if sonarr3 and not data.get("SONARR_NAME_3"):
+        return _setup_add_field_error(field_errors, "sonarr_name_3", "Sonarr instance 3 name is required when it is configured."), "index"
+    if (radarr2 or radarr3) and not data.get("RADARR_NAME"):
+        return _setup_add_field_error(field_errors, "radarr_name", "Radarr instance 1 name is required when additional instances are configured."), "index"
+    if radarr2 and not data.get("RADARR_NAME_2"):
+        return _setup_add_field_error(field_errors, "radarr_name_2", "Radarr instance 2 name is required when it is configured."), "index"
+    if radarr3 and not data.get("RADARR_NAME_3"):
+        return _setup_add_field_error(field_errors, "radarr_name_3", "Radarr instance 3 name is required when it is configured."), "index"
+    return "", "index"
+
+
+def _validate_setup_history_section(data: dict, cfg: dict, field_errors: dict[str, str]) -> str:
+    tautulli_url = data.get("TAUTULLI_URL") or ""
+    tautulli_api_key = _setup_resolve_secret_value(data, cfg, "TAUTULLI_API_KEY")
+    jellystat_url = data.get("JELLYSTAT_URL") or ""
+    jellystat_api_key = _setup_resolve_secret_value(data, cfg, "JELLYSTAT_API_KEY")
+    streamystats_url = data.get("STREAMYSTATS_URL") or ""
+    streamystats_api_key = _setup_resolve_secret_value(data, cfg, "STREAMYSTATS_API_KEY")
+    streamystats_username = str(
+        data.get("STREAMYSTATS_USERNAME")
+        or data.get("JELLYFIN_USERNAME")
+        or cfg.get("streamystats_username")
+        or cfg.get("jellyfin_username")
+        or ""
+    ).strip()
+    streamystats_password = (
+        _setup_resolve_secret_value(data, cfg, "STREAMYSTATS_PASSWORD")
+        or _setup_resolve_secret_value(data, cfg, "JELLYFIN_PASSWORD")
+    )
+    streamystats_ready = bool(streamystats_url and streamystats_api_key and streamystats_username and streamystats_password)
+    history_preference = data.get("HISTORY_SOURCE_PREFERENCE", "auto")
+    media_preference = _normalize_media_source_preference(data.get("MEDIA_SOURCE_PREFERENCE", cfg.get("media_source_preference", "arr")))
+    plex_ready = bool(data.get("PLEX_URL") and _setup_resolve_secret_value(data, cfg, "PLEX_TOKEN"))
+    plex_reused = media_preference == "plex" and history_preference in {"auto", "plex"} and plex_ready
+    if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
+        _setup_add_field_error(field_errors, "tautulli", "Provide URL and API key or change preferred history source.")
+        return _setup_add_field_error(
+            field_errors,
+            "history_source_preference",
+            "Preferred history source is Tautulli, but Tautulli is not fully configured.",
+        )
+    if history_preference == "jellystat" and not (jellystat_url and jellystat_api_key):
+        _setup_add_field_error(field_errors, "jellystat", "Provide URL and API key or change preferred history source.")
+        return _setup_add_field_error(
+            field_errors,
+            "history_source_preference",
+            "Preferred history source is Jellystat, but Jellystat is not fully configured.",
+        )
+    if history_preference == "streamystats" and not streamystats_ready:
+        if not (streamystats_url and streamystats_api_key):
+            _setup_add_field_error(field_errors, "streamystats", "Provide URL and API key or change preferred history source.")
+        else:
+            _setup_add_field_error(
+                field_errors,
+                "streamystats_username",
+                "Provide Jellyfin username/password for Streamystats or change preferred history source.",
+            )
+            _setup_add_field_error(
+                field_errors,
+                "streamystats_password",
+                "Provide Jellyfin username/password for Streamystats or change preferred history source.",
+            )
+        return _setup_add_field_error(
+            field_errors,
+            "history_source_preference",
+            "Preferred history source is Streamystats, but Streamystats is not fully configured.",
+        )
+    if history_preference == "plex" and not plex_reused and not plex_ready:
+        _setup_add_field_error(field_errors, "plex", "Provide URL and token or change preferred history source.")
+        return _setup_add_field_error(
+            field_errors,
+            "history_source_preference",
+            "Preferred history source is Plex, but Plex is not fully configured.",
+        )
+    return ""
+
+
+def _validate_setup_connection_section(data: dict, cfg: dict, field_errors: dict[str, str]) -> str:
+    connection_errors: dict[str, str] = {}
+    for label, prefix, idx in [
+        ("Sonarr", "SONARR", 1),
+        ("Sonarr", "SONARR", 2),
+        ("Sonarr", "SONARR", 3),
+        ("Radarr", "RADARR", 1),
+        ("Radarr", "RADARR", 2),
+        ("Radarr", "RADARR", 3),
+    ]:
+        suffix = "" if idx == 1 else f"_{idx}"
+        url = _setup_instance_url(data, cfg, prefix, suffix)
+        api_key = _setup_resolve_secret_value(data, cfg, f"{prefix}_API_KEY{suffix}")
+        name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
+        if not (url and api_key):
+            continue
+        failure = _arr_test_connection(url, api_key, timeout=10)
+        if failure:
+            key = _instance_error_key(prefix, idx)
+            if name:
+                failure = f"{name}: {failure}"
+            connection_errors[key] = failure
+
+    tautulli_url = data.get("TAUTULLI_URL") or ""
+    tautulli_api_key = _setup_resolve_secret_value(data, cfg, "TAUTULLI_API_KEY")
+    if tautulli_url and tautulli_api_key:
+        failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
+        if failure:
+            connection_errors["tautulli"] = failure
+
+    jellystat_url = data.get("JELLYSTAT_URL") or ""
+    jellystat_api_key = _setup_resolve_secret_value(data, cfg, "JELLYSTAT_API_KEY")
+    if jellystat_url and jellystat_api_key:
+        failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
+        if failure:
+            connection_errors["jellystat"] = failure
+
+    streamystats_url = data.get("STREAMYSTATS_URL") or ""
+    streamystats_api_key = _setup_resolve_secret_value(data, cfg, "STREAMYSTATS_API_KEY")
+    if streamystats_url and streamystats_api_key:
+        streamystats_cfg = dict(cfg)
+        streamystats_cfg.update(
+            {
+                "streamystats_url": streamystats_url,
+                "streamystats_api_key": streamystats_api_key,
+                "streamystats_server_id": str(data.get("STREAMYSTATS_SERVER_ID") or "").strip(),
+                "streamystats_username": str(data.get("STREAMYSTATS_USERNAME") or "").strip(),
+                "streamystats_password": _setup_resolve_secret_value(data, cfg, "STREAMYSTATS_PASSWORD"),
+                "jellyfin_username": str(data.get("JELLYFIN_USERNAME") or cfg.get("jellyfin_username") or "").strip(),
+                "jellyfin_password": _setup_resolve_secret_value(data, cfg, "JELLYFIN_PASSWORD"),
+            }
+        )
+        if not _streamystats_credentials_ready_cfg(streamystats_cfg):
+            failure = "Provide Jellyfin username and password for Streamystats."
+        else:
+            failure = _streamystats_test_connection(streamystats_cfg, timeout=10)
+        if failure:
+            connection_errors["streamystats"] = failure
+
+    jellyfin_url = data.get("JELLYFIN_URL") or ""
+    jellyfin_api_key = _setup_resolve_secret_value(data, cfg, "JELLYFIN_API_KEY")
+    jellyfin_username = str(data.get("JELLYFIN_USERNAME") or "").strip()
+    jellyfin_password = _setup_resolve_secret_value(data, cfg, "JELLYFIN_PASSWORD")
+    if jellyfin_url and jellyfin_api_key:
+        failure = _jellyfin_test_connection(
+            jellyfin_url,
+            jellyfin_api_key,
+            username=jellyfin_username,
+            password=jellyfin_password,
+            timeout=10,
+        )
+        if failure:
+            connection_errors["jellyfin"] = failure
+
+    plex_url = data.get("PLEX_URL") or ""
+    plex_token = _setup_resolve_secret_value(data, cfg, "PLEX_TOKEN")
+    plex_client_id = data.get("PLEX_CLIENT_ID") or ""
+    if plex_url and plex_token:
+        if not plex_client_id:
+            plex_client_id = secrets.token_hex(12)
+            data["PLEX_CLIENT_ID"] = plex_client_id
+        failure = _plex_test_connection(plex_url, plex_token, plex_client_id, timeout=10)
+        if failure:
+            connection_errors["plex"] = failure
+
+    if connection_errors:
+        field_errors.update(connection_errors)
+        return "Fix the highlighted connection errors."
+    return ""
 
 
 @app.route("/setup", methods=["GET", "POST"])
@@ -13827,6 +17489,8 @@ def setup():
     cfg = _get_config()
     configured = _config_complete(cfg)
     setup_required = _security_setup_required(cfg)
+    setup_completed = request.method == "GET" and request.args.get("completed") == "1"
+    setup_completed_pending = bool(session.get("sortarr_setup_completed")) if setup_completed else False
     setup_connection_test_enabled = _setup_connection_test_enabled(cfg)
     setup_warnings: list[str] = []
     if configured:
@@ -13842,10 +17506,10 @@ def setup():
             setup_warnings.append(
                 "External authentication is incomplete. Complete Setup to restore trusted reverse-proxy login."
             )
-        elif not auth_context.get("authorized"):
+        elif not auth_context.get("authorized") and not (setup_completed and setup_completed_pending):
             return _auth_response(auth_context)
         g.request_auth_context = auth_context
-        if request.method == "GET" and request.args.get("force") != "1" and not setup_required:
+        if request.method == "GET" and request.args.get("force") != "1" and not setup_required and not setup_completed:
             return redirect(url_for("index"))
     cookie_transport_warning = _cookie_transport_warning_payload()
     if cookie_transport_warning:
@@ -13868,6 +17532,9 @@ def setup():
         radarr_instance_workers_raw = request.form.get("radarr_instance_workers", "").strip()
         tautulli_metadata_workers_raw = request.form.get("tautulli_metadata_workers", "").strip()
         plex_history_page_size_raw = request.form.get("plex_history_page_size", "").strip()
+        streamystats_timeout_raw = request.form.get("streamystats_timeout_seconds", "").strip()
+        streamystats_search_limit_raw = request.form.get("streamystats_search_limit", "").strip()
+        streamystats_workers_raw = request.form.get("streamystats_workers", "").strip()
 
         def parse_optional_int(
             raw: str,
@@ -13939,6 +17606,21 @@ def setup():
         plex_history_page_size, plex_history_page_size_error = parse_optional_int(
             plex_history_page_size_raw,
             "Plex history page size",
+            min_value=1,
+        )
+        streamystats_timeout_seconds, streamystats_timeout_error = parse_optional_int(
+            streamystats_timeout_raw,
+            "Streamystats timeout seconds",
+            min_value=1,
+        )
+        streamystats_search_limit, streamystats_search_limit_error = parse_optional_int(
+            streamystats_search_limit_raw,
+            "Streamystats search limit",
+            min_value=1,
+        )
+        streamystats_workers, streamystats_workers_error = parse_optional_int(
+            streamystats_workers_raw,
+            "Streamystats workers",
             min_value=1,
         )
         tautulli_lookup_limit = str(REQUIRED_TAUTULLI_LOOKUP_LIMIT)
@@ -14101,6 +17783,9 @@ def setup():
         history_source_preference = _normalize_history_source_preference(
             request.form.get("history_source_preference", cfg.get("history_source_preference", "auto"))
         )
+        insights_provider_preference = _normalize_insights_provider_preference(
+            request.form.get("insights_provider_preference", cfg.get("insights_provider_preference", "auto"))
+        )
 
         data = {
             "SONARR_NAME": request.form.get("sonarr_name", "").strip(),
@@ -14144,19 +17829,38 @@ def setup():
             "PLEX_CLIENT_ID": plex_client_id,
             "PLEX_SECTION_FILTERS": plex_section_filters,
             "PLEX_HISTORY_PAGE_SIZE": plex_history_page_size,
+            "JELLYFIN_URL": _normalize_url(request.form.get("jellyfin_url", "")),
+            "JELLYFIN_API_KEY": request.form.get("jellyfin_api_key", "").strip(),
+            "JELLYFIN_USERNAME": request.form.get("jellyfin_username", "").strip(),
+            "JELLYFIN_PASSWORD": request.form.get("jellyfin_password", "").strip(),
+            "JELLYFIN_USER_ID": request.form.get("jellyfin_user_id", "").strip(),
+            "JELLYFIN_LIBRARY_IDS_SONARR": request.form.get("jellyfin_library_ids_sonarr", "").strip(),
+            "JELLYFIN_LIBRARY_IDS_RADARR": request.form.get("jellyfin_library_ids_radarr", "").strip(),
             "MEDIA_SOURCE_PREFERENCE": media_source_preference,
             "HISTORY_SOURCE_PREFERENCE": history_source_preference,
+            "INSIGHTS_PROVIDER_PREFERENCE": insights_provider_preference,
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
             "JELLYSTAT_URL": _normalize_url(request.form.get("jellystat_url", "")),
             "JELLYSTAT_API_KEY": request.form.get("jellystat_api_key", "").strip(),
             "JELLYSTAT_LIBRARY_IDS_SONARR": request.form.get("jellystat_library_ids_sonarr", "").strip(),
             "JELLYSTAT_LIBRARY_IDS_RADARR": request.form.get("jellystat_library_ids_radarr", "").strip(),
-            "TAUTULLI_METADATA_LOOKUP_LIMIT": tautulli_lookup_limit,
-            "TAUTULLI_METADATA_LOOKUP_SECONDS": tautulli_lookup_seconds,
+            "STREAMYSTATS_URL": _normalize_url(request.form.get("streamystats_url", "")),
+            "STREAMYSTATS_API_KEY": request.form.get("streamystats_api_key", "").strip(),
+            "STREAMYSTATS_SERVER_ID": request.form.get("streamystats_server_id", "").strip(),
+            "STREAMYSTATS_USERNAME": request.form.get("streamystats_username", "").strip(),
+            "STREAMYSTATS_PASSWORD": request.form.get("streamystats_password", "").strip(),
+            "STREAMYSTATS_TIMEOUT_SECONDS": streamystats_timeout_seconds,
+            "STREAMYSTATS_SEARCH_LIMIT": streamystats_search_limit,
+            "STREAMYSTATS_WORKERS": streamystats_workers,
+            "TAUTULLI_METADATA_LOOKUP_LIMIT": "",
+            "TAUTULLI_METADATA_LOOKUP_SECONDS": "",
             "TAUTULLI_TIMEOUT_SECONDS": tautulli_timeout_seconds,
             "TAUTULLI_FETCH_SECONDS": tautulli_fetch_seconds,
             "TAUTULLI_METADATA_WORKERS": tautulli_metadata_workers,
+            "JELLYFIN_TIMEOUT_SECONDS": request.form.get("jellyfin_timeout_seconds", "").strip(),
+            "JELLYFIN_PAGE_SIZE": request.form.get("jellyfin_page_size", "").strip(),
+            "JELLYFIN_HISTORY_PAGE_SIZE": request.form.get("jellyfin_history_page_size", "").strip(),
             "SONARR_TIMEOUT_SECONDS": sonarr_timeout_seconds,
             "RADARR_TIMEOUT_SECONDS": radarr_timeout_seconds,
             "SONARR_EPISODEFILE_WORKERS": sonarr_episodefile_workers,
@@ -14181,11 +17885,79 @@ def setup():
             data["BASIC_AUTH_PASS"] = ""
             data["BASIC_AUTH_PASS_FILE"] = ""
             data["BASIC_AUTH_PASS_CRED_TARGET"] = ""
+        if request.form.get("clear_plex_connection") == "1":
+            for key in ("PLEX_URL", "PLEX_TOKEN", "PLEX_TOKEN_FILE", "PLEX_TOKEN_CRED_TARGET", "PLEX_SECTION_FILTERS"):
+                data[key] = ""
+        if request.form.get("clear_jellyfin_connection") == "1":
+            for key in (
+                "JELLYFIN_URL",
+                "JELLYFIN_API_KEY",
+                "JELLYFIN_API_KEY_FILE",
+                "JELLYFIN_API_KEY_CRED_TARGET",
+                "JELLYFIN_USERNAME",
+                "JELLYFIN_PASSWORD",
+                "JELLYFIN_PASSWORD_FILE",
+                "JELLYFIN_PASSWORD_CRED_TARGET",
+                "JELLYFIN_USER_ID",
+                "JELLYFIN_LIBRARY_IDS_SONARR",
+                "JELLYFIN_LIBRARY_IDS_RADARR",
+            ):
+                data[key] = ""
+        if request.form.get("clear_tautulli_connection") == "1":
+            for key in ("TAUTULLI_URL", "TAUTULLI_API_KEY", "TAUTULLI_API_KEY_FILE", "TAUTULLI_API_KEY_CRED_TARGET"):
+                data[key] = ""
+        if request.form.get("clear_jellystat_connection") == "1":
+            for key in (
+                "JELLYSTAT_URL",
+                "JELLYSTAT_API_KEY",
+                "JELLYSTAT_API_KEY_FILE",
+                "JELLYSTAT_API_KEY_CRED_TARGET",
+                "JELLYSTAT_LIBRARY_IDS_SONARR",
+                "JELLYSTAT_LIBRARY_IDS_RADARR",
+            ):
+                data[key] = ""
+        if request.form.get("clear_streamystats_connection") == "1":
+            for key in (
+                "STREAMYSTATS_URL",
+                "STREAMYSTATS_API_KEY",
+                "STREAMYSTATS_API_KEY_FILE",
+                "STREAMYSTATS_API_KEY_CRED_TARGET",
+                "STREAMYSTATS_SERVER_ID",
+                "STREAMYSTATS_USERNAME",
+                "STREAMYSTATS_PASSWORD",
+                "STREAMYSTATS_PASSWORD_FILE",
+                "STREAMYSTATS_PASSWORD_CRED_TARGET",
+            ):
+                data[key] = ""
+        if request.form.get("clear_sonarr_instance_2") == "1":
+            for key in (
+                "SONARR_NAME_2", "SONARR_URL_2", "SONARR_URL_API_2", "SONARR_URL_EXTERNAL_2",
+                "SONARR_API_KEY_2", "SONARR_API_KEY_2_FILE", "SONARR_API_KEY_2_CRED_TARGET", "SONARR_PATH_MAP_2",
+            ):
+                data[key] = ""
+        if request.form.get("clear_sonarr_instance_3") == "1":
+            for key in (
+                "SONARR_NAME_3", "SONARR_URL_3", "SONARR_URL_API_3", "SONARR_URL_EXTERNAL_3",
+                "SONARR_API_KEY_3", "SONARR_API_KEY_3_FILE", "SONARR_API_KEY_3_CRED_TARGET", "SONARR_PATH_MAP_3",
+            ):
+                data[key] = ""
+        if request.form.get("clear_radarr_instance_2") == "1":
+            for key in (
+                "RADARR_NAME_2", "RADARR_URL_2", "RADARR_URL_API_2", "RADARR_URL_EXTERNAL_2",
+                "RADARR_API_KEY_2", "RADARR_API_KEY_2_FILE", "RADARR_API_KEY_2_CRED_TARGET", "RADARR_PATH_MAP_2",
+            ):
+                data[key] = ""
+        if request.form.get("clear_radarr_instance_3") == "1":
+            for key in (
+                "RADARR_NAME_3", "RADARR_URL_3", "RADARR_URL_API_3", "RADARR_URL_EXTERNAL_3",
+                "RADARR_API_KEY_3", "RADARR_API_KEY_3_FILE", "RADARR_API_KEY_3_CRED_TARGET", "RADARR_PATH_MAP_3",
+            ):
+                data[key] = ""
 
         proxy_error = None
         if proxy_preset == "direct":
             data["SORTARR_PROXY_MODE"] = "direct"
-            data["SORTARR_PROXY_HOPS"] = "0"
+            data["SORTARR_PROXY_HOPS"] = ""
             data["SORTARR_PROXY_HOPS_FOR"] = ""
             data["SORTARR_PROXY_HOPS_HOST"] = ""
             data["SORTARR_PROXY_HOPS_PROTO"] = ""
@@ -14193,7 +17965,7 @@ def setup():
             data["SORTARR_PROXY_HOPS_PREFIX"] = ""
         elif proxy_preset == "single":
             data["SORTARR_PROXY_MODE"] = "single"
-            data["SORTARR_PROXY_HOPS"] = "1"
+            data["SORTARR_PROXY_HOPS"] = ""
             data["SORTARR_PROXY_HOPS_FOR"] = ""
             data["SORTARR_PROXY_HOPS_HOST"] = ""
             data["SORTARR_PROXY_HOPS_PROTO"] = ""
@@ -14201,7 +17973,7 @@ def setup():
             data["SORTARR_PROXY_HOPS_PREFIX"] = ""
         elif proxy_preset == "double":
             data["SORTARR_PROXY_MODE"] = "double"
-            data["SORTARR_PROXY_HOPS"] = "2"
+            data["SORTARR_PROXY_HOPS"] = ""
             data["SORTARR_PROXY_HOPS_FOR"] = ""
             data["SORTARR_PROXY_HOPS_HOST"] = ""
             data["SORTARR_PROXY_HOPS_PROTO"] = ""
@@ -14268,6 +18040,9 @@ def setup():
             or radarr_instance_workers_error
             or tautulli_metadata_workers_error
             or plex_history_page_size_error
+            or streamystats_timeout_error
+            or streamystats_search_limit_error
+            or streamystats_workers_error
             or proxy_error
             or trusted_origins_error
             or auth_error
@@ -14276,166 +18051,60 @@ def setup():
 
         redirect_endpoint = "index"
         if cache_seconds is None:
-            error = "Cache seconds must be a whole number."
+            error = _setup_add_field_error(field_errors, "cache_seconds", "Cache seconds must be a whole number.")
         elif cache_seconds < 30:
-            error = "Cache seconds must be at least 30."
+            error = _setup_add_field_error(field_errors, "cache_seconds", "Cache seconds must be at least 30.")
         elif config_error:
+            if timeout_error:
+                _setup_add_field_error(field_errors, "tautulli_timeout_seconds", timeout_error)
+            if fetch_error:
+                _setup_add_field_error(field_errors, "tautulli_fetch_seconds", fetch_error)
+            if sonarr_timeout_error:
+                _setup_add_field_error(field_errors, "sonarr_timeout_seconds", sonarr_timeout_error)
+            if radarr_timeout_error:
+                _setup_add_field_error(field_errors, "radarr_timeout_seconds", radarr_timeout_error)
+            if sonarr_episodefile_workers_error:
+                _setup_add_field_error(field_errors, "sonarr_episodefile_workers", sonarr_episodefile_workers_error)
+            if radarr_wanted_workers_error:
+                _setup_add_field_error(field_errors, "radarr_wanted_workers", radarr_wanted_workers_error)
+            if radarr_instance_workers_error:
+                _setup_add_field_error(field_errors, "radarr_instance_workers", radarr_instance_workers_error)
+            if tautulli_metadata_workers_error:
+                _setup_add_field_error(field_errors, "tautulli_metadata_workers", tautulli_metadata_workers_error)
+            if plex_history_page_size_error:
+                _setup_add_field_error(field_errors, "plex_history_page_size", plex_history_page_size_error)
+            if streamystats_timeout_error:
+                _setup_add_field_error(field_errors, "streamystats_timeout_seconds", streamystats_timeout_error)
+            if streamystats_search_limit_error:
+                _setup_add_field_error(field_errors, "streamystats_search_limit", streamystats_search_limit_error)
+            if streamystats_workers_error:
+                _setup_add_field_error(field_errors, "streamystats_workers", streamystats_workers_error)
+            if trusted_origins_error:
+                _setup_add_field_error(field_errors, "sortarr_csrf_trusted_origins", trusted_origins_error)
+            if auth_error:
+                auth_field = "sortarr_upstream_auth_header" if auth_method == "external" else ("basic_auth_user" if "username" in auth_error.lower() else "basic_auth_pass")
+                _setup_add_field_error(field_errors, auth_field, auth_error)
+            if external_auth_error:
+                target_field = "sortarr_waitress_trusted_proxy" if "trusted proxy" in external_auth_error.lower() else "proxy_preset"
+                _setup_add_field_error(field_errors, target_field, external_auth_error)
+            if proxy_error:
+                proxy_field_map = {
+                    proxy_hops_error: "sortarr_proxy_hops",
+                    proxy_hops_for_error: "sortarr_proxy_hops_for",
+                    proxy_hops_host_error: "sortarr_proxy_hops_host",
+                    proxy_hops_proto_error: "sortarr_proxy_hops_proto",
+                    proxy_hops_port_error: "sortarr_proxy_hops_port",
+                    proxy_hops_prefix_error: "sortarr_proxy_hops_prefix",
+                }
+                target_field = proxy_field_map.get(proxy_error, "sortarr_proxy_hops")
+                _setup_add_field_error(field_errors, target_field, proxy_error)
             error = config_error or ""
         else:
-            def cfg_env_value(env_key: str) -> str:
-                return str(cfg.get(env_key.lower()) or "").strip()
-
-            def has_secret_value(key: str) -> bool:
-                raw = str(data.get(key) or "").strip()
-                return bool(
-                    raw
-                    or str(data.get(f"{key}_FILE") or "").strip()
-                    or str(data.get(f"{key}_CRED_TARGET") or "").strip()
-                    or cfg_env_value(key)
-                )
-
-            def resolve_secret_value(key: str) -> str:
-                raw = str(data.get(key) or "").strip()
-                file_ref = str(data.get(f"{key}_FILE") or "").strip()
-                if file_ref:
-                    value = _read_secret_from_file(file_ref)
-                    if value:
-                        return value
-                target = str(data.get(f"{key}_CRED_TARGET") or "").strip()
-                if not target and raw.lower().startswith("wincred:"):
-                    target = raw.split(":", 1)[1].strip()
-                if target:
-                    value = _wincred_read_secret(target)
-                    if value:
-                        return value
-                return raw or cfg_env_value(key)
-
-            def instance_url(prefix: str, suffix: str = "") -> str:
-                return str(
-                    data.get(f"{prefix}_URL_API{suffix}")
-                    or data.get(f"{prefix}_URL{suffix}")
-                    or cfg_env_value(f"{prefix}_URL_API{suffix}")
-                    or cfg_env_value(f"{prefix}_URL{suffix}")
-                    or ""
-                ).strip()
-
-            has_sonarr = any(
-                instance_url("SONARR", suffix) and has_secret_value(f"SONARR_API_KEY{suffix}")
-                for suffix in ("", "_2", "_3")
-            )
-            has_radarr = any(
-                instance_url("RADARR", suffix) and has_secret_value(f"RADARR_API_KEY{suffix}")
-                for suffix in ("", "_2", "_3")
-            )
-            # Preserve no-change saves: treat already configured instances as valid even when
-            # secret sources are external and not re-entered in the setup form.
-            has_sonarr = bool(has_sonarr or cfg.get("sonarr_instances"))
-            has_radarr = bool(has_radarr or cfg.get("radarr_instances"))
-            has_arr_media = bool(has_sonarr or has_radarr)
-            has_plex_media = bool(
-                (data.get("PLEX_URL") and has_secret_value("PLEX_TOKEN"))
-                or (cfg.get("plex_url") and cfg.get("plex_token"))
-            )
-            if not (has_arr_media or has_plex_media):
-                redirect_endpoint = "setup"
-                setup_warnings.append(
-                    "Security settings saved. Continue Setup to add a media source."
-                )
-            else:
-                media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
-                if media_preference == "arr" and not has_arr_media:
-                    error = "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured."
-                elif media_preference == "plex" and not has_plex_media:
-                    error = "Preferred media source is Plex, but Plex is not fully configured."
-                    field_errors.setdefault(
-                        "plex",
-                        "Provide URL and token or change preferred media source.",
-                    )
-                else:
-                    sonarr2 = instance_url("SONARR", "_2") and has_secret_value("SONARR_API_KEY_2")
-                    sonarr3 = instance_url("SONARR", "_3") and has_secret_value("SONARR_API_KEY_3")
-                    radarr2 = instance_url("RADARR", "_2") and has_secret_value("RADARR_API_KEY_2")
-                    radarr3 = instance_url("RADARR", "_3") and has_secret_value("RADARR_API_KEY_3")
-
-                    if (sonarr2 or sonarr3) and not data.get("SONARR_NAME"):
-                        error = "Sonarr instance 1 name is required when additional instances are configured."
-                    elif sonarr2 and not data.get("SONARR_NAME_2"):
-                        error = "Sonarr instance 2 name is required when it is configured."
-                    elif sonarr3 and not data.get("SONARR_NAME_3"):
-                        error = "Sonarr instance 3 name is required when it is configured."
-                    elif (radarr2 or radarr3) and not data.get("RADARR_NAME"):
-                        error = "Radarr instance 1 name is required when additional instances are configured."
-                    elif radarr2 and not data.get("RADARR_NAME_2"):
-                        error = "Radarr instance 2 name is required when it is configured."
-                    elif radarr3 and not data.get("RADARR_NAME_3"):
-                        error = "Radarr instance 3 name is required when it is configured."
-                    else:
-                        tautulli_url = data.get("TAUTULLI_URL") or ""
-                        tautulli_api_key = resolve_secret_value("TAUTULLI_API_KEY")
-                        jellystat_url = data.get("JELLYSTAT_URL") or ""
-                        jellystat_api_key = resolve_secret_value("JELLYSTAT_API_KEY")
-                        history_preference = data.get("HISTORY_SOURCE_PREFERENCE", "auto")
-                        if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
-                            error = "Preferred history source is Tautulli, but Tautulli is not fully configured."
-                            field_errors.setdefault(
-                                "tautulli",
-                                "Provide URL and API key or change preferred history source.",
-                            )
-                        elif history_preference == "jellystat" and not (jellystat_url and jellystat_api_key):
-                            error = "Preferred history source is Jellystat, but Jellystat is not fully configured."
-                            field_errors.setdefault(
-                                "jellystat",
-                                "Provide URL and API key or change preferred history source.",
-                            )
-                        elif history_preference == "plex" and not (data.get("PLEX_URL") and resolve_secret_value("PLEX_TOKEN")):
-                            error = "Preferred history source is Plex, but Plex is not fully configured."
-                            field_errors.setdefault(
-                                "plex",
-                                "Provide URL and token or change preferred history source.",
-                            )
-                        else:
-                            connection_errors: dict[str, str] = {}
-                            for label, prefix, idx in [
-                                ("Sonarr", "SONARR", 1),
-                                ("Sonarr", "SONARR", 2),
-                                ("Sonarr", "SONARR", 3),
-                                ("Radarr", "RADARR", 1),
-                                ("Radarr", "RADARR", 2),
-                                ("Radarr", "RADARR", 3),
-                            ]:
-                                suffix = "" if idx == 1 else f"_{idx}"
-                                url = instance_url(prefix, suffix)
-                                api_key = resolve_secret_value(f"{prefix}_API_KEY{suffix}")
-                                name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
-                                if not (url and api_key):
-                                    continue
-                                failure = _arr_test_connection(url, api_key, timeout=10)
-                                if failure:
-                                    key = _instance_error_key(prefix, idx)
-                                    if name:
-                                        failure = f"{name}: {failure}"
-                                    connection_errors[key] = failure
-                            if tautulli_url and tautulli_api_key:
-                                failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
-                                if failure:
-                                    connection_errors["tautulli"] = failure
-                            if jellystat_url and jellystat_api_key:
-                                failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
-                                if failure:
-                                    connection_errors["jellystat"] = failure
-                            plex_url = data.get("PLEX_URL") or ""
-                            plex_token = resolve_secret_value("PLEX_TOKEN")
-                            plex_client_id = data.get("PLEX_CLIENT_ID") or ""
-                            if plex_url and plex_token:
-                                if not plex_client_id:
-                                    plex_client_id = secrets.token_hex(12)
-                                    data["PLEX_CLIENT_ID"] = plex_client_id
-                                failure = _plex_test_connection(plex_url, plex_token, plex_client_id, timeout=10)
-                                if failure:
-                                    connection_errors["plex"] = failure
-                            if connection_errors:
-                                field_errors.update(connection_errors)
-                                error = "Fix the highlighted connection errors."
+            error, redirect_endpoint = _validate_setup_media_section(data, cfg, field_errors, setup_warnings)
+            if not error:
+                error = _validate_setup_history_section(data, cfg, field_errors)
+            if not error:
+                error = _validate_setup_connection_section(data, cfg, field_errors)
         proxy_trust_settings_changed = _proxy_trust_settings_changed(data)
         if not error:
             try:
@@ -14469,6 +18138,17 @@ def setup():
                 if setup_warnings:
                     session["sortarr_setup_warning"] = " ".join(setup_warnings)
                 _invalidate_cache()
+                if redirect_endpoint == "index":
+                    completion_message = "Setup saved. Continue into the app with the updated settings."
+                    if auth_method == "basic":
+                        completion_message = "Setup saved. Continue into the app and sign in with the updated Basic Auth credentials if prompted."
+                    elif auth_method == "external":
+                        completion_message = "Setup saved. Continue into the app through your trusted reverse proxy."
+                    session["sortarr_setup_completed"] = {
+                        "target_url": url_for("index"),
+                        "message": completion_message,
+                    }
+                    return redirect(url_for("setup", completed=1))
                 return redirect(url_for(redirect_endpoint))
             except RuntimeError as exc:
                 error = str(exc)
@@ -14484,6 +18164,10 @@ def setup():
         csrf_token = _get_csrf_token()
         setup_csrf_warning = ""
         setup_notice = ""
+    setup_completed_info = session.pop("sortarr_setup_completed", None) if setup_completed else None
+    if setup_completed and not isinstance(setup_completed_info, dict):
+        setup_completed = False
+        setup_completed_info = None
     if cookie_transport_warning:
         setup_csrf_warning = _append_warning(
             setup_csrf_warning,
@@ -14493,15 +18177,27 @@ def setup():
     advanced_summary = _setup_advanced_summary(setup_values)
     optional_section_open = _setup_optional_section_open(setup_values, field_errors)
     advanced_section_open = bool(advanced_summary.get("count"))
+    error_steps = _setup_error_steps(field_errors, setup_values)
+    focus_field = _setup_error_key_to_field_name(next(iter(field_errors), ""))
+    setup_step_states = _setup_step_states(
+        setup_values,
+        field_errors=field_errors,
+        setup_required=setup_required,
+    )
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
         error=error,
         setup_notice=setup_notice,
         setup_csrf_warning=setup_csrf_warning,
+        setup_completed=setup_completed,
+        setup_completed_info=setup_completed_info or {},
         field_errors=field_errors,
         values=setup_values,
         advanced_summary=advanced_summary,
+        setup_step_states=setup_step_states,
+        error_steps=error_steps,
+        focus_field=focus_field,
         optional_section_open=optional_section_open,
         advanced_section_open=advanced_section_open,
         setup_required=setup_required,
@@ -14517,6 +18213,9 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
     provider = _playback_provider(cfg)
     playback_enabled = bool(provider)
     plex_configured = bool(cfg.get("plex_url") and cfg.get("plex_token"))
+    jellyfin_configured = bool(cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"))
+    streamystats_configured = bool(cfg.get("streamystats_url") and cfg.get("streamystats_api_key"))
+    insights_provider = _playback_insights_provider(cfg)
     media_source_preference = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
     history_source_preference = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
     effective_media_source = _effective_media_source(cfg)
@@ -14536,8 +18235,8 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
         if radarr_instances_public
         else _normalize_url(os.environ.get("RADARR_URL_EXTERNAL") or "") or cfg["radarr_url"]
     )
-    sonarr_configured = bool(cfg.get("sonarr_instances")) or _is_plex_media_fallback_enabled(cfg, "sonarr")
-    radarr_configured = bool(cfg.get("radarr_instances")) or _is_plex_media_fallback_enabled(cfg, "radarr")
+    sonarr_configured = bool(cfg.get("sonarr_instances")) or bool(_media_fallback_provider(cfg, "sonarr"))
+    radarr_configured = bool(cfg.get("radarr_instances")) or bool(_media_fallback_provider(cfg, "radarr"))
     plex_scope = _get_plex_library_scope(cfg)
     return {
         "sonarr_url": sonarr_public_base,
@@ -14548,6 +18247,9 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
         "playback_configured": playback_enabled,
         "playback_provider": provider,
         "plex_configured": plex_configured,
+        "jellyfin_configured": jellyfin_configured,
+        "streamystats_configured": streamystats_configured,
+        "insights_provider": insights_provider,
         "media_source_preference": media_source_preference,
         "media_source": effective_media_source,
         "history_source_preference": history_source_preference,
@@ -14594,15 +18296,20 @@ def api_status():
     apps = {}
     for app_name in ("sonarr", "radarr"):
         instances = cfg.get(f"{app_name}_instances") or []
-        app_configured = bool(instances) or _is_plex_media_fallback_enabled(cfg, app_name)
+        app_configured = bool(instances) or bool(_media_fallback_provider(cfg, app_name))
         if lite:
             latest_ts = _collect_cache_latest_ts(app_name)
             counts = None
         else:
-            rows, latest_ts = _collect_cached_rows(app_name)
-            counts = _summarize_match_counts(rows) if rows else _summarize_match_counts([])
+            counts, latest_ts = _collect_cached_counts(app_name)
         cache_path = cfg.get(f"{app_name}_cache_path")
         disk_info = _cache_file_info(cache_path)
+        fallback_cache = _fallback_media_cache_info(app_name, cfg) if app_configured else {}
+        effective_memory_ts = latest_ts or _safe_int((fallback_cache or {}).get("memory_ts"))
+        effective_disk_ts = _safe_int(disk_info["ts"]) or _safe_int((fallback_cache or {}).get("disk_ts"))
+        effective_disk_age = disk_info["age_seconds"]
+        if effective_disk_age is None and effective_disk_ts:
+            effective_disk_age = (fallback_cache or {}).get("disk_age_seconds")
         progress_meta = None
         if refresh_in_progress and playback_enabled:
             media_type = "shows" if app_name == "sonarr" else "movies"
@@ -14643,10 +18350,10 @@ def api_status():
             "configured": app_configured,
             "progress": progress_meta,
             "cache": {
-                "memory_ts": latest_ts,
-                "memory_age_seconds": _age_seconds(latest_ts),
-                "disk_ts": disk_info["ts"],
-                "disk_age_seconds": disk_info["age_seconds"],
+                "memory_ts": effective_memory_ts,
+                "memory_age_seconds": _age_seconds(effective_memory_ts),
+                "disk_ts": effective_disk_ts,
+                "disk_age_seconds": effective_disk_age,
             },
         }
         if not lite:
@@ -14774,6 +18481,18 @@ def api_setup_test():
         use_stored_secret=use_stored_secret,
     )
     client_id = str(payload.get("client_id") or "").strip()
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "").strip()
+    if kind == "jellyfin":
+        if not username:
+            username = str(cfg.get("jellyfin_username") or "").strip()
+        if not password and use_stored_secret and slot == "jellyfin" and _urls_match(url, cfg.get("jellyfin_url")):
+            password = str(cfg.get("jellyfin_password") or "").strip()
+    elif kind == "streamystats":
+        if not username:
+            username = str(cfg.get("streamystats_username") or cfg.get("jellyfin_username") or "").strip()
+        if not password and use_stored_secret and slot == "streamystats" and _urls_match(url, cfg.get("streamystats_url")):
+            password = str(cfg.get("streamystats_password") or cfg.get("jellyfin_password") or "").strip()
     if not url or not api_key:
         return jsonify({"ok": False, "error": _("URL and API key are required.")}), 400
 
@@ -14790,15 +18509,41 @@ def api_setup_test():
         if not client_id:
             client_id = secrets.token_hex(12)
         failure = _plex_test_connection(url, api_key, client_id, timeout=10)
+    elif kind == "jellyfin":
+        failure = _jellyfin_test_connection(url, api_key, username=username, password=password, timeout=10)
+    elif kind == "streamystats":
+        streamystats_cfg = dict(cfg)
+        streamystats_cfg.update(
+            {
+                "streamystats_url": url,
+                "streamystats_api_key": api_key,
+                "streamystats_username": username,
+                "streamystats_password": password,
+            }
+        )
+        server_id = str(payload.get("server_id") or payload.get("serverId") or "").strip()
+        if server_id:
+            streamystats_cfg["streamystats_server_id"] = server_id
+        failure = _streamystats_test_connection(streamystats_cfg, timeout=10)
     else:
         return jsonify({"ok": False, "error": "Unknown test target."}), 400
 
     if failure:
+        logger.warning(
+            "Setup connection test failed for %s (slot=%s).",
+            kind,
+            slot or "default",
+        )
         credential_label = "token" if kind == "plex" else "API key"
+        error_message = (
+            "Connection failed. Check URL, credentials, and related provider settings."
+            if kind in {"jellyfin", "streamystats"}
+            else f"Connection failed. Check URL and {credential_label}."
+        )
         return jsonify(
             {
                 "ok": False,
-                "error": f"Connection failed. Check URL and {credential_label}.",
+                "error": error_message,
             }
         ), 502
     return jsonify({"ok": True})
@@ -14841,6 +18586,12 @@ def api_tautulli_refresh():
     elif provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
         refresh_in_progress = _jellystat_refresh_in_progress(cfg)
+    elif provider == "jellyfin":
+        started = _start_jellyfin_background_refresh(cfg)
+        refresh_in_progress = _jellyfin_refresh_in_progress(cfg)
+    elif provider == "streamystats":
+        started = _start_streamystats_background_refresh(cfg)
+        refresh_in_progress = _streamystats_refresh_in_progress(cfg)
     elif provider == "plex":
         started = _start_plex_background_refresh(cfg)
         refresh_in_progress = _plex_refresh_in_progress(cfg)
@@ -14866,6 +18617,12 @@ def api_tautulli_deep_refresh():
     elif provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
         refresh_in_progress = _jellystat_refresh_in_progress(cfg)
+    elif provider == "jellyfin":
+        started = _start_jellyfin_background_refresh(cfg)
+        refresh_in_progress = _jellyfin_refresh_in_progress(cfg)
+    elif provider == "streamystats":
+        started = _start_streamystats_background_refresh(cfg)
+        refresh_in_progress = _streamystats_refresh_in_progress(cfg)
     elif provider == "plex":
         started = _start_plex_background_refresh(cfg, deep=True)
         refresh_in_progress = _plex_refresh_in_progress(cfg)
@@ -14885,15 +18642,15 @@ def api_tautulli_deep_refresh():
 def api_sonarr_refresh():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
-    if not instances and plex_fallback:
-        started = _start_plex_background_refresh(cfg)
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider:
+        started, provider, refresh_in_progress = _start_media_fallback_refresh(cfg, "sonarr")
         return jsonify(
             {
                 "started": bool(started),
                 "scope": "library",
-                "provider": "plex",
-                "refresh_in_progress": _plex_refresh_in_progress(cfg),
+                "provider": provider,
+                "refresh_in_progress": refresh_in_progress,
             }
         )
     if not instances:
@@ -14951,15 +18708,15 @@ def api_sonarr_refresh():
 def api_sonarr_item():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
-    if not instances and plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider:
         series_id = request.args.get("seriesId") or request.args.get("series_id")
         if not series_id:
             return jsonify({"error": "seriesId is required."}), 400
         item_id = _parse_arr_item_id(series_id)
         if not item_id:
             return jsonify({"error": "seriesId is required."}), 400
-        rows, _, _, _ = _get_plex_media_rows("sonarr", cfg, force=False)
+        rows, _, _, _ = _get_media_fallback_rows("sonarr", cfg, force=False)
         for row in rows:
             if _safe_int(row.get("SeriesId")) == item_id:
                 return jsonify(row)
@@ -15051,6 +18808,40 @@ def api_sonarr_item_playback_refresh():
 def api_sonarr_series_seasons(series_id: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider == "jellyfin":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
+        series_item_id = _jellyfin_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        index = _get_jellyfin_index(cfg, force=False, include_history=False) or {}
+        seasons = _jellyfin_season_payloads(index, series_item_id, include_specials=include_specials)
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "jellyfin",
+                "provider_item_id": series_item_id,
+                "fast_mode": False,
+                "seasons": seasons,
+            }
+        )
+    if not instances and fallback_provider == "plex":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
+        series_item_id = _plex_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        seasons = _plex_season_payloads(cfg, series_item_id, include_specials=include_specials)
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "plex",
+                "provider_item_id": series_item_id,
+                "fast_mode": False,
+                "seasons": seasons,
+            }
+        )
     if not instances:
         return jsonify({"error": "Sonarr is not configured."}), 503
     if series_id <= 0:
@@ -15092,6 +18883,39 @@ def api_sonarr_series_seasons(series_id: int):
 def api_sonarr_series_episodes(series_id: int, season_number: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider == "jellyfin":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        series_item_id = _jellyfin_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        episodes = _jellyfin_episode_payloads(_get_jellyfin_index(cfg, force=False, include_history=False) or {}, series_item_id, season_number)
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "jellyfin",
+                "provider_item_id": series_item_id,
+                "season_number": season_number,
+                "fast_mode": False,
+                "episodes": episodes,
+            }
+        )
+    if not instances and fallback_provider == "plex":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        series_item_id = _plex_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        episodes = _plex_episode_payloads(cfg, series_item_id, season_number)
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "plex",
+                "provider_item_id": series_item_id,
+                "season_number": season_number,
+                "fast_mode": False,
+                "episodes": episodes,
+            }
+        )
     if not instances:
         return jsonify({"error": "Sonarr is not configured."}), 503
     if series_id <= 0:
@@ -15135,15 +18959,15 @@ def api_sonarr_series_episodes(series_id: int, season_number: int):
 def api_radarr_refresh():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
-    if not instances and plex_fallback:
-        started = _start_plex_background_refresh(cfg)
+    fallback_provider = _media_fallback_provider(cfg, "radarr")
+    if not instances and fallback_provider:
+        started, provider, refresh_in_progress = _start_media_fallback_refresh(cfg, "radarr")
         return jsonify(
             {
                 "started": bool(started),
                 "scope": "library",
-                "provider": "plex",
-                "refresh_in_progress": _plex_refresh_in_progress(cfg),
+                "provider": provider,
+                "refresh_in_progress": refresh_in_progress,
             }
         )
     if not instances:
@@ -15201,15 +19025,15 @@ def api_radarr_refresh():
 def api_radarr_item():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
-    if not instances and plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "radarr")
+    if not instances and fallback_provider:
         movie_id = request.args.get("movieId") or request.args.get("movie_id")
         if not movie_id:
             return jsonify({"error": "movieId is required."}), 400
         item_id = _parse_arr_item_id(movie_id)
         if not item_id:
             return jsonify({"error": "movieId is required."}), 400
-        rows, _, _, _ = _get_plex_media_rows("radarr", cfg, force=False)
+        rows, _, _, _ = _get_media_fallback_rows("radarr", cfg, force=False)
         for row in rows:
             if _safe_int(row.get("MovieId")) == item_id:
                 return jsonify(row)
@@ -15371,6 +19195,11 @@ def api_history():
 def api_tautulli_refresh_item():
     cfg = _get_config()
     provider = _playback_provider(cfg)
+    if provider == "jellyfin":
+        if not (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")):
+            return jsonify({"error": "Jellyfin is not configured."}), 503
+        started = _start_jellyfin_background_refresh(cfg)
+        return jsonify({"ok": True, "scope": "library", "started": started, "provider": "jellyfin"})
     if provider == "plex":
         if not (cfg.get("plex_url") and cfg.get("plex_token")):
             return jsonify({"error": "Plex is not configured."}), 503
@@ -15422,9 +19251,9 @@ def api_arr_health(app_name: str):
 
     cfg = _get_config()
     instances = cfg.get(f"{app_name}_instances") or []
-    if not instances and _is_plex_media_fallback_enabled(cfg, app_name):
+    if not instances and _media_fallback_provider(cfg, app_name):
         return jsonify({"configured": True, "instances": [], "alerts": []})
-    configured = bool(instances)
+    configured = bool(instances) or bool(_media_fallback_provider(cfg, app_name))
 
     def _norm_alert(a: dict) -> dict:
         return {
@@ -15504,6 +19333,8 @@ def api_clear_caches():
     cfg = _get_config()
     _playback_refresh_state["tautulli_seen"] = None
     _playback_refresh_state["jellystat_seen"] = None
+    _playback_refresh_state["streamystats_seen"] = None
+    _playback_refresh_state["jellyfin_seen"] = None
     _playback_refresh_state["plex_seen"] = None
     _invalidate_cache()
     _wipe_cache_files()
@@ -15513,6 +19344,12 @@ def api_clear_caches():
         started = _start_tautulli_background_refresh(cfg)
     elif provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
+    elif provider == "streamystats":
+        started = _start_streamystats_background_refresh(cfg)
+    elif provider == "jellyfin":
+        started = _start_jellyfin_background_refresh(cfg)
+    elif provider == "plex":
+        started = _start_plex_background_refresh(cfg)
     return jsonify(
         {
             "ok": True,
@@ -15691,6 +19528,35 @@ def api_arr_asset(app_name: str, instance_id: str, cover_type: str, item_id: int
 
     timeout_seconds = _read_arr_timeout_seconds(app_name)
     return _stream_arr_mediacover(base_url, api_key, int(item_id), filename, timeout_seconds)
+
+
+@app.route("/api/jellyfin/asset/<item_id>/<image_type>")
+@_auth_required
+def api_jellyfin_asset(item_id: str, image_type: str):
+    cfg = _get_config()
+    base_url = cfg.get("jellyfin_url") or ""
+    api_key = cfg.get("jellyfin_api_key") or ""
+    if not (base_url and api_key):
+        return jsonify({"error": "Jellyfin is not configured."}), 503
+    image_type = str(image_type or "").strip() or "Primary"
+    if not re.match(r"^[A-Za-z0-9_-]{1,24}$", image_type):
+        return jsonify({"error": "invalid image type"}), 400
+    max_width = _safe_int(request.args.get("maxWidth")) or _safe_int(request.args.get("max_width")) or 320
+    return _jellyfin_stream_image(base_url, api_key, item_id, image_type=image_type, max_width=max_width)
+
+
+@app.route("/api/plex/asset/<item_id>/<image_type>")
+@_auth_required
+def api_plex_asset(item_id: str, image_type: str):
+    cfg = _get_config()
+    if not (cfg.get("plex_url") and cfg.get("plex_token")):
+        return jsonify({"error": "Plex is not configured."}), 503
+    if not str(item_id or "").strip():
+        return jsonify({"error": "item_id is required."}), 400
+    try:
+        return _plex_stream_image(cfg, item_id, image_type)
+    except requests.HTTPError:
+        return jsonify({"error": "Image not found."}), 404
 
 
 
@@ -15945,6 +19811,8 @@ def _mismatch_row_key(app_name: str, row: dict) -> str:
 def _mismatch_category(statuses: list[str]) -> str:
     normalized = [str(status or "").strip().lower() or "unavailable" for status in statuses]
     uniq = {status for status in normalized if status}
+    if uniq == {"pending"}:
+        return "pending_all"
     if len(uniq) > 1:
         return "provider_conflict"
     status = next(iter(uniq), "unavailable")
@@ -15983,7 +19851,7 @@ def api_mismatches():
     providers = [
         provider
         for provider in _configured_history_sources(cfg)
-        if provider in ("tautulli", "plex", "jellystat")
+        if provider in ("tautulli", "plex", "jellystat", "streamystats")
     ]
 
     provider_states = []
@@ -16016,8 +19884,8 @@ def api_mismatches():
         instances = cfg.get("sonarr_instances", []) if app_name == "sonarr" else cfg.get("radarr_instances", [])
         if instances:
             rows, _, _, _ = _get_cached_all(app_name, instances, cfg, force=False)
-        elif _is_plex_media_fallback_enabled(cfg, app_name):
-            rows, _, _, _ = _get_plex_media_rows(app_name, cfg, force=False)
+        elif _media_fallback_provider(cfg, app_name):
+            rows, _, _, _ = _get_media_fallback_rows(app_name, cfg, force=False)
         else:
             return jsonify({"error": f"{app_name.capitalize()} is not configured."}), 503
     except Exception:
@@ -16038,47 +19906,80 @@ def api_mismatches():
         rows = _apply_plex_library_scope(rows, selected_ids)
 
     media_type = "shows" if app_name == "sonarr" else "movies"
+    active_playback_provider = _playback_provider(cfg)
+    existing_overlay_summary = _summarize_existing_match_health(rows)
+    existing_overlay_counts = existing_overlay_summary.get("counts") if isinstance(existing_overlay_summary, dict) else {}
+    existing_overlay_settled = bool(
+        isinstance(existing_overlay_counts, dict)
+        and _safe_int(existing_overlay_counts.get("total")) > 0
+        and _safe_int(existing_overlay_counts.get("pending")) <= 0
+    )
 
     for provider in providers:
         provider_label = _playback_label(provider)
         provider_error = ""
         index = None
         index_ts = 0
+        provider_mode = "ready"
+        refresh_in_progress = _playback_refresh_in_progress(cfg, provider)
+        use_existing_overlay = bool(
+            existing_overlay_settled
+            and provider == active_playback_provider
+        )
         try:
-            if provider == "tautulli":
-                index = _get_tautulli_index(cfg, force=False)
-                _, index_ts = _cache.get_tautulli_state()
-            elif provider == "plex":
-                index = _get_plex_index(cfg, force=False, include_history=True)
-                _, index_ts = _cache.get_plex_state()
-            elif provider == "jellystat":
-                index = _get_jellystat_index(cfg, force=False, include_history=True)
-                _, index_ts = _cache.get_jellystat_state()
+            if use_existing_overlay:
+                provider_mode = "ready"
+                provider_error = ""
+                refresh_in_progress = False
+            elif provider in ("tautulli", "jellyfin", "plex", "jellystat", "streamystats"):
+                index, index_ts, ready_or_started = _provider_index_ready(cfg, provider)
+                if not index:
+                    if ready_or_started or refresh_in_progress:
+                        provider_error = "Index refresh queued"
+                        provider_mode = "pending"
+                    else:
+                        provider_error = "Index unavailable"
+                        provider_mode = "unavailable"
             else:
                 provider_error = "Unsupported provider"
+                provider_mode = "unavailable"
         except Exception as exc:
             logger.exception("Mismatch center index load failed for %s", provider)
             provider_error = f"Index load failed ({type(exc).__name__})"
             index = None
             index_ts = 0
+            provider_mode = "unavailable"
 
         rows_for_provider = [dict(row) for row in rows]
-        _apply_tautulli_stats(
-            rows_for_provider,
-            index or {},
-            media_type,
-            provider_label=provider_label,
-            treat_empty_index_as_available=not provider_error and isinstance(index, dict),
-        )
+        if use_existing_overlay:
+            pass
+        elif provider_mode == "pending":
+            pending_reason = f"{provider_label} refresh queued"
+            for row in rows_for_provider:
+                row["TautulliMatched"] = False
+                row["TautulliMatchStatus"] = "pending"
+                row["TautulliMatchReason"] = pending_reason
+                row["WatchContentRatio"] = ""
+                row["TautulliRatingKey"] = ""
+                row["TautulliSectionId"] = ""
+        else:
+            _apply_tautulli_stats(
+                rows_for_provider,
+                index or {},
+                media_type,
+                provider_label=provider_label,
+                treat_empty_index_as_available=not provider_error and isinstance(index, dict),
+            )
         provider_rows[provider] = rows_for_provider
         provider_states.append(
             {
                 "provider": provider,
                 "label": provider_label,
                 "configured": True,
-                "refresh_in_progress": _playback_refresh_in_progress(cfg, provider),
+                "refresh_in_progress": refresh_in_progress,
                 "index_ts": _safe_int(index_ts),
                 "index_age_seconds": _age_seconds(_safe_int(index_ts)) if _safe_int(index_ts) else None,
+                "status": provider_mode,
                 "error": provider_error,
             }
         )
@@ -16091,6 +19992,7 @@ def api_mismatches():
             "unmatched": 0,
             "skipped": 0,
             "unavailable": 0,
+            "pending": 0,
         }
         for provider in providers
     }
@@ -16117,7 +20019,7 @@ def api_mismatches():
                 provider_counts[provider][status] += 1
 
         category = _mismatch_category(statuses)
-        if category == "matched":
+        if category in {"matched", "pending_all"} or any(status == "pending" for status in statuses):
             continue
 
         title = str(row.get("Title") or "").strip()
@@ -16192,7 +20094,7 @@ def api_playback_match_diagnostics():
 
     cfg = _get_config()
     provider = _playback_provider(cfg)
-    if provider not in ("tautulli", "plex"):
+    if provider not in ("tautulli", "jellyfin", "streamystats", "plex"):
         provider_label = _playback_label(provider) if provider else "Playback"
         return jsonify(
             {
@@ -16205,8 +20107,8 @@ def api_playback_match_diagnostics():
         instances = cfg.get("sonarr_instances", []) if app_name == "sonarr" else cfg.get("radarr_instances", [])
         if instances:
             rows, _, _, _ = _get_cached_all(app_name, instances, cfg, force=False)
-        elif _is_plex_media_fallback_enabled(cfg, app_name):
-            rows, _, _, _ = _get_plex_media_rows(app_name, cfg, force=False)
+        elif _media_fallback_provider(cfg, app_name):
+            rows, _, _, _ = _get_media_fallback_rows(app_name, cfg, force=False)
         else:
             return jsonify({"error": f"{app_name.capitalize()} is not configured."}), 503
     except Exception:
@@ -16349,6 +20251,41 @@ def api_playback_match_diagnostics():
                 "index_bucket_counts": bucket_counts,
             }
         }
+    elif provider == "jellyfin":
+        if not (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")):
+            return jsonify({"error": "Jellyfin is not configured.", "provider": provider}), 503
+
+        index, index_ts = _cache.get_jellyfin_state()
+        provider_label = _playback_label("jellyfin")
+        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+        core["refresh_state"]["index_ts"] = _safe_int(index_ts)
+        core["refresh_state"]["index_age_seconds"] = _age_seconds(index_ts) if index_ts else None
+        core["provider_details"] = {
+            "jellyfin": {
+                "index_available": bool(index),
+                "match_health": app_health,
+            }
+        }
+    elif provider == "streamystats":
+        if not (cfg.get("streamystats_url") and cfg.get("streamystats_api_key")):
+            return jsonify({"error": "Streamystats is not configured.", "provider": provider}), 503
+
+        index, index_ts = _cache.get_streamystats_state()
+        provider_label = _playback_label("streamystats")
+        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+        meta = index.get("meta") if isinstance(index, dict) else {}
+        if not isinstance(meta, dict):
+            meta = {}
+        core["refresh_state"]["index_ts"] = _safe_int(index_ts)
+        core["refresh_state"]["index_age_seconds"] = _age_seconds(index_ts) if index_ts else None
+        core["provider_details"] = {
+            "streamystats": {
+                "index_available": bool(index),
+                "match_health": app_health,
+                "server": meta.get("server") if isinstance(meta.get("server"), dict) else {},
+                "stats": meta.get("stats") if isinstance(meta.get("stats"), dict) else {},
+            }
+        }
     elif provider == "plex":
         if not (cfg.get("plex_url") and cfg.get("plex_token")):
             return jsonify({"error": "Plex is not configured.", "provider": provider}), 503
@@ -16379,6 +20316,206 @@ def api_playback_match_diagnostics():
         }
 
     return jsonify(core)
+
+
+def _jellyfin_summarize_libraries(libraries: list[dict]) -> list[dict]:
+    results: list[dict] = []
+    for item in libraries or []:
+        if not isinstance(item, dict):
+            continue
+        library_id = str(item.get("Id") or "").strip()
+        if not library_id:
+            continue
+        results.append(
+            {
+                "id": library_id,
+                "name": str(item.get("Name") or "").strip(),
+                "title": str(item.get("Name") or "").strip(),
+                "type": str(item.get("CollectionType") or item.get("Type") or "").strip().lower(),
+                "path": str((item.get("Locations") or [""])[0] or item.get("Path") or "").strip()
+                if isinstance(item.get("Locations"), list)
+                else str(item.get("Path") or "").strip(),
+                "item_count": _safe_int(item.get("ChildCount")),
+            }
+        )
+    return results
+
+
+def _jellyfin_library_scope_apps(libraries: list[dict], section_id: str) -> set[str] | None:
+    selected_id = str(section_id or "").strip()
+    if not selected_id:
+        return None
+    selected = None
+    for item in libraries or []:
+        if str((item or {}).get("id") or "").strip() == selected_id:
+            selected = item
+            break
+    if not isinstance(selected, dict):
+        return None
+    library_type = str(selected.get("type") or "").strip().lower()
+    if library_type in {"movie", "movies"}:
+        return {"radarr"}
+    if library_type in {"tvshows", "show", "shows", "series"}:
+        return {"sonarr"}
+    return set()
+
+
+def _jellyfin_fetch_sessions(base_url: str, access_token: str, timeout: int = 10) -> list[dict]:
+    payload = _jellyfin_get(
+        base_url,
+        "/Sessions",
+        access_token=access_token,
+        auth_mode="user_token",
+        timeout=timeout,
+    )
+    return payload if isinstance(payload, list) else []
+
+
+def _jellyfin_summarize_sessions(sessions: list[dict]) -> list[dict]:
+    results: list[dict] = []
+    for session in sessions or []:
+        if not isinstance(session, dict):
+            continue
+        item = session.get("NowPlayingItem") if isinstance(session.get("NowPlayingItem"), dict) else {}
+        play_state = session.get("PlayState") if isinstance(session.get("PlayState"), dict) else {}
+        capabilities = session.get("Capabilities") if isinstance(session.get("Capabilities"), dict) else {}
+        results.append(
+            {
+                "id": str(session.get("Id") or "").strip(),
+                "user": str(session.get("UserName") or "").strip(),
+                "client": str(session.get("Client") or "").strip(),
+                "device": str(session.get("DeviceName") or session.get("DeviceId") or "").strip(),
+                "app": str(session.get("ApplicationVersion") or "").strip(),
+                "title": str(item.get("Name") or "").strip(),
+                "type": str(item.get("Type") or "").strip().lower(),
+                "position_ticks": _safe_int(play_state.get("PositionTicks")),
+                "is_paused": bool(play_state.get("IsPaused")),
+                "can_seek": bool(capabilities.get("SupportsMediaControl")),
+                "state": "Paused" if bool(play_state.get("IsPaused")) else "Active",
+                "progress_label": "",
+            }
+        )
+        if results[-1]["position_ticks"] > 0:
+            seconds = _jellyfin_ticks_to_seconds(results[-1]["position_ticks"])
+            if seconds > 0:
+                results[-1]["progress_label"] = _format_seconds_hhmmss(seconds)
+        if not results[-1]["title"]:
+            fallback_parts = [
+                str(session.get("Client") or "").strip(),
+                str(session.get("DeviceName") or session.get("DeviceId") or "").strip(),
+            ]
+            results[-1]["title"] = " / ".join(part for part in fallback_parts if part) or str(session.get("UserName") or "").strip()
+    return results
+
+
+def _jellyfin_fetch_activity_entries(base_url: str, api_key: str, timeout: int = 10, limit: int = 20) -> list[dict]:
+    payload = _jellyfin_get(
+        base_url,
+        "/System/ActivityLog/Entries",
+        api_key=api_key,
+        params={"Limit": max(1, min(limit, 100))},
+        timeout=timeout,
+    )
+    if isinstance(payload, dict):
+        entries = payload.get("Items")
+        return entries if isinstance(entries, list) else []
+    return payload if isinstance(payload, list) else []
+
+
+def _jellyfin_summarize_activity_entries(entries: list[dict]) -> list[dict]:
+    results: list[dict] = []
+    for entry in entries or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("Name") or entry.get("Type") or "").strip()
+        description = str(entry.get("ShortOverview") or entry.get("Overview") or "").strip()
+        severity = str(entry.get("Severity") or "").strip().lower()
+        date_text = str(entry.get("Date") or "").strip()
+        results.append(
+            {
+                "name": name,
+                "title": name,
+                "shortDescription": description,
+                "subtitle": description,
+                "severity": severity,
+                "state": severity.title() if severity else "",
+                "date": date_text,
+            }
+        )
+    return results
+
+
+@app.route("/api/diagnostics/jellyfin", methods=["GET"])
+@_auth_required
+def api_jellyfin_diagnostics():
+    cfg = _get_config()
+    base_url = cfg.get("jellyfin_url") or ""
+    api_key = cfg.get("jellyfin_api_key") or ""
+    if not (base_url and api_key):
+        return jsonify({"error": "Jellyfin is not configured."}), 503
+    timeout = max(5, _safe_int(cfg.get("jellyfin_timeout_seconds")) or 10)
+    cached_index, cached_ts = _cache.get_jellyfin_state()
+    info = {}
+    libraries = []
+    sessions = []
+    activities_count = None
+    error = ""
+    connection_ok = False
+    try:
+        public_info = _jellyfin_get(base_url, "/System/Info/Public", auth_mode="none", timeout=timeout)
+        if isinstance(public_info, dict):
+            info = {
+                "serverName": public_info.get("ServerName") or "",
+                "version": public_info.get("Version") or "",
+                "id": public_info.get("Id") or "",
+                "productName": public_info.get("ProductName") or "",
+            }
+        user_id = _jellyfin_resolve_user_id(cfg, timeout=timeout)
+        raw_libraries = _jellyfin_fetch_libraries(base_url, api_key, user_id, timeout=timeout)
+        libraries = _jellyfin_summarize_libraries(raw_libraries)
+        access_token, _ = _jellyfin_user_access_token(cfg)
+        if access_token:
+            sessions = _jellyfin_summarize_sessions(_jellyfin_fetch_sessions(base_url, access_token, timeout=timeout))
+        try:
+            activities = _jellyfin_fetch_activity_entries(base_url, api_key, timeout=timeout, limit=20)
+            activities_count = len(activities)
+        except Exception:
+            activities_count = None
+        connection_ok = True
+    except Exception as exc:
+        error = "Connection failed."
+        logger.warning("Jellyfin diagnostics failed (%s).", type(exc).__name__)
+
+    meta = cached_index.get("meta") if isinstance(cached_index, dict) else {}
+    if not isinstance(meta, dict):
+        meta = {}
+    return jsonify(
+        {
+            "ok": connection_ok,
+            "connection_ok": connection_ok,
+            "provider": "jellyfin",
+            "info": info,
+            "libraries": {
+                "count": len(libraries),
+                "items": libraries,
+            },
+            "sessions": {
+                "count": len(sessions),
+                "items": sessions,
+            },
+            "history": {
+                "activities_count": activities_count,
+                "shows_index_count": len(((cached_index or {}).get("shows") or {}).get("title_year") or []),
+                "movies_index_count": len(((cached_index or {}).get("movies") or {}).get("title_year") or []),
+            },
+            "cache": {
+                "index_ts": _safe_int(cached_ts),
+                "index_age_seconds": _age_seconds(cached_ts) if cached_ts else None,
+                "cache_path": _safe_log_path(cfg.get("jellyfin_cache_path") or ""),
+            },
+            "error": error,
+        }
+    )
 
 
 @app.route("/api/diagnostics/plex", methods=["GET"])
@@ -16473,105 +20610,252 @@ def api_plex_diagnostics():
     )
 
 
+def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = False, request_payload: dict | None = None) -> dict:
+    request_payload = request_payload if isinstance(request_payload, dict) else {}
+    request_args = request.args if has_request_context() else {}
+    if provider == "plex":
+        plex_url = cfg.get("plex_url") or ""
+        plex_token = cfg.get("plex_token") or ""
+        if not (plex_url and plex_token):
+            raise RuntimeError("Plex is not configured.")
+        client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
+        active_playback_provider = _playback_provider(cfg)
+        include_raw = str(
+            request_payload.get("include")
+            or request_args.get("include")
+            or "hubs,activities,butler,sections,match_health"
+        )
+        include = [part.strip().lower() for part in include_raw.split(",") if part.strip()]
+        section_id = str(request_payload.get("section_id") or request_args.get("section_id") or "").strip()
+        hub_count = max(1, min(20, _safe_int(request_payload.get("hub_count") or request_args.get("hub_count") or 6)))
+        item_count = max(1, min(30, _safe_int(request_payload.get("item_count") or request_args.get("item_count") or 8)))
+        cache_key = _plex_insights_cache_key(section_id, hub_count, item_count, include)
+        cached, cached_ts = (None, 0.0)
+        if not force_refresh:
+            cached, cached_ts = _get_plex_insights_cache(cache_key)
+        if cached:
+            return {"ok": True, "provider": "plex", "provider_label": _playback_label("plex"), **cached, "cache_ts": _safe_int(cached_ts)}
+
+        errors = {}
+        hubs = []
+        activities = []
+        butler = []
+        sections = []
+        match_health = {}
+        try:
+            if "hubs" in include:
+                hubs = _plex_fetch_hubs(
+                    plex_url,
+                    plex_token,
+                    client_id,
+                    section_id=section_id or None,
+                    hub_count=hub_count,
+                    item_count=item_count,
+                    timeout=10,
+                )
+        except Exception as exc:
+            errors["hubs"] = str(exc)
+        try:
+            if "sections" in include:
+                raw_sections = _plex_fetch_sections(plex_url, plex_token, client_id, timeout=10)
+                section_filters = _plex_section_filter_ids(cfg.get("plex_section_filters") or "")
+                sections = _plex_summarize_sections(raw_sections, section_filters)
+        except Exception as exc:
+            errors["sections"] = str(exc)
+        try:
+            if "activities" in include:
+                activities = _plex_fetch_activities(plex_url, plex_token, client_id, timeout=10)
+        except Exception as exc:
+            errors["activities"] = str(exc)
+        try:
+            if "butler" in include:
+                butler = _plex_fetch_butler(plex_url, plex_token, client_id, timeout=10)
+        except Exception as exc:
+            errors["butler"] = str(exc)
+        try:
+            if "match_health" in include:
+                provider_label = _playback_label("plex")
+                index, index_ts = _get_plex_index_ready(cfg)
+                refresh_started = False
+                if force_refresh:
+                    refresh_started = _start_plex_background_refresh(cfg)
+                elif active_playback_provider == "plex" and not index:
+                    refresh_started = _start_plex_background_refresh(cfg)
+                match_health = {
+                    "provider": "plex",
+                    "provider_label": provider_label,
+                    "available": bool(index),
+                    "index_ts": _safe_int(index_ts),
+                    "apps": {},
+                    "source_provider": active_playback_provider or "plex",
+                    "refresh_in_progress": _playback_refresh_in_progress(cfg, "plex"),
+                    "refresh_started": bool(refresh_started),
+                }
+                for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+                    if active_playback_provider and active_playback_provider != "plex":
+                        app_health, latest_ts = _collect_cached_existing_match_health(app_name)
+                    else:
+                        rows, latest_ts = _collect_cached_rows(app_name)
+                        app_health = (
+                            _summarize_match_health(rows, index or {}, media_type, provider_label)
+                            if index
+                            else {
+                                "label": "Series" if app_name == "sonarr" else "Movies",
+                                "total": len(rows),
+                                "counts": {
+                                    "matched": 0,
+                                    "unmatched": 0,
+                                    "skipped": 0,
+                                    "unavailable": len(rows),
+                                    "pending": len(rows),
+                                },
+                                "top_match_buckets": [],
+                                "top_reasons": [],
+                            }
+                        )
+                    app_health["updated_ts"] = latest_ts
+                    match_health["apps"][app_name] = app_health
+        except Exception as exc:
+            errors["match_health"] = str(exc)
+
+        payload = {
+            "provider": "plex",
+            "provider_label": _playback_label("plex"),
+            "hubs": hubs,
+            "sections": sections,
+            "activities": activities,
+            "butler": butler,
+            "sessions": [],
+            "match_health": match_health,
+            "errors": errors,
+            "fetched_at": int(time.time()),
+        }
+        _set_plex_insights_cache(cache_key, payload)
+        return {"ok": True, **payload}
+
+    if provider == "jellyfin":
+        base_url = cfg.get("jellyfin_url") or ""
+        api_key = cfg.get("jellyfin_api_key") or ""
+        if not (base_url and api_key):
+            raise RuntimeError("Jellyfin is not configured.")
+        timeout = max(5, _safe_int(cfg.get("jellyfin_timeout_seconds")) or 10)
+        active_playback_provider = _playback_provider(cfg)
+        include_raw = str(
+            request_payload.get("include")
+            or request_args.get("include")
+            or "sections,sessions,activities,match_health"
+        )
+        include = {part.strip().lower() for part in include_raw.split(",") if part.strip()}
+        section_id = str(request_payload.get("section_id") or request_args.get("section_id") or "").strip()
+        errors = {}
+        libraries = []
+        sessions = []
+        activities = []
+        match_health = {}
+        try:
+            if "sections" in include or "match_health" in include:
+                user_id = _jellyfin_resolve_user_id(cfg, timeout=timeout)
+                libraries = _jellyfin_summarize_libraries(_jellyfin_fetch_libraries(base_url, api_key, user_id, timeout=timeout))
+        except Exception as exc:
+            errors["sections"] = str(exc)
+        try:
+            if "sessions" in include:
+                access_token, _ = _jellyfin_user_access_token(cfg)
+                if access_token:
+                    sessions = _jellyfin_summarize_sessions(_jellyfin_fetch_sessions(base_url, access_token, timeout=timeout))
+        except Exception as exc:
+            errors["sessions"] = str(exc)
+        try:
+            if "activities" in include:
+                activities = _jellyfin_summarize_activity_entries(
+                    _jellyfin_fetch_activity_entries(base_url, api_key, timeout=timeout, limit=20)
+                )
+        except Exception as exc:
+            errors["activities"] = str(exc)
+        try:
+            if "match_health" in include:
+                index, index_ts = _cache.get_jellyfin_state()
+                if not index:
+                    index = _get_jellyfin_index(cfg, force=force_refresh, include_history=True)
+                    _, index_ts = _cache.get_jellyfin_state()
+                provider_label = _playback_label("jellyfin")
+                scoped_apps = _jellyfin_library_scope_apps(libraries, section_id)
+                match_health = {
+                    "provider": "jellyfin",
+                    "provider_label": provider_label,
+                    "available": bool(index),
+                    "index_ts": _safe_int(index_ts),
+                    "apps": {},
+                    "section_id": section_id,
+                    "source_provider": active_playback_provider or "jellyfin",
+                }
+                for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+                    if isinstance(scoped_apps, set) and app_name not in scoped_apps:
+                        latest_ts = _collect_cache_latest_ts(app_name)
+                        rows = []
+                        app_health = _summarize_existing_match_health(rows)
+                    elif active_playback_provider and active_playback_provider != "jellyfin":
+                        app_health, latest_ts = _collect_cached_existing_match_health(app_name)
+                    else:
+                        rows, latest_ts = _collect_rows_for_match_health(app_name, cfg)
+                        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+                    app_health["updated_ts"] = latest_ts
+                    match_health["apps"][app_name] = app_health
+        except Exception as exc:
+            errors["match_health"] = str(exc)
+
+        payload = {
+            "ok": True,
+            "provider": "jellyfin",
+            "provider_label": _playback_label("jellyfin"),
+            "errors": errors,
+            "fetched_at": int(time.time()),
+        }
+        if "sections" in include or "match_health" in include:
+            payload["sections"] = libraries
+        if "sessions" in include:
+            payload["sessions"] = sessions
+        if "activities" in include:
+            payload["activities"] = activities
+        if "match_health" in include:
+            payload["match_health"] = match_health
+        return payload
+
+    raise RuntimeError("Playback insights are unavailable.")
+
+
+@app.route("/api/playback/insights", methods=["GET", "POST"])
+@_auth_required
+def api_playback_insights():
+    cfg = _get_config()
+    request_payload = request.get_json(silent=True) if request.method == "POST" else {}
+    requested_provider = str(
+        (request_payload or {}).get("provider")
+        or request.args.get("provider")
+        or ""
+    ).strip().lower()
+    provider = requested_provider if requested_provider in {"plex", "jellyfin"} else _playback_insights_provider(cfg)
+    if provider not in {"plex", "jellyfin"}:
+        return jsonify({"error": "Playback insights are unavailable."}), 503
+    try:
+        payload = _playback_insights_payload(cfg, provider, force_refresh=request.method == "POST", request_payload=request_payload)
+        return jsonify(payload)
+    except RuntimeError as exc:
+        logger.warning("Playback insights request failed.")
+        return jsonify({"error": "Playback insights are currently unavailable.", "provider": provider}), 503
+
+
 @app.route("/api/plex/insights", methods=["GET", "POST"])
 @_auth_required
 def api_plex_insights():
     cfg = _get_config()
-    plex_url = cfg.get("plex_url") or ""
-    plex_token = cfg.get("plex_token") or ""
-    if not (plex_url and plex_token):
-        return jsonify({"error": "Plex is not configured."}), 503
-
     request_payload = request.get_json(silent=True) if request.method == "POST" else {}
-    if not isinstance(request_payload, dict):
-        request_payload = {}
-    client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
-    include_raw = str(
-        request_payload.get("include")
-        or request.args.get("include")
-        or "hubs,activities,butler,sections,match_health"
-    )
-    include = [part.strip().lower() for part in include_raw.split(",") if part.strip()]
-    section_id = str(request_payload.get("section_id") or request.args.get("section_id") or "").strip()
-    hub_count = max(1, min(20, _safe_int(request_payload.get("hub_count") or request.args.get("hub_count") or 6)))
-    item_count = max(1, min(30, _safe_int(request_payload.get("item_count") or request.args.get("item_count") or 8)))
-    force_refresh = request.method == "POST"
-    cache_key = _plex_insights_cache_key(section_id, hub_count, item_count, include)
-    cached, cached_ts = (None, 0.0)
-    if not force_refresh:
-        cached, cached_ts = _get_plex_insights_cache(cache_key)
-    if cached:
-        return jsonify({"ok": True, **cached, "cache_ts": _safe_int(cached_ts)})
-
-    errors = {}
-    hubs = []
-    activities = []
-    butler = []
-    sections = []
-    match_health = {}
     try:
-        if "hubs" in include:
-            hubs = _plex_fetch_hubs(
-                plex_url,
-                plex_token,
-                client_id,
-                section_id=section_id or None,
-                hub_count=hub_count,
-                item_count=item_count,
-                timeout=10,
-            )
-    except Exception as exc:
-        errors["hubs"] = str(exc)
-    try:
-        if "sections" in include:
-            raw_sections = _plex_fetch_sections(plex_url, plex_token, client_id, timeout=10)
-            section_filters = _plex_section_filter_ids(cfg.get("plex_section_filters") or "")
-            sections = _plex_summarize_sections(raw_sections, section_filters)
-    except Exception as exc:
-        errors["sections"] = str(exc)
-    try:
-        if "activities" in include:
-            activities = _plex_fetch_activities(plex_url, plex_token, client_id, timeout=10)
-    except Exception as exc:
-        errors["activities"] = str(exc)
-    try:
-        if "butler" in include:
-            butler = _plex_fetch_butler(plex_url, plex_token, client_id, timeout=10)
-    except Exception as exc:
-        errors["butler"] = str(exc)
-    try:
-        if "match_health" in include:
-            index, index_ts = _cache.get_plex_state()
-            if not index:
-                index = _get_plex_index(cfg, force=force_refresh, include_history=True)
-                _, index_ts = _cache.get_plex_state()
-            provider_label = _playback_label("plex")
-            match_health = {
-                "provider": "plex",
-                "provider_label": provider_label,
-                "available": bool(index),
-                "index_ts": _safe_int(index_ts),
-                "apps": {},
-            }
-            for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
-                rows, latest_ts = _collect_cached_rows(app_name)
-                app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
-                app_health["updated_ts"] = latest_ts
-                match_health["apps"][app_name] = app_health
-    except Exception as exc:
-        errors["match_health"] = str(exc)
-
-    payload = {
-        "hubs": hubs,
-        "sections": sections,
-        "activities": activities,
-        "butler": butler,
-        "match_health": match_health,
-        "errors": errors,
-        "fetched_at": int(time.time()),
-    }
-    _set_plex_insights_cache(cache_key, payload)
-    return jsonify({"ok": True, **payload})
+        payload = _playback_insights_payload(cfg, "plex", force_refresh=request.method == "POST", request_payload=request_payload)
+        return jsonify(payload)
+    except RuntimeError as exc:
+        logger.warning("Plex insights request failed.")
+        return jsonify({"error": "Playback insights are currently unavailable.", "provider": "plex"}), 503
 
 
 @app.route("/api/plex/events", methods=["GET"])
@@ -16617,22 +20901,25 @@ def api_plex_events():
 def api_shows():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
-    if not instances and not plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and not fallback_provider:
         return jsonify({"error": "Sonarr is not configured"}), 503
     try:
-        plex_scope = _get_plex_library_scope(cfg)
-        plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
-        selected_library_ids = _requested_plex_library_ids("sonarr")
-        available_ids = {
-            str(item.get("id") or "").strip()
-            for item in plex_available
-            if isinstance(item, dict)
-        }
-        if available_ids:
-            selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if plex_fallback:
-            data, tautulli_warning, tautulli_notice, cold_cache = _get_plex_media_rows(
+        plex_available = []
+        selected_library_ids = []
+        if fallback_provider == "plex":
+            plex_scope = _get_plex_library_scope(cfg)
+            plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
+            selected_library_ids = _requested_plex_library_ids("sonarr")
+            available_ids = {
+                str(item.get("id") or "").strip()
+                for item in plex_available
+                if isinstance(item, dict)
+            }
+            if available_ids:
+                selected_library_ids = [item for item in selected_library_ids if item in available_ids]
+        if fallback_provider:
+            data, tautulli_warning, tautulli_notice, cold_cache = _get_media_fallback_rows(
                 "sonarr",
                 cfg,
                 force=False,
@@ -16678,22 +20965,25 @@ def api_shows():
 def api_movies():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
-    if not instances and not plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "radarr")
+    if not instances and not fallback_provider:
         return jsonify({"error": "Radarr is not configured"}), 503
     try:
-        plex_scope = _get_plex_library_scope(cfg)
-        plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
-        selected_library_ids = _requested_plex_library_ids("radarr")
-        available_ids = {
-            str(item.get("id") or "").strip()
-            for item in plex_available
-            if isinstance(item, dict)
-        }
-        if available_ids:
-            selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if plex_fallback:
-            data, tautulli_warning, tautulli_notice, cold_cache = _get_plex_media_rows(
+        plex_available = []
+        selected_library_ids = []
+        if fallback_provider == "plex":
+            plex_scope = _get_plex_library_scope(cfg)
+            plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
+            selected_library_ids = _requested_plex_library_ids("radarr")
+            available_ids = {
+                str(item.get("id") or "").strip()
+                for item in plex_available
+                if isinstance(item, dict)
+            }
+            if available_ids:
+                selected_library_ids = [item for item in selected_library_ids if item in available_ids]
+        if fallback_provider:
+            data, tautulli_warning, tautulli_notice, cold_cache = _get_media_fallback_rows(
                 "radarr",
                 cfg,
                 force=False,
@@ -16754,22 +21044,25 @@ def shows_csv():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
     playback_enabled = _playback_enabled(cfg)
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "sonarr")
-    if not instances and not plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and not fallback_provider:
         return jsonify({"error": "Sonarr is not configured"}), 503
     try:
-        plex_scope = _get_plex_library_scope(cfg)
-        plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
-        selected_library_ids = _requested_plex_library_ids("sonarr")
-        available_ids = {
-            str(item.get("id") or "").strip()
-            for item in plex_available
-            if isinstance(item, dict)
-        }
-        if available_ids:
-            selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if plex_fallback:
-            data, _, _, _ = _get_plex_media_rows("sonarr", cfg, force=False)
+        plex_available = []
+        selected_library_ids = []
+        if fallback_provider == "plex":
+            plex_scope = _get_plex_library_scope(cfg)
+            plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
+            selected_library_ids = _requested_plex_library_ids("sonarr")
+            available_ids = {
+                str(item.get("id") or "").strip()
+                for item in plex_available
+                if isinstance(item, dict)
+            }
+            if available_ids:
+                selected_library_ids = [item for item in selected_library_ids if item in available_ids]
+        if fallback_provider:
+            data, _, _, _ = _get_media_fallback_rows("sonarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:
             data, _, _, _ = _get_cached_all("sonarr", instances, cfg, force=False)
@@ -16862,22 +21155,25 @@ def movies_csv():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
     playback_enabled = _playback_enabled(cfg)
-    plex_fallback = _is_plex_media_fallback_enabled(cfg, "radarr")
-    if not instances and not plex_fallback:
+    fallback_provider = _media_fallback_provider(cfg, "radarr")
+    if not instances and not fallback_provider:
         return jsonify({"error": "Radarr is not configured"}), 503
     try:
-        plex_scope = _get_plex_library_scope(cfg)
-        plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
-        selected_library_ids = _requested_plex_library_ids("radarr")
-        available_ids = {
-            str(item.get("id") or "").strip()
-            for item in plex_available
-            if isinstance(item, dict)
-        }
-        if available_ids:
-            selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if plex_fallback:
-            data, _, _, _ = _get_plex_media_rows("radarr", cfg, force=False)
+        plex_available = []
+        selected_library_ids = []
+        if fallback_provider == "plex":
+            plex_scope = _get_plex_library_scope(cfg)
+            plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
+            selected_library_ids = _requested_plex_library_ids("radarr")
+            available_ids = {
+                str(item.get("id") or "").strip()
+                for item in plex_available
+                if isinstance(item, dict)
+            }
+            if available_ids:
+                selected_library_ids = [item for item in selected_library_ids if item in available_ids]
+        if fallback_provider:
+            data, _, _, _ = _get_media_fallback_rows("radarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:
             data, _, _, _ = _get_cached_all("radarr", instances, cfg, force=False)

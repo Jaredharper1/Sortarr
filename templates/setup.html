@@ -29,17 +29,9 @@
         <div>
           <div class="setup-title">{{ app_name }} {{ _('Setup') }} v{{ app_version }}</div>
           <div class="setup-sub">
-            {% trans %}Add Sonarr/Radarr details and optional Plex/Jellystat/Tautulli providers. When multiple providers overlap, set your preferred media and history sources.{% endtrans %}
+          {% trans %}Choose your media-info source, then your history source, then add playback and enrichment providers only where they add value. Optional connections can still be added alongside the main path when needed.{% endtrans %}
           </div>
           <div class="setup-hint" id="setupEffectiveSources">{{ _('Effective sources') }}: {{ _('Media') }} {{ values.media_source or _('Auto') }}, {{ _('History') }} {{ values.history_source or _('Auto') }}</div>
-          <div class="setup-hint">
-            {{ _('Advanced settings in use') }}:
-            {% if advanced_summary.count %}
-            {{ advanced_summary.preview }}
-            {% else %}
-            {{ _('None') }}
-            {% endif %}
-          </div>
         </div>
       </div>
 
@@ -52,6 +44,16 @@
       {% if setup_csrf_warning %}
       <div class="setup-error">{{ _(setup_csrf_warning) }}</div>
       {% endif %}
+      {% if setup_completed %}
+      <div class="setup-success">
+        <div class="setup-success-title">{{ _('Setup saved') }}</div>
+        <div class="setup-success-text">{{ _(setup_completed_info.get('message', 'Setup saved. Continue into the app.')) }}</div>
+        <div class="setup-success-actions">
+          <button class="setup-action-btn" type="button" id="setupContinueBtn"
+            data-target-url="{{ setup_completed_info.get('target_url', '/') }}">{{ _('Continue to app') }}</button>
+        </div>
+      </div>
+      {% endif %}
       {% if setup_required %}
       <div class="setup-error">
         {% trans trimmed %}Security update required: finish Setup to save a persistent Session secret key and required authentication settings before continuing to the app.{% endtrans %}
@@ -61,11 +63,148 @@
       <form method="post" class="setup-form"
         data-ephemeral-secret="{% if values.sortarr_secret_key_ephemeral %}1{% else %}0{% endif %}"
         data-setup-tests-enabled="{% if setup_connection_test_enabled %}1{% else %}0{% endif %}"
-        data-security-locked="{% if setup_required %}1{% else %}0{% endif %}">
+        data-setup-completed="{% if setup_completed %}1{% else %}0{% endif %}"
+        data-security-locked="{% if setup_required %}1{% else %}0{% endif %}"
+        data-basic-auth-pass-configured="{% if values.basic_auth_pass_configured %}1{% else %}0{% endif %}"
+        data-secret-key-configured="{% if values.sortarr_secret_key_configured %}1{% else %}0{% endif %}"
+        data-error-steps="{{ error_steps|join(',') }}"
+        data-focus-field="{{ focus_field }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-        <div class="setup-category-title">{{ _('Media Sources') }}</div>
+        {% set plex_provider_block %}
+        <div id="plexProviderBlock" class="setup-provider-block" data-history-provider="plex" data-playback-provider="plex">
+          <input type="hidden" name="clear_plex_connection" value="{% if values.clear_plex_connection %}1{% else %}0{% endif %}" />
+          <div class="setup-block-actions">
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="plex">{{ _('Remove connection') }}</button>
+          </div>
+          <div class="setup-section-title">{{ _('Plex') }}</div>
+          <label>
+            {{ _('Plex URL') }}
+            <input name="plex_url" placeholder="{{ _('http://192.168.1.120:32400') }}" value="{{ values.plex_url }}" />
+          </label>
+          <label>
+            {{ _('Plex Token') }}
+            <input name="plex_token" type="password" autocomplete="off" spellcheck="false"
+              placeholder="{{ _('optional') }}" value="" />
+          </label>
+          {% if values.plex_token_configured %}
+          <div class="setup-hint">{% trans trimmed %}Stored token will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+          {% endif %}
+          <label>
+            {{ _('Plex section IDs (optional)') }}
+            <input name="plex_section_filters" placeholder="{{ _('optional, comma-separated') }}"
+              value="{{ values.plex_section_filters }}" />
+          </label>
+          <div class="setup-inline">
+            <button class="setup-test" type="button" data-kind="plex" data-url-id="plex_url" data-key-id="plex_token"
+              data-client-id="plex_client_id" data-inline-key="plex" data-slot="plex"
+              data-stored-secret="{% if values.plex_token_configured %}1{% else %}0{% endif %}">
+              {{ _('Test connection') }}
+            </button>
+            <span class="setup-inline-message{% if field_errors.get('plex') %} is-error{% else %} hidden{% endif %}"
+              data-inline="plex">{{ field_errors.get('plex', '') }}</span>
+          </div>
+          <div class="setup-hint">{{ _('Leave section IDs blank to scan all libraries.') }}</div>
+        </div>
+        {% endset %}
+        {% set jellyfin_provider_block %}
+        <div id="jellyfinProviderBlock" class="setup-provider-block" data-history-provider="jellyfin" data-playback-provider="jellyfin">
+          <input type="hidden" name="clear_jellyfin_connection" value="{% if values.clear_jellyfin_connection %}1{% else %}0{% endif %}" />
+          <div class="setup-block-actions">
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="jellyfin">{{ _('Remove connection') }}</button>
+          </div>
+          <div class="setup-section-title">{{ _('Jellyfin') }}</div>
+          <label>
+            {{ _('Jellyfin URL') }}
+            <input name="jellyfin_url" placeholder="{{ _('http://192.168.1.120:8096') }}" value="{{ values.jellyfin_url }}" />
+          </label>
+          <label>
+            {{ _('Jellyfin API key') }}
+            <input name="jellyfin_api_key" type="password" autocomplete="off" spellcheck="false"
+              placeholder="{{ _('optional') }}" value="" />
+          </label>
+          {% if values.jellyfin_api_key_configured %}
+          <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+          {% endif %}
+          <label>
+            {{ _('Jellyfin username (optional)') }}
+            <input name="jellyfin_username" placeholder="{{ _('optional') }}" value="{{ values.jellyfin_username }}" />
+          </label>
+          <label>
+            {{ _('Jellyfin password (optional)') }}
+            <input name="jellyfin_password" type="password" autocomplete="off" spellcheck="false"
+              placeholder="{{ _('optional') }}" value="" />
+          </label>
+          {% if values.jellyfin_password_configured %}
+          <div class="setup-hint">{% trans trimmed %}Stored password will be reused for user-auth testing if the username and URL are unchanged and this field is left blank.{% endtrans %}</div>
+          {% endif %}
+          <label>
+            {{ _('Jellyfin user ID (optional)') }}
+            <input name="jellyfin_user_id" placeholder="{{ _('optional') }}" value="{{ values.jellyfin_user_id }}" />
+          </label>
+          <label>
+            {{ _('Jellyfin library IDs (Sonarr)') }}
+            <input name="jellyfin_library_ids_sonarr" placeholder="{{ _('optional, comma-separated') }}"
+              value="{{ values.jellyfin_library_ids_sonarr }}" />
+          </label>
+          <label>
+            {{ _('Jellyfin library IDs (Radarr)') }}
+            <input name="jellyfin_library_ids_radarr" placeholder="{{ _('optional, comma-separated') }}"
+              value="{{ values.jellyfin_library_ids_radarr }}" />
+          </label>
+          <div class="setup-inline">
+            <button class="setup-test" type="button" data-kind="jellyfin" data-url-id="jellyfin_url"
+              data-key-id="jellyfin_api_key" data-username-id="jellyfin_username" data-password-id="jellyfin_password"
+              data-inline-key="jellyfin" data-slot="jellyfin"
+              data-stored-secret="{% if values.jellyfin_api_key_configured %}1{% else %}0{% endif %}">
+              {{ _('Test connection') }}
+            </button>
+            <span class="setup-inline-message{% if field_errors.get('jellyfin') %} is-error{% else %} hidden{% endif %}"
+              data-inline="jellyfin">{{ field_errors.get('jellyfin', '') }}</span>
+          </div>
+          <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
+        </div>
+        {% endset %}
+        <div class="setup-guide hidden" id="setupGuide" data-guide-storage-key="sortarr.setup.guide.dismissed" data-guide-mode-storage-key="sortarr.setup.guide.mode">
+          <div class="setup-guide-copy">
+            <div class="setup-guide-title-row">
+              <div class="setup-guide-title">{{ _('Quick guide') }}</div>
+            </div>
+            <div class="setup-guide-text" id="setupGuideText">
+              {% trans trimmed %}Use guided setup if you want Sortarr to walk you through the setup one step at a time.{% endtrans %}
+            </div>
+          </div>
+          <div class="setup-guide-actions">
+            <button class="setup-action-btn" type="button" id="setupGuideStartBtn">{{ _('Start guided setup') }}</button>
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" id="setupGuideDismissBtn">{{ _('Dismiss') }}</button>
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" id="setupGuideHideBtn">{{ _('Hide permanently') }}</button>
+          </div>
+        </div>
+        <div class="setup-guided-dock hidden" id="setupGuidedDock" aria-live="polite">
+          <div class="setup-guided-dock-copy">
+            <div class="setup-guide-mode-label hidden" id="setupGuideModeLabel">{{ _('Guided setup active') }}</div>
+            <div class="setup-guided-dock-progress" id="setupGuidedDockProgress">{{ _('Step 1 of 5') }}</div>
+            <div class="setup-guided-dock-title" id="setupGuidedDockTitle">{{ _('Media info source') }}</div>
+          </div>
+          <div class="setup-guided-dock-actions">
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" id="setupGuidedDockBackBtn">{{ _('Back') }}</button>
+            <button class="setup-action-btn" type="button" id="setupGuidedDockNextBtn">{{ _('Next step') }}</button>
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" id="setupGuidedDockExitBtn">{{ _('Exit guided setup') }}</button>
+          </div>
+        </div>
+        <details class="setup-task-section setup-task-section--media setup-task-details" id="setupStep1" data-guide-step="1" open>
+          <summary>
+            <span class="setup-task-step">{{ _('Step 1') }}</span>
+            <span class="setup-task-title">{{ _('Media info source') }}</span>
+            <span class="setup-task-status setup-task-status--{{ setup_step_states.step1.state }}" id="setupStep1Status">{{ _(setup_step_states.step1.label) }}</span>
+            <span class="setup-task-config-summary" id="setupStep1Summary">{{ _('Choose your media info source') }}</span>
+          </summary>
+          <div class="setup-task-details-body">
+            <div class="setup-task-summary">
+              {% trans trimmed %}Start by choosing what Sortarr should use for media info. The setup will focus on that path first, and you can add other providers later if you need them.{% endtrans %}
+            </div>
+        <div class="setup-category-title">{{ _('Media source intent') }}</div>
         <label>
-          {{ _('Preferred media source') }}
+          {{ _('What should Sortarr use as your media source?') }}
           <select name="media_source_preference">
             <option value="arr" {% if (values.media_source_preference or 'arr') == 'arr' %}selected{% endif %}>
               {{ _('Sonarr/Radarr') }}
@@ -73,16 +212,53 @@
             <option value="plex" {% if (values.media_source_preference or '') == 'plex' %}selected{% endif %}>
               {{ _('Plex') }}
             </option>
+            <option value="jellyfin" {% if (values.media_source_preference or '') == 'jellyfin' %}selected{% endif %}>
+              {{ _('Jellyfin') }}
+            </option>
             <option value="auto" {% if (values.media_source_preference or '') == 'auto' %}selected{% endif %}>
               {{ _('Auto') }}
             </option>
           </select>
         </label>
         <div class="setup-hint">
-          {% trans %}Choose which source should be treated as primary when multiple media sources are configured.{% endtrans %}
+          {% trans %}Choose the system that should drive your media library view in Sortarr.{% endtrans %}
         </div>
         <div class="setup-hint">
-          {% trans %}If Plex is your preferred media source, Sonarr and Radarr can be left unconfigured.{% endtrans %}
+          {% trans %}This choice controls which setup fields are shown first. If you use Sonarr and Radarr for media info, you can still configure Plex or Jellyfin in Step 2 for history use and Step 3 for playback enrichment.{% endtrans %}
+        </div>
+        <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or '') != 'plex' %} hidden{% endif %}" id="plexMediaSourceNotice">
+          {% trans trimmed %}Plex is selected as your media source. Configure your Plex connection below. Only add Sonarr or Radarr here if you also want those connections available in Sortarr.{% endtrans %}
+        </div>
+        <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or '') != 'jellyfin' %} hidden{% endif %}" id="jellyfinMediaSourceNotice">
+          {% trans trimmed %}Jellyfin is selected as your media source. Configure your Jellyfin connection below. Only add Sonarr or Radarr here if you also want those connections available in Sortarr.{% endtrans %}
+        </div>
+        <div id="plexMediaSourceMount" class="setup-source-block{% if (values.media_source_preference or 'arr') != 'plex' %} hidden{% endif %}">
+          {% if (values.media_source_preference or 'arr') == 'plex' %}
+          <div class="setup-section-title">{{ _('Plex media connection') }}</div>
+          <div class="setup-hint">
+            {% trans trimmed %}Connect Plex here when Plex should provide your media library data in Sortarr.{% endtrans %}
+          </div>
+          {{ plex_provider_block|safe }}
+          {% endif %}
+        </div>
+        <div id="jellyfinMediaSourceMount" class="setup-source-block{% if (values.media_source_preference or 'arr') != 'jellyfin' %} hidden{% endif %}">
+          {% if (values.media_source_preference or 'arr') == 'jellyfin' %}
+          <div class="setup-section-title">{{ _('Jellyfin media connection') }}</div>
+          <div class="setup-hint">
+            {% trans trimmed %}Connect Jellyfin here when Jellyfin should provide your media library data in Sortarr.{% endtrans %}
+          </div>
+          {{ jellyfin_provider_block|safe }}
+          {% endif %}
+        </div>
+        <div class="setup-optional-actions{% if (values.media_source_preference or 'arr') not in ['plex', 'jellyfin'] %} hidden{% endif %}" id="arrMediaSourceActions">
+          <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showArrMediaSourceBtn">
+            {{ _('Add Sonarr/Radarr anyway') }}
+          </button>
+        </div>
+        <div id="arrMediaSourceBlock" class="setup-source-block{% if (values.media_source_preference or 'arr') in ['plex', 'jellyfin'] %} hidden{% endif %}">
+        <div class="setup-section-title">{{ _('Sonarr and Radarr connections') }}</div>
+        <div class="setup-hint">
+          {% trans trimmed %}Use these fields when Sonarr and Radarr are your media source, or add them alongside Plex or Jellyfin if you want those connections available too.{% endtrans %}
         </div>
         <div class="setup-section-title">{{ _('Sonarr Instance 1') }}</div>
         <label>
@@ -103,7 +279,7 @@
         {% if values.sonarr_api_key_configured %}
         <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
         {% endif %}
-        <details class="setup-advanced" {% if optional_section_open %}open{% endif %}>
+        <details class="setup-advanced" id="setupStep1SonarrAdvanced">
           <summary>{{ _('Advanced Sonarr instance 1 options') }}</summary>
           <div class="setup-advanced-body">
             <label>
@@ -144,9 +320,17 @@
             data-inline="sonarr_1">{{ field_errors.get('sonarr_1', '') }}</span>
         </div>
 
-        <details class="setup-advanced">
-          <summary>{{ _('Advanced Sonarr instances') }}</summary>
-          <div class="setup-advanced-body">
+        <div class="setup-optional-actions">
+          <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showSonarrInstance2Btn">
+            {{ _('Add another Sonarr instance') }}
+          </button>
+        </div>
+        <div class="setup-optional-block{% if not (values.sonarr_url_2 or values.sonarr_api_key_2_configured or values.sonarr_name_2 or values.sonarr_url_api_2 or values.sonarr_url_external_2) %} hidden{% endif %}" id="sonarrInstance2Block">
+          <div class="setup-optional-block-body">
+            <input type="hidden" name="clear_sonarr_instance_2" value="{% if values.clear_sonarr_instance_2 %}1{% else %}0{% endif %}" />
+            <div class="setup-block-actions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-optional-block="sonarrInstance2Block">{{ _('Remove connection') }}</button>
+            </div>
             <div class="setup-section-title">{{ _('Sonarr Instance 2 (optional)') }}</div>
             <label>
               {{ _('Instance name') }}
@@ -202,68 +386,80 @@
                 class="setup-inline-message{% if field_errors.get('sonarr_2') %} is-error{% else %} hidden{% endif %}"
                 data-inline="sonarr_2">{{ field_errors.get('sonarr_2', '') }}</span>
             </div>
-
-            <div class="setup-section-title">{{ _('Sonarr Instance 3 (optional)') }}</div>
-            <label>
-              {{ _('Instance name') }}
-              <input name="sonarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}"
-                value="{{ values.sonarr_name_3 }}" />
-            </label>
-            <label>
-              {{ _('Sonarr URL') }}
-              <input name="sonarr_url_3" placeholder="{{ _('http://192.168.1.120:8989') }}"
-                value="{{ values.sonarr_url_3 }}" />
-            </label>
-            <label>
-              {{ _('Sonarr API URL (optional)') }}
-              <input name="sonarr_url_api_3" placeholder="{{ _('http://sonarr.sonarr.svc.cluster.local:8989') }}"
-                value="{{ values.sonarr_url_api_3 }}" />
-            </label>
-            <label>
-              {{ _('Sonarr External URL (optional)') }}
-              <input name="sonarr_url_external_3" placeholder="{{ _('https://sonarr.domain.tld') }}"
-                value="{{ values.sonarr_url_external_3 }}" />
-            </label>
-            <label>
-              {{ _('Sonarr API key') }}
-              <input name="sonarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
-                placeholder="{{ _('your-api-key') }}" value="" />
-            </label>
-            {% if values.sonarr_api_key_3_configured %}
-            <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
-            {% endif %}
-            <label>
-              {{ _('Path map') }}
-              <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_3"
-                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
-                <div class="setup-path-map-list" data-path-map-list>
-                  {% for entry in values.sonarr_path_maps_3 or [""] %}
-                  <input name="sonarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}"
-                    value="{{ entry }}" aria-label="{{ _('Path map') }}" />
-                  {% endfor %}
-                </div>
-                <button class="setup-path-map-add" type="button" data-path-map-add>
-                  <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
-                </button>
-              </div>
-            </label>
-            <div class="setup-inline">
-              <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_3"
-                data-key-id="sonarr_api_key_3" data-inline-key="sonarr_3" data-slot="sonarr_3"
-                data-stored-secret="{% if values.sonarr_api_key_3_configured %}1{% else %}0{% endif %}">
-                {{ _('Test connection') }}
+            <div class="setup-optional-actions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showSonarrInstance3Btn">
+                {{ _('Add another Sonarr instance') }}
               </button>
-              <span
-                class="setup-inline-message{% if field_errors.get('sonarr_3') %} is-error{% else %} hidden{% endif %}"
-                data-inline="sonarr_3">{{ field_errors.get('sonarr_3', '') }}</span>
             </div>
-            <div class="setup-hint">
-              {% trans trimmed %}If you add another Sonarr instance, name all configured Sonarr instances so chips and
-              columns stay clear.{% endtrans %}
+            <div class="setup-optional-block{% if not (values.sonarr_url_3 or values.sonarr_api_key_3_configured or values.sonarr_name_3 or values.sonarr_url_api_3 or values.sonarr_url_external_3) %} hidden{% endif %}" id="sonarrInstance3Block">
+              <div class="setup-optional-block-body">
+                <input type="hidden" name="clear_sonarr_instance_3" value="{% if values.clear_sonarr_instance_3 %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-optional-block="sonarrInstance3Block">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Sonarr Instance 3 (optional)') }}</div>
+                <label>
+                  {{ _('Instance name') }}
+                  <input name="sonarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}"
+                    value="{{ values.sonarr_name_3 }}" />
+                </label>
+                <label>
+                  {{ _('Sonarr URL') }}
+                  <input name="sonarr_url_3" placeholder="{{ _('http://192.168.1.120:8989') }}"
+                    value="{{ values.sonarr_url_3 }}" />
+                </label>
+                <label>
+                  {{ _('Sonarr API URL (optional)') }}
+                  <input name="sonarr_url_api_3" placeholder="{{ _('http://sonarr.sonarr.svc.cluster.local:8989') }}"
+                    value="{{ values.sonarr_url_api_3 }}" />
+                </label>
+                <label>
+                  {{ _('Sonarr External URL (optional)') }}
+                  <input name="sonarr_url_external_3" placeholder="{{ _('https://sonarr.domain.tld') }}"
+                    value="{{ values.sonarr_url_external_3 }}" />
+                </label>
+                <label>
+                  {{ _('Sonarr API key') }}
+                  <input name="sonarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('your-api-key') }}" value="" />
+                </label>
+                {% if values.sonarr_api_key_3_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <label>
+                  {{ _('Path map') }}
+                  <div class="setup-path-map-group" data-path-map-group data-path-map-name="sonarr_path_map_3"
+                    data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
+                    <div class="setup-path-map-list" data-path-map-list>
+                      {% for entry in values.sonarr_path_maps_3 or [""] %}
+                      <input name="sonarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}"
+                        value="{{ entry }}" aria-label="{{ _('Path map') }}" />
+                      {% endfor %}
+                    </div>
+                    <button class="setup-path-map-add" type="button" data-path-map-add>
+                      <span class="setup-path-map-add-icon">+</span>
+                      <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
+                    </button>
+                  </div>
+                </label>
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="sonarr" data-url-id="sonarr_url_3"
+                    data-key-id="sonarr_api_key_3" data-inline-key="sonarr_3" data-slot="sonarr_3"
+                    data-stored-secret="{% if values.sonarr_api_key_3_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span
+                    class="setup-inline-message{% if field_errors.get('sonarr_3') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="sonarr_3">{{ field_errors.get('sonarr_3', '') }}</span>
+                </div>
+                <div class="setup-hint">
+                  {% trans trimmed %}If you add another Sonarr instance, name all configured Sonarr instances so chips and
+                  columns stay clear.{% endtrans %}
+                </div>
+              </div>
             </div>
           </div>
-        </details>
+        </div>
 
         <div class="setup-section-title">{{ _('Radarr Instance 1') }}</div>
         <label>
@@ -284,7 +480,7 @@
         {% if values.radarr_api_key_configured %}
         <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
         {% endif %}
-        <details class="setup-advanced" {% if advanced_section_open %}open{% endif %}>
+        <details class="setup-advanced" id="setupStep1RadarrAdvanced">
           <summary>{{ _('Advanced Radarr instance 1 options') }}</summary>
           <div class="setup-advanced-body">
             <label>
@@ -325,9 +521,17 @@
             data-inline="radarr_1">{{ field_errors.get('radarr_1', '') }}</span>
         </div>
 
-        <details class="setup-advanced">
-          <summary>{{ _('Advanced Radarr instances') }}</summary>
-          <div class="setup-advanced-body">
+        <div class="setup-optional-actions">
+          <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showRadarrInstance2Btn">
+            {{ _('Add another Radarr instance') }}
+          </button>
+        </div>
+        <div class="setup-optional-block{% if not (values.radarr_url_2 or values.radarr_api_key_2_configured or values.radarr_name_2 or values.radarr_url_api_2 or values.radarr_url_external_2) %} hidden{% endif %}" id="radarrInstance2Block">
+          <div class="setup-optional-block-body">
+            <input type="hidden" name="clear_radarr_instance_2" value="{% if values.clear_radarr_instance_2 %}1{% else %}0{% endif %}" />
+            <div class="setup-block-actions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-optional-block="radarrInstance2Block">{{ _('Remove connection') }}</button>
+            </div>
             <div class="setup-section-title">{{ _('Radarr Instance 2 (optional)') }}</div>
             <label>
               {{ _('Instance name') }}
@@ -383,189 +587,96 @@
                 class="setup-inline-message{% if field_errors.get('radarr_2') %} is-error{% else %} hidden{% endif %}"
                 data-inline="radarr_2">{{ field_errors.get('radarr_2', '') }}</span>
             </div>
-
-            <div class="setup-section-title">{{ _('Radarr Instance 3 (optional)') }}</div>
-            <label>
-              {{ _('Instance name') }}
-              <input name="radarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}"
-                value="{{ values.radarr_name_3 }}" />
-            </label>
-            <label>
-              {{ _('Radarr URL') }}
-              <input name="radarr_url_3" placeholder="{{ _('http://192.168.1.120:7878') }}"
-                value="{{ values.radarr_url_3 }}" />
-            </label>
-            <label>
-              {{ _('Radarr API URL (optional)') }}
-              <input name="radarr_url_api_3" placeholder="{{ _('http://radarr.radarr.svc.cluster.local:7878') }}"
-                value="{{ values.radarr_url_api_3 }}" />
-            </label>
-            <label>
-              {{ _('Radarr External URL (optional)') }}
-              <input name="radarr_url_external_3" placeholder="{{ _('https://radarr.domain.tld') }}"
-                value="{{ values.radarr_url_external_3 }}" />
-            </label>
-            <label>
-              {{ _('Radarr API key') }}
-              <input name="radarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
-                placeholder="{{ _('your-api-key') }}" value="" />
-            </label>
-            {% if values.radarr_api_key_3_configured %}
-            <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
-            {% endif %}
-            <label>
-              {{ _('Path map') }}
-              <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_3"
-                data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
-                <div class="setup-path-map-list" data-path-map-list>
-                  {% for entry in values.radarr_path_maps_3 or [""] %}
-                  <input name="radarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}"
-                    value="{{ entry }}" aria-label="{{ _('Path map') }}" />
-                  {% endfor %}
-                </div>
-                <button class="setup-path-map-add" type="button" data-path-map-add>
-                  <span class="setup-path-map-add-icon">+</span>
-                  <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
-                </button>
-              </div>
-            </label>
-            <div class="setup-inline">
-              <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_3"
-                data-key-id="radarr_api_key_3" data-inline-key="radarr_3" data-slot="radarr_3"
-                data-stored-secret="{% if values.radarr_api_key_3_configured %}1{% else %}0{% endif %}">
-                {{ _('Test connection') }}
+            <div class="setup-optional-actions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showRadarrInstance3Btn">
+                {{ _('Add another Radarr instance') }}
               </button>
-              <span
-                class="setup-inline-message{% if field_errors.get('radarr_3') %} is-error{% else %} hidden{% endif %}"
-                data-inline="radarr_3">{{ field_errors.get('radarr_3', '') }}</span>
             </div>
-            <div class="setup-hint">
-              {% trans trimmed %}If you add another Radarr instance, name all configured Radarr instances so chips and
-              columns stay clear.{% endtrans %}
+            <div class="setup-optional-block{% if not (values.radarr_url_3 or values.radarr_api_key_3_configured or values.radarr_name_3 or values.radarr_url_api_3 or values.radarr_url_external_3) %} hidden{% endif %}" id="radarrInstance3Block">
+              <div class="setup-optional-block-body">
+                <input type="hidden" name="clear_radarr_instance_3" value="{% if values.clear_radarr_instance_3 %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-optional-block="radarrInstance3Block">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Radarr Instance 3 (optional)') }}</div>
+                <label>
+                  {{ _('Instance name') }}
+                  <input name="radarr_name_3" placeholder="{{ _('4k / Anime / Cartoons') }}"
+                    value="{{ values.radarr_name_3 }}" />
+                </label>
+                <label>
+                  {{ _('Radarr URL') }}
+                  <input name="radarr_url_3" placeholder="{{ _('http://192.168.1.120:7878') }}"
+                    value="{{ values.radarr_url_3 }}" />
+                </label>
+                <label>
+                  {{ _('Radarr API URL (optional)') }}
+                  <input name="radarr_url_api_3" placeholder="{{ _('http://radarr.radarr.svc.cluster.local:7878') }}"
+                    value="{{ values.radarr_url_api_3 }}" />
+                </label>
+                <label>
+                  {{ _('Radarr External URL (optional)') }}
+                  <input name="radarr_url_external_3" placeholder="{{ _('https://radarr.domain.tld') }}"
+                    value="{{ values.radarr_url_external_3 }}" />
+                </label>
+                <label>
+                  {{ _('Radarr API key') }}
+                  <input name="radarr_api_key_3" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('your-api-key') }}" value="" />
+                </label>
+                {% if values.radarr_api_key_3_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <label>
+                  {{ _('Path map') }}
+                  <div class="setup-path-map-group" data-path-map-group data-path-map-name="radarr_path_map_3"
+                    data-path-map-placeholder="{{ _('/container/path:/host/path') }}">
+                    <div class="setup-path-map-list" data-path-map-list>
+                      {% for entry in values.radarr_path_maps_3 or [""] %}
+                      <input name="radarr_path_map_3" placeholder="{{ _('/container/path:/host/path') }}"
+                        value="{{ entry }}" aria-label="{{ _('Path map') }}" />
+                      {% endfor %}
+                    </div>
+                    <button class="setup-path-map-add" type="button" data-path-map-add>
+                      <span class="setup-path-map-add-icon">+</span>
+                      <span class="setup-path-map-add-text">{{ _('Add mapping') }}</span>
+                    </button>
+                  </div>
+                </label>
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="radarr" data-url-id="radarr_url_3"
+                    data-key-id="radarr_api_key_3" data-inline-key="radarr_3" data-slot="radarr_3"
+                    data-stored-secret="{% if values.radarr_api_key_3_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span
+                    class="setup-inline-message{% if field_errors.get('radarr_3') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="radarr_3">{{ field_errors.get('radarr_3', '') }}</span>
+                </div>
+                <div class="setup-hint">
+                  {% trans trimmed %}If you add another Radarr instance, name all configured Radarr instances so chips and
+                  columns stay clear.{% endtrans %}
+                </div>
+              </div>
             </div>
+          </div>
+        </div>
+
+        </div>
           </div>
         </details>
 
-        <details class="setup-advanced">
-          <summary>{{ _('History and optional playback providers') }}</summary>
-          <div class="setup-advanced-body">
-        <div class="setup-category-title">{{ _('Playback History Sources') }}</div>
-        <label>
-          {{ _('Preferred history source') }}
-          <select name="history_source_preference">
-            <option value="auto" {% if (values.history_source_preference or 'auto') == 'auto' %}selected{% endif %}>
-              {{ _('Auto') }}
-            </option>
-            <option value="tautulli" {% if (values.history_source_preference or '') == 'tautulli' %}selected{% endif %}>
-              {{ _('Tautulli') }}
-            </option>
-            <option value="jellystat" {% if (values.history_source_preference or '') == 'jellystat' %}selected{% endif %}>
-              {{ _('Jellystat') }}
-            </option>
-            <option value="plex" {% if (values.history_source_preference or '') == 'plex' %}selected{% endif %}>
-              {{ _('Plex') }}
-            </option>
-          </select>
-        </label>
-        <div class="setup-hint">
-          {% trans %}When multiple history providers are configured, this preference decides which one is used for watch stats/matching.{% endtrans %}
-        </div>
-        <div class="setup-section-title">{{ _('Jellystat (optional)') }}</div>
-        <label>
-          {{ _('Jellystat URL') }}
-          <input name="jellystat_url" placeholder="{{ _('http://192.168.1.120:3000') }}"
-            value="{{ values.jellystat_url }}" />
-        </label>
-        <label>
-          {{ _('Jellystat API key') }}
-          <input name="jellystat_api_key" type="password" autocomplete="off" spellcheck="false"
-            placeholder="{{ _('optional') }}" value="" />
-        </label>
-        {% if values.jellystat_api_key_configured %}
-        <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
-        {% endif %}
-        <label>
-          {{ _('Jellystat library IDs (Sonarr)') }}
-          <input name="jellystat_library_ids_sonarr" placeholder="{{ _('optional, comma-separated') }}"
-            value="{{ values.jellystat_library_ids_sonarr }}" />
-        </label>
-        <label>
-          {{ _('Jellystat library IDs (Radarr)') }}
-          <input name="jellystat_library_ids_radarr" placeholder="{{ _('optional, comma-separated') }}"
-            value="{{ values.jellystat_library_ids_radarr }}" />
-        </label>
-        <div class="setup-inline">
-          <button class="setup-test" type="button" data-kind="jellystat" data-url-id="jellystat_url"
-            data-key-id="jellystat_api_key" data-inline-key="jellystat" data-slot="jellystat"
-            data-stored-secret="{% if values.jellystat_api_key_configured %}1{% else %}0{% endif %}">
-            {{ _('Test connection') }}
-          </button>
-          <span class="setup-inline-message{% if field_errors.get('jellystat') %} is-error{% else %} hidden{% endif %}"
-            data-inline="jellystat">{{ field_errors.get('jellystat', '') }}</span>
-        </div>
-        <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
-        <div class="setup-hint">
-          {% trans %}You can configure multiple history sources. Use Preferred history source above to pick which provider should win when more than one is available.{% endtrans %}
-        </div>
-
-
-        <div class="setup-section-title">{{ _('Tautulli (optional)') }}</div>
-        <label>
-          {{ _('Tautulli URL') }}
-          <input name="tautulli_url" placeholder="{{ _('http://192.168.1.120:8181') }}"
-            value="{{ values.tautulli_url }}" />
-        </label>
-        <label>
-          {{ _('Tautulli API key') }}
-          <input name="tautulli_api_key" type="password" autocomplete="off" spellcheck="false"
-            placeholder="{{ _('optional') }}" value="" />
-        </label>
-        {% if values.tautulli_api_key_configured %}
-        <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
-        {% endif %}
-        <div class="setup-inline">
-          <button class="setup-test" type="button" data-kind="tautulli" data-url-id="tautulli_url"
-            data-key-id="tautulli_api_key" data-inline-key="tautulli" data-slot="tautulli"
-            data-stored-secret="{% if values.tautulli_api_key_configured %}1{% else %}0{% endif %}">
-            {{ _('Test connection') }}
-          </button>
-          <span class="setup-inline-message{% if field_errors.get('tautulli') %} is-error{% else %} hidden{% endif %}"
-            data-inline="tautulli">{{ field_errors.get('tautulli', '') }}</span>
-        </div>
-
-        <div class="setup-category-title">{{ _('Playback Providers') }}</div>
-        <div class="setup-section-title">{{ _('Plex (optional)') }}</div>
-        <label>
-          {{ _('Plex URL') }}
-          <input name="plex_url" placeholder="{{ _('http://192.168.1.120:32400') }}" value="{{ values.plex_url }}" />
-        </label>
-        <label>
-          {{ _('Plex Token') }}
-          <input name="plex_token" type="password" autocomplete="off" spellcheck="false"
-            placeholder="{{ _('optional') }}" value="" />
-        </label>
-        {% if values.plex_token_configured %}
-        <div class="setup-hint">{% trans trimmed %}Stored token will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
-        {% endif %}
-        <label>
-          {{ _('Plex section IDs (optional)') }}
-          <input name="plex_section_filters" placeholder="{{ _('optional, comma-separated') }}"
-            value="{{ values.plex_section_filters }}" />
-        </label>
-        <div class="setup-inline">
-          <button class="setup-test" type="button" data-kind="plex" data-url-id="plex_url" data-key-id="plex_token"
-            data-client-id="plex_client_id" data-inline-key="plex" data-slot="plex"
-            data-stored-secret="{% if values.plex_token_configured %}1{% else %}0{% endif %}">
-            {{ _('Test connection') }}
-          </button>
-          <span class="setup-inline-message{% if field_errors.get('plex') %} is-error{% else %} hidden{% endif %}"
-            data-inline="plex">{{ field_errors.get('plex', '') }}</span>
-        </div>
-        <div class="setup-hint">{{ _('Leave section IDs blank to scan all libraries.') }}</div>
-
-          </div>
-        </details>
-
+        <details class="setup-task-section setup-task-section--security setup-task-details" id="setupStep4" data-guide-step="4">
+          <summary>
+            <span class="setup-task-step">{{ _('Step 4') }}</span>
+            <span class="setup-task-title">{{ _('Protect access') }}</span>
+            <span class="setup-task-status setup-task-status--{{ setup_step_states.step4.state }}" id="setupStep4Status">{{ _(setup_step_states.step4.label) }}</span>
+            <span class="setup-task-config-summary" id="setupStep4Summary">{{ _('Choose authentication and save a secret key') }}</span>
+          </summary>
+          <div class="setup-task-details-body">
+            <div class="setup-task-summary">
+              {% trans trimmed %}Choose how users authenticate, set the proxy mode, and save a persistent session secret key before continuing into the app.{% endtrans %}
+            </div>
         <div class="setup-section-title">{{ _('Security') }}</div>
         <label>
           {{ _('Authentication Method') }}
@@ -627,48 +738,76 @@
           {% trans trimmed %}Choose the proxy chain in front of Sortarr. Use Custom only if you need per-header hop overrides.{% endtrans %}
         </div>
 
-        <details class="setup-advanced">
-          <summary>{{ _('Secret storage') }}</summary>
-          <div class="setup-advanced-body">
-            <div class="setup-hint">
-              {{ _('Storage backend:') }} {{ values.sortarr_secret_storage_label }}
-            </div>
-        {% if values.sortarr_windows_credstore_enabled %}
-            <div class="setup-hint">
-              {% trans trimmed %}This Windows portable build stores secrets in Windows Credential Manager and keeps only credential references in the env file.{% endtrans %}
-            </div>
-        {% else %}
-            <div class="setup-hint">
-              {% trans trimmed %}This install stores secrets as files under your config directory and keeps only `*_FILE` references in the env file.{% endtrans %}
-            </div>
-            <div class="setup-hint">
-              {{ _('Secret files directory:') }} {{ values.sortarr_secrets_dir }}
-            </div>
-        {% endif %}
-          </div>
-        </details>
         <label>
           {{ _('Session secret key') }}
           <input name="sortarr_secret_key" type="password" autocomplete="new-password"
-            placeholder="{{ _('leave blank to keep current') }}" value="" />
+            placeholder="{{ _('leave blank to auto-generate on save') }}" value="" />
         </label>
         <div class="setup-inline setup-secret-actions">
           <button class="setup-action-btn" type="button" id="generateSecretKeyBtn">
-            {{ _('Generate permanent secret key') }}
+            {{ _('Generate secret now (optional)') }}
           </button>
           <span class="setup-inline-message hidden" id="secretKeyInlineMessage"></span>
         </div>
         <div class="setup-hint">
-          {% trans trimmed %}Used for session and CSRF signing. Keep this stable, and use the same value on every replica.{% endtrans %}
+          {% trans trimmed %}Used for session and CSRF signing. Keep this stable, and use the same value on every replica. Leave it blank to let Sortarr generate and persist one when you save, or enter your own value now if you want to control it.{% endtrans %}
         </div>
         {% if values.sortarr_secret_key_ephemeral %}
         <div class="setup-hint setup-hint--warn">
-          {% trans trimmed %}Sortarr generated a temporary session secret at startup. Save a persistent Session secret key to avoid CSRF/session issues after restart or across replicas.{% endtrans %}
+          {% trans trimmed %}Sortarr generated a temporary session secret at startup. Saving this form will persist a stable secret automatically unless you enter or generate one here first.{% endtrans %}
         </div>
         {% endif %}
+          </div>
+        </details>
 
-        <details class="setup-advanced">
-          <summary>{{ _('Advanced settings') }}</summary>
+        <details class="setup-task-section setup-task-section--advanced setup-task-details" id="setupStep5" data-guide-step="5">
+          <summary>
+            <span class="setup-task-step">{{ _('Step 5') }}</span>
+            <span class="setup-task-title">{{ _('Advanced network and performance') }}</span>
+            <span class="setup-task-status setup-task-status--{{ setup_step_states.step5.state }}" id="setupStep5Status">{{ _(setup_step_states.step5.label) }}</span>
+            <span class="setup-task-config-summary" id="setupStep5Summary">
+              {% if advanced_summary.count %}
+              {{ _('Advanced settings in use') }}: {{ advanced_summary.preview }}
+              {% else %}
+              {{ _('No advanced overrides') }}
+              {% endif %}
+            </span>
+          </summary>
+          <div class="setup-task-details-body">
+            <div class="setup-task-summary">
+              {% trans trimmed %}Use this section for secret-storage details, proxy trust, CSRF diagnostics, and performance overrides. Most setups should be able to save successfully without changing anything here.{% endtrans %}
+            </div>
+            <div class="setup-task-meta">
+              {{ _('Advanced settings in use') }}:
+              {% if advanced_summary.count %}
+              {{ advanced_summary.preview }}
+              {% else %}
+              {{ _('None') }}
+              {% endif %}
+            </div>
+            <details class="setup-advanced">
+              <summary>{{ _('Secret storage') }}</summary>
+              <div class="setup-advanced-body">
+                <div class="setup-hint">
+                  {{ _('Storage backend:') }} {{ values.sortarr_secret_storage_label }}
+                </div>
+          {% if values.sortarr_windows_credstore_enabled %}
+                <div class="setup-hint">
+                  {% trans trimmed %}This Windows portable build stores secrets in Windows Credential Manager and keeps only credential references in the env file.{% endtrans %}
+                </div>
+          {% else %}
+                <div class="setup-hint">
+                  {% trans trimmed %}This install stores secrets as files under your config directory and keeps only `*_FILE` references in the env file.{% endtrans %}
+                </div>
+                <div class="setup-hint">
+                  {{ _('Secret files directory:') }} {{ values.sortarr_secrets_dir }}
+                </div>
+          {% endif %}
+              </div>
+            </details>
+
+            <details class="setup-advanced">
+              <summary>{{ _('Advanced settings') }}</summary>
           <div class="setup-advanced-body">
             <div class="setup-section-title">{{ _('Network & CSRF') }}</div>
             <div id="proxyCustomFields" class="{% if (values.proxy_preset or 'single') != 'custom' %}hidden{% endif %}">
@@ -801,6 +940,26 @@
               defaults; seconds fields accept 0 for no time limit.{% endtrans %}
             </div>
 
+            <div class="setup-section-title">{{ _('Streamystats performance') }}</div>
+            <label>
+              {{ _('Streamystats timeout seconds') }}
+              <input name="streamystats_timeout_seconds" type="number" min="1" step="1"
+                value="{{ values.streamystats_timeout_seconds }}" />
+            </label>
+            <label>
+              {{ _('Streamystats search limit') }}
+              <input name="streamystats_search_limit" type="number" min="1" step="1"
+                value="{{ values.streamystats_search_limit }}" />
+            </label>
+            <label>
+              {{ _('Streamystats workers') }}
+              <input name="streamystats_workers" type="number" min="1" step="1"
+                value="{{ values.streamystats_workers }}" />
+            </label>
+            <div class="setup-hint">
+              {% trans trimmed %}These values control Streamystats search and detail requests during playback-history matching. Leave fields blank for defaults.{% endtrans %}
+            </div>
+
             <div class="setup-section-title">{{ _('Plex settings') }}</div>
             <label>
               {{ _('Plex client identifier (optional)') }}
@@ -815,6 +974,267 @@
             <div class="setup-hint">
               {% trans trimmed %}History page size controls how many Plex history rows are fetched per request. Leave
               blank for defaults.{% endtrans %}
+            </div>
+          </div>
+            </details>
+          </div>
+        </details>
+
+        <details class="setup-task-section setup-task-section--optional setup-task-details" id="setupStep2" data-guide-step="2">
+          <summary>
+            <span class="setup-task-step">{{ _('Step 2') }}</span>
+            <span class="setup-task-title">{{ _('History source') }}</span>
+            <span class="setup-task-status setup-task-status--{{ setup_step_states.step2.state }}" id="setupStep2Status">{{ _(setup_step_states.step2.label) }}</span>
+            <span class="setup-task-config-summary" id="setupStep2Summary">{{ _('Choose your history source') }}</span>
+          </summary>
+          <div class="setup-task-details-body">
+            <div class="setup-task-summary">
+              {% trans trimmed %}Choose which system should provide watch history and playback-history data. Playback and enrichment connections live in the next step so they can stay separate from your primary history choice.{% endtrans %}
+            </div>
+            <div class="setup-category-title">{{ _('History source intent') }}</div>
+            <label>
+              {{ _('What should Sortarr use for watch history data?') }}
+              <select name="history_source_preference">
+                <option value="auto" {% if (values.history_source_preference or 'auto') == 'auto' %}selected{% endif %}>
+                  {{ _('Auto') }}
+                </option>
+                <option value="tautulli" {% if (values.history_source_preference or '') == 'tautulli' %}selected{% endif %}>
+                  {{ _('Tautulli') }}
+                </option>
+                <option value="jellystat" {% if (values.history_source_preference or '') == 'jellystat' %}selected{% endif %}>
+                  {{ _('Jellystat') }}
+                </option>
+                <option value="streamystats" {% if (values.history_source_preference or '') == 'streamystats' %}selected{% endif %}>
+                  {{ _('Streamystats') }}
+                </option>
+                <option value="plex" {% if (values.history_source_preference or '') == 'plex' %}selected{% endif %}>
+                  {{ _('Plex') }}
+                </option>
+              </select>
+            </label>
+            <div class="setup-hint">
+              {% trans %}Choose the provider that should drive watch history, playback-history stats, and matching in Sortarr.{% endtrans %}
+            </div>
+            <div class="setup-hint">
+              {% trans %}Auto lets Sortarr use what is already configured. Pick a specific provider when you want this step to focus on one history path.{% endtrans %}
+            </div>
+            <div class="setup-hint">
+              {% trans trimmed %}If Plex is already configured in Step 1, Sortarr can reuse that connection here as your history source. For Jellyfin-backed watch history, use Jellystat or Streamystats instead of native Jellyfin history selection.{% endtrans %}
+            </div>
+            <div class="setup-hint setup-hint--accent{% if not ((values.media_source_preference or 'arr') == 'plex' and ((values.history_source_preference or 'auto') in ['auto', 'plex'])) %} hidden{% endif %}" id="plexHistoryReuseNotice">
+              {% trans trimmed %}Plex is already configured in Step 1 as your media source. Sortarr will reuse that same Plex connection here for history data.{% endtrans %}
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexMediaBtn">{{ _('Review Plex in Step 1') }}</button>
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'plex' or (values.media_source_preference or 'arr') == 'plex' %} hidden{% endif %}" id="plexHistoryIntentNotice">
+              {% trans trimmed %}Plex is selected as your history source. Configure Plex in Step 3 below, where playback and enrichment providers are connected.{% endtrans %}
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexPlaybackBtn">{{ _('Open Step 3') }}</button>
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'tautulli' %} hidden{% endif %}" id="tautulliHistoryIntentNotice">
+              {% trans trimmed %}Tautulli is selected as your history source. Configure Tautulli below to use it as your primary playback-history provider.{% endtrans %}
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'jellystat' %} hidden{% endif %}" id="jellystatHistoryIntentNotice">
+              {% trans trimmed %}Jellystat is selected as your history source. Configure Jellystat below to use it as your primary playback-history provider.{% endtrans %}
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'streamystats' %} hidden{% endif %}" id="streamystatsHistoryIntentNotice">
+              {% trans trimmed %}Streamystats is selected as your history source. Configure Streamystats below to use its Jellyfin-backed watch history and detail stats in Sortarr.{% endtrans %}
+            </div>
+            <div class="setup-optional-actions" id="historyProviderActions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-provider-reveal="jellystat">
+                {{ _('Add Jellystat') }}
+              </button>
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-provider-reveal="streamystats">
+                {{ _('Add Streamystats') }}
+              </button>
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-provider-reveal="tautulli">
+                {{ _('Add Tautulli') }}
+              </button>
+            </div>
+            <div id="historyProviderBlocks">
+              <div class="setup-provider-block" data-history-provider="jellystat">
+                <input type="hidden" name="clear_jellystat_connection" value="{% if values.clear_jellystat_connection %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="jellystat">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Jellystat') }}</div>
+                <label>
+                  {{ _('Jellystat URL') }}
+                  <input name="jellystat_url" placeholder="{{ _('http://192.168.1.120:3000') }}"
+                    value="{{ values.jellystat_url }}" />
+                </label>
+                <label>
+                  {{ _('Jellystat API key') }}
+                  <input name="jellystat_api_key" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('optional') }}" value="" />
+                </label>
+                {% if values.jellystat_api_key_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <label>
+                  {{ _('Jellystat library IDs (Sonarr)') }}
+                  <input name="jellystat_library_ids_sonarr" placeholder="{{ _('optional, comma-separated') }}"
+                    value="{{ values.jellystat_library_ids_sonarr }}" />
+                </label>
+                <label>
+                  {{ _('Jellystat library IDs (Radarr)') }}
+                  <input name="jellystat_library_ids_radarr" placeholder="{{ _('optional, comma-separated') }}"
+                    value="{{ values.jellystat_library_ids_radarr }}" />
+                </label>
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="jellystat" data-url-id="jellystat_url"
+                    data-key-id="jellystat_api_key" data-inline-key="jellystat" data-slot="jellystat"
+                    data-stored-secret="{% if values.jellystat_api_key_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span class="setup-inline-message{% if field_errors.get('jellystat') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="jellystat">{{ field_errors.get('jellystat', '') }}</span>
+                </div>
+                <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
+              </div>
+
+              <div class="setup-provider-block" data-history-provider="streamystats">
+                <input type="hidden" name="clear_streamystats_connection" value="{% if values.clear_streamystats_connection %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="streamystats">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Streamystats') }}</div>
+                <label>
+                  {{ _('Streamystats URL') }}
+                  <input name="streamystats_url" placeholder="{{ _('http://192.168.1.120:3001') }}"
+                    value="{{ values.streamystats_url }}" />
+                </label>
+                <label>
+                  {{ _('Streamystats API key') }}
+                  <input name="streamystats_api_key" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('optional') }}" value="" />
+                </label>
+                {% if values.streamystats_api_key_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <label>
+                  {{ _('Streamystats server ID (optional)') }}
+                  <input name="streamystats_server_id" placeholder="{{ _('optional; auto-detected when blank') }}"
+                    value="{{ values.streamystats_server_id }}" />
+                </label>
+                <label>
+                  {{ _('Jellyfin username for Streamystats (optional)') }}
+                  <input name="streamystats_username" placeholder="{{ _('optional; falls back to Jellyfin username') }}"
+                    value="{{ values.streamystats_username }}" />
+                </label>
+                <label>
+                  {{ _('Jellyfin password for Streamystats (optional)') }}
+                  <input name="streamystats_password" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('optional; falls back to Jellyfin password') }}" value="" />
+                </label>
+                {% if values.streamystats_password_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored password will be reused for Jellyfin-auth testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="streamystats" data-url-id="streamystats_url"
+                    data-key-id="streamystats_api_key" data-username-id="streamystats_username" data-password-id="streamystats_password"
+                    data-server-id-id="streamystats_server_id"
+                    data-inline-key="streamystats" data-slot="streamystats"
+                    data-stored-secret="{% if values.streamystats_api_key_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span class="setup-inline-message{% if field_errors.get('streamystats') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="streamystats">{{ field_errors.get('streamystats', '') }}</span>
+                </div>
+                <div class="setup-hint">{% trans trimmed %}Sortarr uses the Streamystats API key plus a Jellyfin user login to search and load item details. Leave server ID blank to auto-detect when only one server is configured.{% endtrans %}</div>
+              </div>
+
+              <div class="setup-provider-block" data-history-provider="tautulli">
+                <input type="hidden" name="clear_tautulli_connection" value="{% if values.clear_tautulli_connection %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="tautulli">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Tautulli') }}</div>
+                <label>
+                  {{ _('Tautulli URL') }}
+                  <input name="tautulli_url" placeholder="{{ _('http://192.168.1.120:8181') }}"
+                    value="{{ values.tautulli_url }}" />
+                </label>
+                <label>
+                  {{ _('Tautulli API key') }}
+                  <input name="tautulli_api_key" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('optional') }}" value="" />
+                </label>
+                {% if values.tautulli_api_key_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="tautulli" data-url-id="tautulli_url"
+                    data-key-id="tautulli_api_key" data-inline-key="tautulli" data-slot="tautulli"
+                    data-stored-secret="{% if values.tautulli_api_key_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span class="setup-inline-message{% if field_errors.get('tautulli') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="tautulli">{{ field_errors.get('tautulli', '') }}</span>
+                </div>
+              </div>
+            </div>
+            <div class="setup-hint">
+              {% trans %}You can still add both history providers here. The selected provider stays in focus, and the other one remains available if you explicitly add it.{% endtrans %}
+            </div>
+
+          </div>
+        </details>
+
+        <details class="setup-task-section setup-task-section--optional setup-task-details" id="setupStep3" data-guide-step="3">
+          <summary>
+            <span class="setup-task-step">{{ _('Step 3') }}</span>
+            <span class="setup-task-title">{{ _('Playback and enrichment providers') }}</span>
+            <span class="setup-task-status setup-task-status--{{ setup_step_states.step3.state }}" id="setupStep3Status">{{ _(setup_step_states.step3.label) }}</span>
+            <span class="setup-task-config-summary" id="setupStep3Summary">{{ _('No playback providers connected') }}</span>
+          </summary>
+          <div class="setup-task-details-body">
+            <div class="setup-task-summary">
+              {% trans trimmed %}Connect Plex or Jellyfin here when you want playback enrichment, mismatch features, and provider-specific insights, even if a different system is your primary history source.{% endtrans %}
+            </div>
+            <div class="setup-category-title">{{ _('Playback and enrichment providers') }}</div>
+            <div class="setup-hint">
+              {% trans trimmed %}Playback and enrichment providers can still be useful when they are not your primary history source. This is where Sortarr learns about Plex- or Jellyfin-specific playback features and insights.{% endtrans %}
+            </div>
+            <label>
+              {{ _('Preferred playback / enrichment provider') }}
+              <select name="insights_provider_preference">
+                <option value="auto" {% if (values.insights_provider_preference or 'auto') == 'auto' %}selected{% endif %}>{{ _('Auto') }}</option>
+                <option value="plex" {% if (values.insights_provider_preference or '') == 'plex' %}selected{% endif %}>{{ _('Plex') }}</option>
+                <option value="jellyfin" {% if (values.insights_provider_preference or '') == 'jellyfin' %}selected{% endif %}>{{ _('Jellyfin') }}</option>
+              </select>
+            </label>
+            <div class="setup-hint">
+              {% trans trimmed %}Choose which provider should drive provider-specific insights and enrichment when both Plex and Jellyfin are configured. Auto follows the active history provider first, then falls back to the current media source.{% endtrans %}
+            </div>
+            <div class="setup-hint">
+              {% trans trimmed %}If Step 2 uses Plex as the history source, the same connection from this step will be reused automatically unless Step 1 already owns it as your media source.{% endtrans %}
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or 'arr') != 'plex' %} hidden{% endif %}" id="plexPlaybackReuseNotice">
+              {% trans trimmed %}Plex is already configured in Step 1 as your media source. Sortarr can reuse that Plex connection here for playback enrichment and, if chosen in Step 2, as your history source too.{% endtrans %}
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexPlaybackMediaBtn">{{ _('Review Plex in Step 1') }}</button>
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or 'arr') != 'jellyfin' %} hidden{% endif %}" id="jellyfinPlaybackReuseNotice">
+              {% trans trimmed %}Jellyfin is already configured in Step 1 as your media source. Sortarr can reuse that Jellyfin connection here for playback enrichment and provider-specific insights.{% endtrans %}
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewJellyfinPlaybackMediaBtn">{{ _('Review Jellyfin in Step 1') }}</button>
+            </div>
+            <div class="setup-optional-actions" id="playbackProviderActions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-playback-provider-reveal="plex">
+                {{ _('Add Plex') }}
+              </button>
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-playback-provider-reveal="jellyfin">
+                {{ _('Add Jellyfin') }}
+              </button>
+            </div>
+            <div id="playbackProviderBlocks">
+              <div id="plexPlaybackProviderMount">
+                {% if (values.media_source_preference or 'arr') != 'plex' %}
+                {{ plex_provider_block|safe }}
+                {% endif %}
+              </div>
+              <div id="jellyfinPlaybackProviderMount">
+                {% if (values.media_source_preference or 'arr') != 'jellyfin' %}
+                {{ jellyfin_provider_block|safe }}
+                {% endif %}
+              </div>
             </div>
           </div>
         </details>
@@ -834,12 +1254,22 @@
             "secret_required_before_save": _("Generate or enter a permanent Session secret key before saving settings."),
             "csrf_diag_running": _("Running CSRF/proxy diagnostics..."),
             "csrf_diag_done": _("Diagnostics complete."),
-            "csrf_diag_failed": _("Unable to run diagnostics.")
+            "csrf_diag_failed": _("Unable to run diagnostics."),
+            "guide_step_1": _("Start here: choose what Sortarr should use for media info, then configure that path first."),
+            "guide_step_2": _("Next: choose which system should provide watch history, then configure only that provider first."),
+            "guide_step_3": _("Then: connect Plex or Jellyfin for playback enrichment if you want those features available."),
+            "guide_step_4": _("After that: choose authentication, proxy mode, and save a persistent session secret key."),
+            "guide_step_5": _("Last: open advanced network and performance settings only if you need overrides.")
           }|tojson }}
         </script>
+        <script id="setup-field-errors-json" nonce="{{ csp_nonce }}" type="application/json">
+          {{ field_errors|tojson }}
+        </script>
 
-        <div class="setup-hint">{{ _('Env file path:') }} {{ env_path }}</div>
-        <button class="setup-submit" type="submit">{{ _('Save and continue') }}</button>
+        <div class="setup-form-footer">
+          <div class="setup-hint">{{ _('Env file path:') }} {{ env_path }}</div>
+          <button class="setup-submit" type="submit">{{ _('Save and continue') }}</button>
+        </div>
       </form>
     </div>
   </div>

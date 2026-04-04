@@ -235,7 +235,7 @@
       <div class="filters-body">
         {% set initial_playback_provider = (bootstrap_config.playback_provider or '')|lower %}
         {% set initial_playback_enabled = bootstrap_config.playback_configured or bootstrap_config.tautulli_configured %}
-        {% set initial_playback_label = 'Jellystat' if initial_playback_provider == 'jellystat' else ('Tautulli' if initial_playback_provider == 'tautulli' else ('Plex' if initial_playback_provider == 'plex' else 'Playback')) %}
+        {% set initial_playback_label = 'Jellystat' if initial_playback_provider == 'jellystat' else ('Tautulli' if initial_playback_provider == 'tautulli' else ('Plex' if initial_playback_provider == 'plex' else ('Jellyfin' if initial_playback_provider == 'jellyfin' else 'Playback'))) %}
         {% set initial_show_deep_refresh = initial_playback_enabled and initial_playback_provider != 'jellystat' %}
         <div class="status-row" id="statusRow">
           <div class="status-block">
@@ -259,7 +259,7 @@
                 title="Re-match using current {{ initial_playback_label }} data">Re-match from {{ initial_playback_label }}</button>
               <button id="deepRefreshTautulliBtn"{% if not initial_show_deep_refresh %} class="hidden"{% endif %} disabled
                 title="Refresh {{ initial_playback_label }} library data, then rebuild matches">Rebuild {{ initial_playback_label }} data</button>
-              <button id="plexInsightsBtn" disabled title="{{ _('Open Plex insights') }}">{{ _('Plex Insights')
+              <button id="plexInsightsBtn" disabled title="{{ _('Open provider insights') }}">{{ _('Provider Insights')
                 }}</button>
               <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center')
                 }}</button>
@@ -829,13 +829,15 @@
     "playbackMatchingNotice": _("Playback matching in progress."),
     "matchingInProgressLabel": _("%(label)s matching in progress.", label="%(label)s"),
     "noArrMediaSourcePlexAvailable": _("No Sonarr/Radarr media source configured. Plex features are available."),
-    "noMediaSourceConfigured": _("No media source configured. Open Setup to configure Sonarr, Radarr, or Plex."),
+    "noArrMediaSourceProviderAvailable": _("No Sonarr/Radarr media source configured. Direct provider features are available."),
+    "noMediaSourceConfigured": _("No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin."),
     "effectiveSourcesLabel": _("Effective sources"),
     "effectiveSourcesValue": _("Media: %(media)s | History: %(history)s", media="%(media)s", history="%(history)s"),
     "sourceAuto": _("Auto"),
     "sourceNone": _("None"),
     "sourceArr": _("Sonarr/Radarr"),
     "sourcePlex": _("Plex"),
+    "sourceJellyfin": _("Jellyfin"),
     "sourceJellystat": _("Jellystat"),
     "sourceTautulli": _("Tautulli"),
     "plexLibrariesLabel": _("Libraries"),
@@ -976,6 +978,13 @@
     "Open Plex insights": _("Open Plex insights"),
     "Plex insights unavailable.": _("Plex insights unavailable."),
     "Fetching Plex insights...": _("Fetching Plex insights..."),
+    "Provider Insights": _("Provider Insights"),
+    "providerInsightsLabel": _("%(label)s Insights", label="%(label)s"),
+    "providerInsightsFallback": _("Provider Insights"),
+    "openProviderInsights": _("Open %(label)s insights", label="%(label)s"),
+    "providerInsightsUnavailable": _("%(label)s insights unavailable.", label="%(label)s"),
+    "fetchingProviderInsights": _("Fetching %(label)s insights...", label="%(label)s"),
+    "Open provider insights": _("Open provider insights"),
     "Live": _("Live"),
     "Live on": _("Live on"),
     "Live unavailable": _("Live unavailable"),
@@ -995,11 +1004,15 @@
     "Top reasons": _("Top reasons"),
     "Activities": _("Activities"),
     "Butler": _("Butler"),
+    "Sessions": _("Sessions"),
+    "Libraries": _("Libraries"),
     "n/a": _("n/a"),
     "No hubs available": _("No hubs available"),
     "No hub items": _("No hub items"),
     "No active tasks": _("No active tasks"),
     "No butler tasks": _("No butler tasks"),
+    "No sessions available": _("No sessions available"),
+    "No libraries available": _("No libraries available"),
     "No match data": _("No match data"),
     "Untitled": _("Untitled"),
     "No events available.": _("No events available."),

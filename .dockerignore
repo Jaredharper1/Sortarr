@@ -34,3 +34,4 @@ docs/radarr-openapi.json
 docs/sonarr-openapi.json
 secrets/
 .env
+.playwright-mcp

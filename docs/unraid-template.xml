@@ -13,8 +13,8 @@
   <Project>https://github.com/jaredharper1/sortarr</Project>
   <TemplateURL>https://raw.githubusercontent.com/Jaredharper1/Sortarr/main/docs/unraid-template.xml</TemplateURL>
 
-  <Overview>Sortarr is a lightweight web dashboard for Sonarr and Radarr that helps you understand how your media library uses storage.</Overview>
-  <Description>Storage insights dashboard for Sonarr and Radarr libraries. Secrets are migrated to /config/secrets and plaintext secret fallback is disabled.</Description>
+  <Overview>Sortarr is a read-only analytics and organisation dashboard for media libraries, with support for Sonarr, Radarr, Plex, Jellyfin, Tautulli, Jellystat, and Streamystats.</Overview>
+  <Description>Read-only media library analytics for Arr, Plex, and Jellyfin with optional playback/history overlays and provider insights. Secrets are migrated to /config/secrets and plaintext secret fallback is disabled.</Description>
 
   <Category>MediaApp:Tools</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>

@@ -2,7 +2,17 @@
 
 ## [Unreleased]
 
-## [0.8.8] - 2026-03-27
+## [0.8.9] - 2026-04-03
+
+### Features
+- Setup now shows live per-section header summaries so collapsed steps indicate the current media, history, security, and advanced configuration state at a glance.
+- Setup now prioritizes Plex, Jellystat, Streamystats, or Tautulli within the history/playback section based on the selected preferred history source, keeping the chosen provider closest to the top of the step.
+- Setup now progressively reveals optional Sonarr and Radarr instances behind explicit add actions, keeps history/playback provider forms hidden until they are preferred, already configured, or explicitly added, and adds explicit `Remove connection` actions for saved optional provider blocks.
+- Setup now adds section-level setup status badges, routes validation failures back to the relevant step, keeps stored-secret-backed sections understandable even when secret fields are blank, and splits setup validation into section-oriented backend helpers.
+- Setup now uses a five-step source-category flow: `Media info source`, `History source`, `Playback and enrichment providers`, `Protect access`, and `Advanced network and performance`, with explicit Plex/Jellyfin connection reuse between steps.
+- Added Jellyfin direct media-source support for shows and movies, including provider-aware drilldowns, image proxying, mismatch-center support, and provider-aware insights.
+- Added Jellyfin diagnostics and provider-aware `/api/playback/insights` support, including library-scoped Jellyfin match-health views.
+- Added Streamystats as a selectable history provider, including setup/test/save wiring, background refresh/cache support, mismatch-center participation, and Streamystats-backed playback overlays for Sonarr/Radarr rows.
 
 ### Fixes
 - Stopped deleting on-disk Arr, Plex, Tautulli, and Jellystat caches on routine app-version changes during startup. Sortarr now keeps warm caches across normal upgrades and instead relies on explicit cache payload version mismatches to invalidate stale cache formats.
@@ -26,6 +36,12 @@
 - Hardened local secret-file resolution so only files whose real paths remain under the expected base/secrets roots are eligible for loading.
 - Added a defensive secret scrub in env-file writes so plaintext secret values are converted to file/credential refs, or cleared when an external secret ref already exists, before persisting config.
 - Added a lightweight Plex sections bootstrap cache so `/api/config` can populate `plex_libraries` without loading the full Plex index cache on cold startup, while still validating the snapshot against the current Plex server URL/token and falling back to the full cache when needed.
+- Jellyfin direct media rows now populate size and bitrate fields from Jellyfin media metadata instead of relying only on local filesystem stats.
+- Jellyfin and Plex direct-media modes now hide Arr-only workflow columns that do not make sense outside Sonarr/Radarr-backed views.
+- Fixed Jellyfin mismatch-center inclusion, insights provider selection, and cache/refresh edge cases that could leave stale partial Jellyfin state in use.
+- Fixed provider-aware match-health reporting so Plex and Jellyfin insights reflect the active playback/history provider instead of misleading provider self-match totals, and now label match summaries as `Series` / `Movies`.
+- Fixed direct-media season and episode drilldowns plus poster proxying for Jellyfin and Plex-backed views.
+- Removed the hardcoded sample `SORTARR_FRAME_ANCESTORS` value from the Docker Compose example, refreshed the Unraid template product description, and expanded Docker entrypoint ownership prep to cover Plex, Jellyfin, Jellystat, and Streamystats cache path overrides.
 
 ## [0.8.7] - 2026-03-19
 

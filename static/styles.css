@@ -6423,11 +6423,14 @@ html.is-ios .perf-overlay {
 .plex-drawer {
   width: min(520px, 92vw);
   max-width: 620px;
-  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
+  box-sizing: border-box;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
   overflow: hidden;
   border-left: 1px solid var(--border-color, #444);
   backdrop-filter: blur(12px);
@@ -6488,6 +6491,7 @@ html.is-ios .perf-overlay {
   display: grid;
   gap: 16px;
   padding-right: 2px;
+  padding-bottom: 8px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   scrollbar-width: none;
@@ -7328,6 +7332,10 @@ html[data-filters-collapsed="1"] body.sortarr-loading #healthBadges.health-badge
 
 .mismatch-provider-row.is-skipped {
   border-color: rgba(205, 164, 65, 0.8);
+}
+
+.mismatch-provider-row.is-pending {
+  border-color: rgba(88, 136, 214, 0.85);
 }
 
 .mismatch-provider-row.is-unavailable {
