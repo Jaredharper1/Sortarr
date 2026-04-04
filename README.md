@@ -1,5 +1,5 @@
 # Sortarr
-![GitHub release](https://img.shields.io/github/v/release/Jaredharper1/Sortarr)
+![GitHub release](https://img.shields.io/github/v/release/Jaredharper1/Sortarr?cacheSeconds=60)
 ![GitHub commits since latest release](https://img.shields.io/github/commits-since/Jaredharper1/Sortarr/latest)
 ![GitHub last commit](https://img.shields.io/github/last-commit/Jaredharper1/Sortarr)
 ![GitHub License](https://img.shields.io/github/license/Jaredharper1/Sortarr)
