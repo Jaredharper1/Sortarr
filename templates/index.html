@@ -233,17 +233,19 @@
 
     <div class="filters" id="filtersPanel">
       <div class="filters-body">
-        {% set initial_playback_provider = (bootstrap_config.playback_provider or '')|lower %}
+        {% set initial_overlay_provider = (bootstrap_config.overlay_provider or bootstrap_config.playback_provider or '')|lower %}
+        {% set initial_history_provider = ((bootstrap_config.option_set or {}).get('selected', {}).get('history_source', '') or '')|lower %}
         {% set initial_playback_enabled = bootstrap_config.playback_configured or bootstrap_config.tautulli_configured %}
-        {% set initial_playback_label = 'Jellystat' if initial_playback_provider == 'jellystat' else ('Tautulli' if initial_playback_provider == 'tautulli' else ('Plex' if initial_playback_provider == 'plex' else ('Jellyfin' if initial_playback_provider == 'jellyfin' else 'Playback'))) %}
-        {% set initial_show_deep_refresh = initial_playback_enabled and initial_playback_provider != 'jellystat' %}
+        {% set initial_overlay_label = 'Plex' if initial_overlay_provider == 'plex' else ('Emby' if initial_overlay_provider == 'emby' else ('Jellyfin' if initial_overlay_provider == 'jellyfin' else 'Enrichment')) %}
+        {% set initial_history_label = 'Tracearr' if initial_history_provider == 'tracearr' else ('Streamystats' if initial_history_provider == 'streamystats' else ('Jellystat' if initial_history_provider == 'jellystat' else ('Tautulli' if initial_history_provider == 'tautulli' else ('Plex' if initial_history_provider == 'plex' else initial_overlay_label)))) %}
+        {% set initial_show_deep_refresh = initial_playback_enabled and initial_history_provider != 'jellystat' %}
         <div class="status-row" id="statusRow">
           <div class="status-block">
             <div class="status-label">{{ _('Progress') }}</div>
             <div class="status-value status-value--skeleton" id="progressStatus">--</div>
           </div>
           <div class="status-block">
-            <div class="status-label" data-playback-label>{{ initial_playback_label if initial_playback_enabled else _('Playback') }}</div>
+            <div class="status-label" data-playback-label>{{ initial_history_label if initial_playback_enabled else _('History') }}</div>
             <div class="status-value status-value--skeleton" id="tautulliStatus">--</div>
           </div>
           <div class="status-block">
@@ -256,9 +258,9 @@
                 title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
                 Shows data') }}</button>
               <button id="refreshTautulliBtn"{% if not initial_playback_enabled %} class="hidden"{% endif %} disabled
-                title="Re-match using current {{ initial_playback_label }} data">Re-match from {{ initial_playback_label }}</button>
+                title="Re-match using current {{ initial_history_label }} data">Re-match from {{ initial_history_label }}</button>
               <button id="deepRefreshTautulliBtn"{% if not initial_show_deep_refresh %} class="hidden"{% endif %} disabled
-                title="Refresh {{ initial_playback_label }} library data, then rebuild matches">Rebuild {{ initial_playback_label }} data</button>
+                title="Refresh {{ initial_history_label }} library data, then rebuild matches">Rebuild {{ initial_history_label }} data</button>
               <button id="plexInsightsBtn" disabled title="{{ _('Open provider insights') }}">{{ _('Provider Insights')
                 }}</button>
               <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center')
@@ -830,9 +832,9 @@
     "matchingInProgressLabel": _("%(label)s matching in progress.", label="%(label)s"),
     "noArrMediaSourcePlexAvailable": _("No Sonarr/Radarr media source configured. Plex features are available."),
     "noArrMediaSourceProviderAvailable": _("No Sonarr/Radarr media source configured. Direct provider features are available."),
-    "noMediaSourceConfigured": _("No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin."),
+    "noMediaSourceConfigured": _("No media source configured. Open Setup to configure Sonarr, Radarr, Plex, Emby, or Jellyfin."),
     "effectiveSourcesLabel": _("Effective sources"),
-    "effectiveSourcesValue": _("Media: %(media)s | History: %(history)s", media="%(media)s", history="%(history)s"),
+    "effectiveSourcesValue": _("Media: %(media)s | History: %(history)s | Enrichment: %(enrichment)s", media="%(media)s", history="%(history)s", enrichment="%(enrichment)s"),
     "sourceAuto": _("Auto"),
     "sourceNone": _("None"),
     "sourceArr": _("Sonarr/Radarr"),

@@ -12,18 +12,19 @@ Sortarr is a read-only analytics and organisation tool for media libraries. It h
 
 Sortarr provides a data-driven management layer for your media library, using optional playback behaviour data to help you to optimise your library.
 
-Sortarr does not modify, move, or rename your media. It can analyse Sonarr and Radarr libraries, or use Plex or Jellyfin directly as a media source, and incorporates playback and history data to present actionable insights.
+Sortarr does not modify, move, or rename your media. It can analyse Sonarr and Radarr libraries, or use Plex, Jellyfin, or Emby directly as a media source, and incorporates playback and history data to present actionable insights.
 
 ---
 
 ## Key capabilities
 
-* Analyse libraries from Sonarr, Radarr, Plex, or Jellyfin in one interface
-* Overlay playback and history data from Tautulli, Jellystat, Streamystats, or Plex
+* Analyse libraries from Sonarr, Radarr, Plex, Jellyfin, or Emby in one interface
+* Overlay playback and history data from Tautulli, Tracearr, Jellystat, Streamystats, or Plex
 * Compare providers with Mismatch Center and playback-match diagnostics
-* Use provider-aware insights for Plex and Jellyfin, including sessions, activities, library views, and match health
+* Use provider-aware insights for Plex, Jellyfin, and Emby, including sessions, activities, library views, and match health
 * Drill down from series to seasons and episodes across Arr, Plex, and Jellyfin-backed views
 * Support multiple Sonarr and Radarr instances with cross-instance visibility
+* Protect access with three explicit auth modes: `basic`, `basic_local_bypass`, or `external`
 * Filter large libraries quickly with search, column filters, chips, and advanced rules
 * Show detailed media attributes such as size, bitrate, codecs, languages, FPS, and BPPF where the source supports them
 * Fully read-only operation for safety
@@ -66,10 +67,12 @@ Project wiki:
 * Radarr
 * Plex
 * Jellyfin
+* Emby
 
 ### History providers
 
 * Tautulli
+* Tracearr
 * Jellystat
 * Streamystats
 * Plex
@@ -78,6 +81,13 @@ Project wiki:
 
 * Plex
 * Jellyfin
+* Emby
+
+## Authentication modes
+
+* `basic`: Sortarr challenges every client with its own Basic Auth credentials
+* `basic_local_bypass`: Sortarr still requires Basic Auth credentials, but allowed direct local peers can bypass the browser auth prompt
+* `external`: a trusted reverse proxy handles login and passes the configured upstream auth header; Sortarr does not require its own Basic Auth prompt in steady-state access
 
 
 ## What Sortarr does NOT do

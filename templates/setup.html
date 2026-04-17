@@ -29,9 +29,27 @@
         <div>
           <div class="setup-title">{{ app_name }} {{ _('Setup') }} v{{ app_version }}</div>
           <div class="setup-sub">
-          {% trans %}Choose your media-info source, then your history source, then add playback and enrichment providers only where they add value. Optional connections can still be added alongside the main path when needed.{% endtrans %}
+          {% trans %}Choose where Sortarr should get media details, watch history, and optional enrichment. You can still add extra apps later when they help.{% endtrans %}
           </div>
-          <div class="setup-hint" id="setupEffectiveSources">{{ _('Effective sources') }}: {{ _('Media') }} {{ values.media_source or _('Auto') }}, {{ _('History') }} {{ values.history_source or _('Auto') }}</div>
+          <div class="setup-source-summary">
+            <div class="setup-hint" id="setupSelectedSources">{{ _('Selected') }}: {{ _('Media:') }} {{ values.media_source_preference or _('Auto') }} | {{ _('History:') }} {{ values.history_source_preference or _('Auto') }} | {{ _('Enrichment:') }} {{ values.insights_provider_preference or _('Auto') }}</div>
+            <div class="setup-hint setup-hint--subtle" id="setupEffectiveSources">{{ _('Effective') }}: {{ _('Media:') }} {{ values.media_source or _('Auto') }} | {{ _('History:') }} {{ values.history_source or _('Auto') }} | {{ _('Enrichment:') }} {{ values.insights_provider or _('Auto') }}</div>
+            <div class="setup-provider-chip-row" id="setupProviderChipRow">
+              <div class="setup-provider-chip" id="setupProviderChipMedia">
+                <span class="setup-provider-chip__role">{{ _('Media') }}</span>
+                <span class="setup-provider-chip__detail">{{ _('Selected:') }} {{ values.media_source_preference or _('Auto') }} · {{ _('Effective:') }} {{ values.media_source or _('Auto') }}</span>
+              </div>
+              <div class="setup-provider-chip" id="setupProviderChipHistory">
+                <span class="setup-provider-chip__role">{{ _('History') }}</span>
+                <span class="setup-provider-chip__detail">{{ _('Selected:') }} {{ values.history_source_preference or _('Auto') }} · {{ _('Effective:') }} {{ values.history_source or _('Auto') }}</span>
+              </div>
+              <div class="setup-provider-chip" id="setupProviderChipEnrichment">
+                <span class="setup-provider-chip__role">{{ _('Enrichment') }}</span>
+                <span class="setup-provider-chip__detail">{{ _('Selected:') }} {{ values.insights_provider_preference or _('Auto') }} · {{ _('Effective:') }} {{ values.insights_provider or _('Auto') }}</span>
+              </div>
+            </div>
+            <div class="setup-hint setup-hint--warn setup-source-note" id="setupSourceExplanation" hidden></div>
+          </div>
         </div>
       </div>
 
@@ -164,6 +182,51 @@
           <div class="setup-hint">{{ _('Leave library IDs blank to auto-detect by library type.') }}</div>
         </div>
         {% endset %}
+        {% set emby_provider_block %}
+        <div id="embyProviderBlock" class="setup-provider-block" data-media-provider="emby" data-playback-provider="emby">
+          <input type="hidden" name="clear_emby_connection" value="{% if values.clear_emby_connection %}1{% else %}0{% endif %}" />
+          <div class="setup-block-actions">
+            <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="emby">{{ _('Remove connection') }}</button>
+          </div>
+          <div class="setup-section-title">{{ _('Emby') }}</div>
+          <label>
+            {{ _('Emby URL') }}
+            <input name="emby_url" placeholder="{{ _('http://192.168.1.120:8096') }}" value="{{ values.emby_url }}" />
+          </label>
+          <label>
+            {{ _('Emby API key') }}
+            <input name="emby_api_key" type="password" autocomplete="off" spellcheck="false"
+              placeholder="{{ _('optional') }}" value="" />
+          </label>
+          {% if values.emby_api_key_configured %}
+          <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+          {% endif %}
+          <label>
+            {{ _('Emby user ID (optional)') }}
+            <input name="emby_user_id" placeholder="{{ _('optional') }}" value="{{ values.emby_user_id }}" />
+          </label>
+          <label>
+            {{ _('Emby library IDs (eg. Shows)') }}
+            <input name="emby_library_ids_sonarr" placeholder="{{ _('optional, comma-separated') }}"
+              value="{{ values.emby_library_ids_sonarr }}" />
+          </label>
+          <label>
+            {{ _('Emby library IDs (eg. Movies)') }}
+            <input name="emby_library_ids_radarr" placeholder="{{ _('optional, comma-separated') }}"
+              value="{{ values.emby_library_ids_radarr }}" />
+          </label>
+          <div class="setup-inline">
+            <button class="setup-test" type="button" data-kind="emby" data-url-id="emby_url"
+              data-key-id="emby_api_key" data-inline-key="emby" data-slot="emby"
+              data-stored-secret="{% if values.emby_api_key_configured %}1{% else %}0{% endif %}">
+              {{ _('Test connection') }}
+            </button>
+            <span class="setup-inline-message{% if field_errors.get('emby') %} is-error{% else %} hidden{% endif %}"
+              data-inline="emby">{{ field_errors.get('emby', '') }}</span>
+          </div>
+          <div class="setup-hint">{{ _('Leave section IDs blank to scan all libraries.') }}</div>
+        </div>
+        {% endset %}
         <div class="setup-guide hidden" id="setupGuide" data-guide-storage-key="sortarr.setup.guide.dismissed" data-guide-mode-storage-key="sortarr.setup.guide.mode">
           <div class="setup-guide-copy">
             <div class="setup-guide-title-row">
@@ -202,6 +265,9 @@
             <div class="setup-task-summary">
               {% trans trimmed %}Start by choosing what Sortarr should use for media info. The setup will focus on that path first, and you can add other providers later if you need them.{% endtrans %}
             </div>
+            <div class="setup-task-helper" id="setupStep1Helper">
+              {% trans trimmed %}Choose a media source to see how Sortarr will use it here.{% endtrans %}
+            </div>
         <div class="setup-category-title">{{ _('Media source intent') }}</div>
         <label>
           {{ _('What should Sortarr use as your media source?') }}
@@ -212,6 +278,9 @@
             <option value="plex" {% if (values.media_source_preference or '') == 'plex' %}selected{% endif %}>
               {{ _('Plex') }}
             </option>
+            <option value="emby" {% if (values.media_source_preference or '') == 'emby' %}selected{% endif %}>
+              {{ _('Emby') }}
+            </option>
             <option value="jellyfin" {% if (values.media_source_preference or '') == 'jellyfin' %}selected{% endif %}>
               {{ _('Jellyfin') }}
             </option>
@@ -220,17 +289,14 @@
             </option>
           </select>
         </label>
-        <div class="setup-hint">
-          {% trans %}Choose the system that should drive your media library view in Sortarr.{% endtrans %}
-        </div>
-        <div class="setup-hint">
-          {% trans %}This choice controls which setup fields are shown first. If you use Sonarr and Radarr for media info, you can still configure Plex or Jellyfin in Step 2 for history use and Step 3 for playback enrichment.{% endtrans %}
-        </div>
         <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or '') != 'plex' %} hidden{% endif %}" id="plexMediaSourceNotice">
-          {% trans trimmed %}Plex is selected as your media source. Configure your Plex connection below. Only add Sonarr or Radarr here if you also want those connections available in Sortarr.{% endtrans %}
+          {% trans trimmed %}Plex is selected for media. Add your Plex details below. Only add Sonarr or Radarr here if you still want them available too.{% endtrans %}
+        </div>
+        <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or '') != 'emby' %} hidden{% endif %}" id="embyMediaSourceNotice">
+          {% trans trimmed %}Emby is selected for media. Add your Emby details below. Only add Sonarr or Radarr here if you still want them available too.{% endtrans %}
         </div>
         <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or '') != 'jellyfin' %} hidden{% endif %}" id="jellyfinMediaSourceNotice">
-          {% trans trimmed %}Jellyfin is selected as your media source. Configure your Jellyfin connection below. Only add Sonarr or Radarr here if you also want those connections available in Sortarr.{% endtrans %}
+          {% trans trimmed %}Jellyfin is selected for media. Add your Jellyfin details below. Only add Sonarr or Radarr here if you still want them available too.{% endtrans %}
         </div>
         <div id="plexMediaSourceMount" class="setup-source-block{% if (values.media_source_preference or 'arr') != 'plex' %} hidden{% endif %}">
           {% if (values.media_source_preference or 'arr') == 'plex' %}
@@ -250,15 +316,24 @@
           {{ jellyfin_provider_block|safe }}
           {% endif %}
         </div>
-        <div class="setup-optional-actions{% if (values.media_source_preference or 'arr') not in ['plex', 'jellyfin'] %} hidden{% endif %}" id="arrMediaSourceActions">
+        <div id="embyMediaSourceMount" class="setup-source-block{% if (values.media_source_preference or 'arr') != 'emby' %} hidden{% endif %}">
+          {% if (values.media_source_preference or 'arr') == 'emby' %}
+          <div class="setup-section-title">{{ _('Emby media connection') }}</div>
+          <div class="setup-hint">
+            {% trans trimmed %}Connect Emby here when Emby should provide your media library data in Sortarr.{% endtrans %}
+          </div>
+          {{ emby_provider_block|safe }}
+          {% endif %}
+        </div>
+        <div class="setup-optional-actions{% if (values.media_source_preference or 'arr') not in ['plex', 'jellyfin', 'emby'] %} hidden{% endif %}" id="arrMediaSourceActions">
           <button class="setup-action-btn setup-action-btn--ghost" type="button" id="showArrMediaSourceBtn">
             {{ _('Add Sonarr/Radarr anyway') }}
           </button>
         </div>
-        <div id="arrMediaSourceBlock" class="setup-source-block{% if (values.media_source_preference or 'arr') in ['plex', 'jellyfin'] %} hidden{% endif %}">
+        <div id="arrMediaSourceBlock" class="setup-source-block{% if (values.media_source_preference or 'arr') in ['plex', 'jellyfin', 'emby'] %} hidden{% endif %}">
         <div class="setup-section-title">{{ _('Sonarr and Radarr connections') }}</div>
         <div class="setup-hint">
-          {% trans trimmed %}Use these fields when Sonarr and Radarr are your media source, or add them alongside Plex or Jellyfin if you want those connections available too.{% endtrans %}
+          {% trans trimmed %}Use these fields when Sonarr and Radarr are your main media source, or add them as extras if you still want them available.{% endtrans %}
         </div>
         <div class="setup-section-title">{{ _('Sonarr Instance 1') }}</div>
         <label>
@@ -682,13 +757,14 @@
           {{ _('Authentication Method') }}
           <select name="sortarr_auth_method" id="authMethod">
             <option value="basic" {% if (values.sortarr_auth_method or 'basic') == 'basic' %}selected{% endif %}>{{ _('Basic') }}</option>
+            <option value="basic_local_bypass" {% if (values.sortarr_auth_method or '') == 'basic_local_bypass' %}selected{% endif %}>{{ _('Basic + local bypass') }}</option>
             <option value="external" {% if (values.sortarr_auth_method or '') == 'external' %}selected{% endif %}>{{ _('External') }}</option>
           </select>
         </label>
         <div class="setup-hint">
-          {% trans trimmed %}Pick who handles login. Use Basic when Sortarr should prompt for credentials. Use External only when your trusted reverse proxy already handles login.{% endtrans %}
+          {% trans trimmed %}Pick who handles login. Use Basic when Sortarr should prompt for credentials. Use Basic + local bypass only for trusted direct local-network setups. Use External only when your trusted reverse proxy already handles login.{% endtrans %}
         </div>
-        <div id="basicAuthFields" class="{% if (values.sortarr_auth_method or 'basic') != 'basic' %}hidden{% endif %}">
+        <div id="basicAuthFields" class="{% if (values.sortarr_auth_method or 'basic') == 'external' %}hidden{% endif %}">
         <label>
           {{ _('Basic auth username') }}
           <input name="basic_auth_user" placeholder="{{ _('required') }}" value="{{ values.basic_auth_user }}" />
@@ -705,6 +781,26 @@
         <div class="setup-hint">{{ _('Leave blank and keep this unchecked to keep the current password. Enter a new password to replace it. Check this only if you intentionally want to remove the saved password.') }}</div>
         <div class="setup-hint">
           {% trans trimmed %}Credentials are stored via the configured secret backend. Protect your config directory and credential store.{% endtrans %}
+        </div>
+        <div id="localAuthBypassFields" class="{% if (values.sortarr_auth_method or '') != 'basic_local_bypass' %}hidden{% endif %}">
+          <label class="setup-checkbox">
+            <input type="checkbox" name="sortarr_local_auth_bypass" value="1" {% if values.sortarr_local_auth_bypass %}checked{% endif %} />
+            <span>{{ _('Enable direct local-network auth bypass') }}</span>
+          </label>
+          <div class="setup-hint">
+            {% trans trimmed %}Only direct clients whose socket IP matches the configured CIDR ranges can bypass the Basic Auth prompt. Non-local clients must still use the Basic Auth credentials above.{% endtrans %}
+          </div>
+          <label>
+            {{ _('Allowed local CIDRs (optional)') }}
+            <input name="sortarr_local_auth_bypass_cidrs" placeholder="192.168.0.0/16,10.0.0.0/8"
+              value="{{ values.sortarr_local_auth_bypass_cidrs or '' }}" />
+          </label>
+          <div class="setup-hint">
+            {% trans trimmed %}Leave this blank to use the built-in private and loopback ranges after you explicitly enable bypass. Enter custom comma-separated CIDRs to narrow or expand the trusted local ranges.{% endtrans %}
+          </div>
+          <div class="setup-hint setup-hint--warn">
+            {% trans trimmed %}This mode is only intended for trusted direct LAN installs. It is automatically invalid when Proxy mode is not Direct, and forwarded headers are never used for the bypass decision.{% endtrans %}
+          </div>
         </div>
         </div>
         <div id="externalAuthFields" class="{% if (values.sortarr_auth_method or 'basic') != 'external' %}hidden{% endif %}">
@@ -957,7 +1053,7 @@
                 value="{{ values.streamystats_workers }}" />
             </label>
             <div class="setup-hint">
-              {% trans trimmed %}These values control Streamystats search and detail requests during playback-history matching. Leave fields blank for defaults.{% endtrans %}
+              {% trans trimmed %}These values control Streamystats search and detail requests during history matching. Leave fields blank for defaults.{% endtrans %}
             </div>
 
             <div class="setup-section-title">{{ _('Plex settings') }}</div>
@@ -989,7 +1085,10 @@
           </summary>
           <div class="setup-task-details-body">
             <div class="setup-task-summary">
-              {% trans trimmed %}Choose which system should provide watch history and playback-history data. Playback and enrichment connections live in the next step so they can stay separate from your primary history choice.{% endtrans %}
+              {% trans trimmed %}Choose which system should provide watch history and matching data. Enrichment connections live in the next step so they can stay separate from your primary history choice.{% endtrans %}
+            </div>
+            <div class="setup-task-helper" id="setupStep2Helper">
+              {% trans trimmed %}Choose a history source to see how Sortarr will use it here.{% endtrans %}
             </div>
             <div class="setup-category-title">{{ _('History source intent') }}</div>
             <label>
@@ -1000,6 +1099,9 @@
                 </option>
                 <option value="tautulli" {% if (values.history_source_preference or '') == 'tautulli' %}selected{% endif %}>
                   {{ _('Tautulli') }}
+                </option>
+                <option value="tracearr" {% if (values.history_source_preference or '') == 'tracearr' %}selected{% endif %}>
+                  {{ _('Tracearr') }}
                 </option>
                 <option value="jellystat" {% if (values.history_source_preference or '') == 'jellystat' %}selected{% endif %}>
                   {{ _('Jellystat') }}
@@ -1012,33 +1114,30 @@
                 </option>
               </select>
             </label>
-            <div class="setup-hint">
-              {% trans %}Choose the provider that should drive watch history, playback-history stats, and matching in Sortarr.{% endtrans %}
-            </div>
-            <div class="setup-hint">
-              {% trans %}Auto lets Sortarr use what is already configured. Pick a specific provider when you want this step to focus on one history path.{% endtrans %}
-            </div>
-            <div class="setup-hint">
-              {% trans trimmed %}If Plex is already configured in Step 1, Sortarr can reuse that connection here as your history source. For Jellyfin-backed watch history, use Jellystat or Streamystats instead of native Jellyfin history selection.{% endtrans %}
-            </div>
-            <div class="setup-hint setup-hint--accent{% if not ((values.media_source_preference or 'arr') == 'plex' and ((values.history_source_preference or 'auto') in ['auto', 'plex'])) %} hidden{% endif %}" id="plexHistoryReuseNotice">
-              {% trans trimmed %}Plex is already configured in Step 1 as your media source. Sortarr will reuse that same Plex connection here for history data.{% endtrans %}
+            <div class="setup-hint setup-hint--accent{% if not ((setup_provider_state.media.effective or '') == 'plex' and (setup_provider_state.history.effective or '') == 'plex' and ((values.history_source_preference or 'auto') in ['auto', 'plex'])) %} hidden{% endif %}" id="plexHistoryReuseNotice">
+              {% trans trimmed %}Plex is already set up in Step 1, so Sortarr can use it here for history too.{% endtrans %}
               <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexMediaBtn">{{ _('Review Plex in Step 1') }}</button>
             </div>
             <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'plex' or (values.media_source_preference or 'arr') == 'plex' %} hidden{% endif %}" id="plexHistoryIntentNotice">
-              {% trans trimmed %}Plex is selected as your history source. Configure Plex in Step 3 below, where playback and enrichment providers are connected.{% endtrans %}
+              {% trans trimmed %}Plex is selected for history. Add your Plex details in Step 3 below.{% endtrans %}
               <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexPlaybackBtn">{{ _('Open Step 3') }}</button>
             </div>
             <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'tautulli' %} hidden{% endif %}" id="tautulliHistoryIntentNotice">
-              {% trans trimmed %}Tautulli is selected as your history source. Configure Tautulli below to use it as your primary playback-history provider.{% endtrans %}
+              {% trans trimmed %}Tautulli is selected for history. Add your Tautulli details below.{% endtrans %}
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'tracearr' %} hidden{% endif %}" id="tracearrHistoryIntentNotice">
+              {% trans trimmed %}Tracearr is selected for history. Add your Tracearr details below.{% endtrans %}
             </div>
             <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'jellystat' %} hidden{% endif %}" id="jellystatHistoryIntentNotice">
-              {% trans trimmed %}Jellystat is selected as your history source. Configure Jellystat below to use it as your primary playback-history provider.{% endtrans %}
+              {% trans trimmed %}Jellystat is selected for history. Add your Jellystat details below.{% endtrans %}
             </div>
             <div class="setup-hint setup-hint--accent{% if (values.history_source_preference or 'auto') != 'streamystats' %} hidden{% endif %}" id="streamystatsHistoryIntentNotice">
-              {% trans trimmed %}Streamystats is selected as your history source. Configure Streamystats below to use its Jellyfin-backed watch history and detail stats in Sortarr.{% endtrans %}
+              {% trans trimmed %}Streamystats is selected for history. Add your Streamystats details below to use Jellyfin-backed watch history and detail stats.{% endtrans %}
             </div>
             <div class="setup-optional-actions" id="historyProviderActions">
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-provider-reveal="tracearr">
+                {{ _('Add Tracearr') }}
+              </button>
               <button class="setup-action-btn setup-action-btn--ghost" type="button" data-provider-reveal="jellystat">
                 {{ _('Add Jellystat') }}
               </button>
@@ -1050,6 +1149,40 @@
               </button>
             </div>
             <div id="historyProviderBlocks">
+              <div class="setup-provider-block" data-history-provider="tracearr">
+                <input type="hidden" name="clear_tracearr_connection" value="{% if values.clear_tracearr_connection %}1{% else %}0{% endif %}" />
+                <div class="setup-block-actions">
+                  <button class="setup-action-btn setup-action-btn--ghost" type="button" data-remove-connection="tracearr">{{ _('Remove connection') }}</button>
+                </div>
+                <div class="setup-section-title">{{ _('Tracearr') }}</div>
+                <label>
+                  {{ _('Tracearr URL') }}
+                  <input name="tracearr_url" placeholder="{{ _('http://192.168.1.120:3002') }}"
+                    value="{{ values.tracearr_url }}" />
+                </label>
+                <label>
+                  {{ _('Tracearr public API key') }}
+                  <input name="tracearr_api_key" type="password" autocomplete="off" spellcheck="false"
+                    placeholder="{{ _('optional') }}" value="" />
+                </label>
+                {% if values.tracearr_api_key_configured %}
+                <div class="setup-hint">{% trans trimmed %}Stored API key will be used for testing if the URL is unchanged and this field is left blank.{% endtrans %}</div>
+                {% endif %}
+                <div class="setup-inline">
+                  <button class="setup-test" type="button" data-kind="tracearr" data-url-id="tracearr_url"
+                    data-key-id="tracearr_api_key" data-inline-key="tracearr" data-slot="tracearr"
+                    data-stored-secret="{% if values.tracearr_api_key_configured %}1{% else %}0{% endif %}">
+                    {{ _('Test connection') }}
+                  </button>
+                  <span class="setup-inline-message{% if field_errors.get('tracearr') %} is-error{% else %} hidden{% endif %}"
+                    data-inline="tracearr">{{ field_errors.get('tracearr', '') }}</span>
+                </div>
+                <details class="setup-inline-details">
+                  <summary>{{ _('Tracearr matching notes') }}</summary>
+                  <div class="setup-hint">{% trans trimmed %}Sortarr uses Tracearr's stock public history API. That route exposes grouped playback history, but not IMDB, TMDB, or TVDB IDs, so matching currently relies on title and year instead of ID-backed parity with Tautulli or Streamystats.{% endtrans %}</div>
+                </details>
+              </div>
+
               <div class="setup-provider-block" data-history-provider="jellystat">
                 <input type="hidden" name="clear_jellystat_connection" value="{% if values.clear_jellystat_connection %}1{% else %}0{% endif %}" />
                 <div class="setup-block-actions">
@@ -1172,53 +1305,51 @@
                 </div>
               </div>
             </div>
-            <div class="setup-hint">
-              {% trans %}You can still add both history providers here. The selected provider stays in focus, and the other one remains available if you explicitly add it.{% endtrans %}
-            </div>
-
           </div>
         </details>
 
         <details class="setup-task-section setup-task-section--optional setup-task-details" id="setupStep3" data-guide-step="3">
           <summary>
             <span class="setup-task-step">{{ _('Step 3') }}</span>
-            <span class="setup-task-title">{{ _('Playback and enrichment providers') }}</span>
+            <span class="setup-task-title">{{ _('Enrichment providers') }}</span>
             <span class="setup-task-status setup-task-status--{{ setup_step_states.step3.state }}" id="setupStep3Status">{{ _(setup_step_states.step3.label) }}</span>
-            <span class="setup-task-config-summary" id="setupStep3Summary">{{ _('No playback providers connected') }}</span>
+            <span class="setup-task-config-summary" id="setupStep3Summary">{{ _('No enrichment providers connected') }}</span>
           </summary>
           <div class="setup-task-details-body">
             <div class="setup-task-summary">
-              {% trans trimmed %}Connect Plex or Jellyfin here when you want playback enrichment, mismatch features, and provider-specific insights, even if a different system is your primary history source.{% endtrans %}
+              {% trans trimmed %}Add Plex, Emby, or Jellyfin here when you want extra enrichment, mismatch tools, and insights, even if history comes from somewhere else.{% endtrans %}
             </div>
-            <div class="setup-category-title">{{ _('Playback and enrichment providers') }}</div>
-            <div class="setup-hint">
-              {% trans trimmed %}Playback and enrichment providers can still be useful when they are not your primary history source. This is where Sortarr learns about Plex- or Jellyfin-specific playback features and insights.{% endtrans %}
+            <div class="setup-task-helper" id="setupStep3Helper">
+              {% trans trimmed %}Choose an enrichment provider to see how Sortarr will use it here.{% endtrans %}
             </div>
+            <div class="setup-category-title">{{ _('Enrichment providers') }}</div>
             <label>
-              {{ _('Preferred playback / enrichment provider') }}
+              {{ _('Preferred enrichment provider') }}
               <select name="insights_provider_preference">
                 <option value="auto" {% if (values.insights_provider_preference or 'auto') == 'auto' %}selected{% endif %}>{{ _('Auto') }}</option>
                 <option value="plex" {% if (values.insights_provider_preference or '') == 'plex' %}selected{% endif %}>{{ _('Plex') }}</option>
+                <option value="emby" {% if (values.insights_provider_preference or '') == 'emby' %}selected{% endif %}>{{ _('Emby') }}</option>
                 <option value="jellyfin" {% if (values.insights_provider_preference or '') == 'jellyfin' %}selected{% endif %}>{{ _('Jellyfin') }}</option>
               </select>
             </label>
-            <div class="setup-hint">
-              {% trans trimmed %}Choose which provider should drive provider-specific insights and enrichment when both Plex and Jellyfin are configured. Auto follows the active history provider first, then falls back to the current media source.{% endtrans %}
-            </div>
-            <div class="setup-hint">
-              {% trans trimmed %}If Step 2 uses Plex as the history source, the same connection from this step will be reused automatically unless Step 1 already owns it as your media source.{% endtrans %}
-            </div>
-            <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or 'arr') != 'plex' %} hidden{% endif %}" id="plexPlaybackReuseNotice">
-              {% trans trimmed %}Plex is already configured in Step 1 as your media source. Sortarr can reuse that Plex connection here for playback enrichment and, if chosen in Step 2, as your history source too.{% endtrans %}
+            <div class="setup-hint setup-hint--accent{% if (setup_provider_state.media.effective or '') != 'plex' %} hidden{% endif %}" id="plexPlaybackReuseNotice">
+              {% trans trimmed %}Plex is already set up in Step 1, so Sortarr can use it here for enrichment too.{% endtrans %}
               <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewPlexPlaybackMediaBtn">{{ _('Review Plex in Step 1') }}</button>
             </div>
-            <div class="setup-hint setup-hint--accent{% if (values.media_source_preference or 'arr') != 'jellyfin' %} hidden{% endif %}" id="jellyfinPlaybackReuseNotice">
-              {% trans trimmed %}Jellyfin is already configured in Step 1 as your media source. Sortarr can reuse that Jellyfin connection here for playback enrichment and provider-specific insights.{% endtrans %}
+            <div class="setup-hint setup-hint--accent{% if (setup_provider_state.media.effective or '') != 'emby' %} hidden{% endif %}" id="embyPlaybackReuseNotice">
+              {% trans trimmed %}Emby is already set up in Step 1, so Sortarr can use it here for enrichment too.{% endtrans %}
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewEmbyPlaybackMediaBtn">{{ _('Review Emby in Step 1') }}</button>
+            </div>
+            <div class="setup-hint setup-hint--accent{% if (setup_provider_state.media.effective or '') != 'jellyfin' %} hidden{% endif %}" id="jellyfinPlaybackReuseNotice">
+              {% trans trimmed %}Jellyfin is already set up in Step 1, so Sortarr can use it here for enrichment too.{% endtrans %}
               <button class="setup-action-btn setup-action-btn--ghost" type="button" id="reviewJellyfinPlaybackMediaBtn">{{ _('Review Jellyfin in Step 1') }}</button>
             </div>
             <div class="setup-optional-actions" id="playbackProviderActions">
               <button class="setup-action-btn setup-action-btn--ghost" type="button" data-playback-provider-reveal="plex">
                 {{ _('Add Plex') }}
+              </button>
+              <button class="setup-action-btn setup-action-btn--ghost" type="button" data-playback-provider-reveal="emby">
+                {{ _('Add Emby') }}
               </button>
               <button class="setup-action-btn setup-action-btn--ghost" type="button" data-playback-provider-reveal="jellyfin">
                 {{ _('Add Jellyfin') }}
@@ -1228,6 +1359,11 @@
               <div id="plexPlaybackProviderMount">
                 {% if (values.media_source_preference or 'arr') != 'plex' %}
                 {{ plex_provider_block|safe }}
+                {% endif %}
+              </div>
+              <div id="embyPlaybackProviderMount">
+                {% if (values.media_source_preference or 'arr') != 'emby' %}
+                {{ emby_provider_block|safe }}
                 {% endif %}
               </div>
               <div id="jellyfinPlaybackProviderMount">
@@ -1248,7 +1384,7 @@
             "connection_failed_check": _("Connection failed. Check URL and API key."),
             "media_sources": _("Media Sources"),
             "playback_history_sources": _("Playback History Sources"),
-            "playback_providers": _("Playback Providers"),
+            "playback_providers": _("Enrichment Providers"),
             "secret_generated": _("Permanent secret key generated. Save settings to persist it."),
             "secret_generate_failed": _("Unable to generate a secret key right now."),
             "secret_required_before_save": _("Generate or enter a permanent Session secret key before saving settings."),
@@ -1257,13 +1393,16 @@
             "csrf_diag_failed": _("Unable to run diagnostics."),
             "guide_step_1": _("Start here: choose what Sortarr should use for media info, then configure that path first."),
             "guide_step_2": _("Next: choose which system should provide watch history, then configure only that provider first."),
-            "guide_step_3": _("Then: connect Plex or Jellyfin for playback enrichment if you want those features available."),
+            "guide_step_3": _("Then: connect Plex, Emby, or Jellyfin for enrichment if you want those features available."),
             "guide_step_4": _("After that: choose authentication, proxy mode, and save a persistent session secret key."),
             "guide_step_5": _("Last: open advanced network and performance settings only if you need overrides.")
           }|tojson }}
         </script>
         <script id="setup-field-errors-json" nonce="{{ csp_nonce }}" type="application/json">
           {{ field_errors|tojson }}
+        </script>
+        <script id="setup-provider-state-json" nonce="{{ csp_nonce }}" type="application/json">
+          {{ setup_provider_state|tojson }}
         </script>
 
         <div class="setup-form-footer">

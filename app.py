@@ -17,6 +17,7 @@ import tempfile
 import threading
 import zlib
 import math
+import ipaddress
 from urllib.parse import quote, urlsplit, urlunsplit
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import wraps
@@ -37,7 +38,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.9"
+APP_VERSION = "0.8.10"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -46,6 +47,15 @@ UNSAFE_RECOVERY_MAX_MINUTES_ENV = "SORTARR_UNSAFE_RECOVERY_MAX_MINUTES"
 UNSAFE_RECOVERY_DEFAULT_MAX_MINUTES = 120
 DEFAULT_UPSTREAM_AUTH_HEADER = "X-Forwarded-User"
 UPSTREAM_AUTH_HEADER_RE = re.compile(r"^[A-Za-z0-9-]+$")
+LOCAL_AUTH_BYPASS_DEFAULT_CIDRS = (
+    "127.0.0.0/8",
+    "::1/128",
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "fe80::/10",
+    "fc00::/7",
+)
 REQUIRED_TAUTULLI_LOOKUP_LIMIT = -1
 REQUIRED_TAUTULLI_LOOKUP_SECONDS = 0
 SAFE_TAUTULLI_REFRESH_BUCKETS = {
@@ -1438,6 +1448,7 @@ def _csrf_diagnostics_payload() -> dict:
                 "cross_host_mismatches": trusted_state.get("cross_host_mismatches", []),
             },
             "auth_method": _auth_method(cfg),
+            "local_auth_bypass": _local_auth_bypass_state(cfg),
             "upstream_auth_header": _upstream_auth_header(cfg),
             "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
         },
@@ -1521,8 +1532,10 @@ def _security_self_check_payload() -> dict:
             "pass": _auth_configuration_ready(cfg),
             "details": {
                 "auth_method": _auth_method(cfg),
+                "local_auth_bypass": _local_auth_bypass_state(cfg),
                 "upstream_auth_header": _upstream_auth_header(cfg),
                 "external_auth_config_issues": _external_auth_config_issues(cfg),
+                "local_auth_bypass_config_issues": _local_auth_bypass_config_issues(cfg),
                 "basic_auth_configured": _basic_auth_configured(cfg),
                 "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
             },
@@ -1595,6 +1608,8 @@ class CacheManager:
             "sonarr": {},
             "radarr": {},
             "tautulli": {"ts": 0, "data": {}},
+            "tracearr": {"ts": 0, "data": {}},
+            "emby": {"ts": 0, "data": {}},
             "jellyfin": {"ts": 0, "data": {}},
             "jellystat": {"ts": 0, "data": {}},
             "plex": {"ts": 0, "data": {}},
@@ -1702,6 +1717,8 @@ class CacheManager:
             self._store["sonarr"].clear()
             self._store["radarr"].clear()
             self._store["tautulli"] = {"ts": 0, "data": {}}
+            self._store["tracearr"] = {"ts": 0, "data": {}}
+            self._store["emby"] = {"ts": 0, "data": {}}
             self._store["jellyfin"] = {"ts": 0, "data": {}}
             self._store["jellystat"] = {"ts": 0, "data": {}}
             self._store["streamystats"] = {"ts": 0, "data": {}}
@@ -1807,6 +1824,20 @@ class CacheManager:
                 "data": data or {},
             }
 
+    def get_tracearr_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["tracearr"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
+    def set_tracearr(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            self._store["tracearr"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
+
     def get_jellystat_state(self) -> tuple[dict | None, int]:
         with self._lock:
             entry = self._store["jellystat"]
@@ -1821,6 +1852,13 @@ class CacheManager:
             ts = self._safe_int(entry.get("ts")) if data else 0
             return data, ts
 
+    def get_emby_state(self) -> tuple[dict | None, int]:
+        with self._lock:
+            entry = self._store["emby"]
+            data = entry.get("data") or None
+            ts = self._safe_int(entry.get("ts")) if data else 0
+            return data, ts
+
     def get_streamystats_state(self) -> tuple[dict | None, int]:
         with self._lock:
             entry = self._store["streamystats"]
@@ -1831,6 +1869,13 @@ class CacheManager:
     def set_jellyfin(self, data: dict | None, ts: float | int) -> None:
         with self._lock:
             self._store["jellyfin"] = {
+                "ts": self._safe_int(ts),
+                "data": data or {},
+            }
+
+    def set_emby(self, data: dict | None, ts: float | int) -> None:
+        with self._lock:
+            self._store["emby"] = {
                 "ts": self._safe_int(ts),
                 "data": data or {},
             }
@@ -1954,6 +1999,7 @@ _upgrade_setup_required = False
 _startup_state = {"migrated": False, "migrating": False, "lints_emitted": False}
 _playback_refresh_state = {
     "tautulli_seen": None,
+    "tracearr_seen": None,
     "jellyfin_seen": None,
     "jellystat_seen": None,
     "streamystats_seen": None,
@@ -2319,10 +2365,14 @@ _SECRET_ENV_KEYS = [
     "RADARR_API_KEY_2",
     "RADARR_API_KEY_3",
     "PLEX_TOKEN",
+    "EMBY_API_KEY",
     "JELLYFIN_API_KEY",
     "JELLYFIN_PASSWORD",
     "TAUTULLI_API_KEY",
+    "TRACEARR_API_KEY",
     "JELLYSTAT_API_KEY",
+    "STREAMYSTATS_API_KEY",
+    "STREAMYSTATS_PASSWORD",
     "BASIC_AUTH_PASS",
     "SORTARR_SECRET_KEY",
 ]
@@ -3923,6 +3973,17 @@ def _write_env_file(path: str, values: dict):
         "PLEX_HISTORY_LAST_VIEWED_AT",
         "PLEX_REFRESH_STALE_SECONDS",
         "PLEX_CACHE_PATH",
+        "EMBY_URL",
+        "EMBY_API_KEY",
+        "EMBY_API_KEY_FILE",
+        "EMBY_API_KEY_CRED_TARGET",
+        "EMBY_USER_ID",
+        "EMBY_LIBRARY_IDS_SONARR",
+        "EMBY_LIBRARY_IDS_RADARR",
+        "EMBY_TIMEOUT_SECONDS",
+        "EMBY_PAGE_SIZE",
+        "EMBY_REFRESH_STALE_SECONDS",
+        "EMBY_CACHE_PATH",
         "JELLYFIN_URL",
         "JELLYFIN_API_KEY",
         "JELLYFIN_API_KEY_FILE",
@@ -3943,6 +4004,13 @@ def _write_env_file(path: str, values: dict):
         "TAUTULLI_API_KEY",
         "TAUTULLI_API_KEY_FILE",
         "TAUTULLI_API_KEY_CRED_TARGET",
+        "TRACEARR_URL",
+        "TRACEARR_API_KEY",
+        "TRACEARR_API_KEY_FILE",
+        "TRACEARR_API_KEY_CRED_TARGET",
+        "TRACEARR_TIMEOUT_SECONDS",
+        "TRACEARR_REFRESH_STALE_SECONDS",
+        "TRACEARR_CACHE_PATH",
         "JELLYSTAT_URL",
         "JELLYSTAT_API_KEY",
         "JELLYSTAT_API_KEY_FILE",
@@ -3953,6 +4021,20 @@ def _write_env_file(path: str, values: dict):
         "JELLYSTAT_STATS_PAGE_SIZE",
         "JELLYSTAT_HISTORY_PAGE_SIZE",
         "JELLYSTAT_REFRESH_STALE_SECONDS",
+        "STREAMYSTATS_URL",
+        "STREAMYSTATS_API_KEY",
+        "STREAMYSTATS_API_KEY_FILE",
+        "STREAMYSTATS_API_KEY_CRED_TARGET",
+        "STREAMYSTATS_SERVER_ID",
+        "STREAMYSTATS_USERNAME",
+        "STREAMYSTATS_PASSWORD",
+        "STREAMYSTATS_PASSWORD_FILE",
+        "STREAMYSTATS_PASSWORD_CRED_TARGET",
+        "STREAMYSTATS_TIMEOUT_SECONDS",
+        "STREAMYSTATS_SEARCH_LIMIT",
+        "STREAMYSTATS_WORKERS",
+        "STREAMYSTATS_REFRESH_STALE_SECONDS",
+        "STREAMYSTATS_CACHE_PATH",
         "TAUTULLI_METADATA_LOOKUP_LIMIT",
         "TAUTULLI_METADATA_LOOKUP_SECONDS",
         "TAUTULLI_TIMEOUT_SECONDS",
@@ -3960,6 +4042,9 @@ def _write_env_file(path: str, values: dict):
         "TAUTULLI_METADATA_WORKERS",
         "TAUTULLI_METADATA_SAVE_EVERY",
         "TAUTULLI_REFRESH_STALE_SECONDS",
+        "MEDIA_SOURCE_PREFERENCE",
+        "HISTORY_SOURCE_PREFERENCE",
+        "INSIGHTS_PROVIDER_PREFERENCE",
         "SONARR_TIMEOUT_SECONDS",
         "RADARR_TIMEOUT_SECONDS",
         "SONARR_EPISODEFILE_WORKERS",
@@ -3972,6 +4057,8 @@ def _write_env_file(path: str, values: dict):
         "ARR_CIRCUIT_FAIL_THRESHOLD",
         "ARR_CIRCUIT_OPEN_SECONDS",
         "SORTARR_AUTH_METHOD",
+        "SORTARR_LOCAL_AUTH_BYPASS",
+        "SORTARR_LOCAL_AUTH_BYPASS_CIDRS",
         "SORTARR_UPSTREAM_AUTH_HEADER",
         "BASIC_AUTH_USER",
         "BASIC_AUTH_PASS",
@@ -4227,12 +4314,16 @@ def _wipe_cache_files() -> None:
         os.environ.get("SONARR_CACHE_PATH", _default_arr_cache_path("sonarr")),
         os.environ.get("RADARR_CACHE_PATH", _default_arr_cache_path("radarr")),
         os.environ.get("TAUTULLI_METADATA_CACHE", _default_tautulli_metadata_cache_path()),
+        os.environ.get("TRACEARR_CACHE_PATH", _default_tracearr_cache_path()),
+        os.environ.get("EMBY_CACHE_PATH", _default_emby_cache_path()),
         os.environ.get("JELLYFIN_CACHE_PATH", _default_jellyfin_cache_path()),
         os.environ.get("JELLYSTAT_CACHE_PATH", _default_jellystat_cache_path()),
         os.environ.get("STREAMYSTATS_CACHE_PATH", _default_streamystats_cache_path()),
         os.environ.get("PLEX_CACHE_PATH", _default_plex_cache_path()),
         _tautulli_refresh_lock_path(),
         _tautulli_refresh_marker_path(),
+        _tracearr_refresh_lock_path(),
+        _tracearr_refresh_marker_path(),
         _jellyfin_refresh_lock_path(),
         _jellyfin_refresh_marker_path(),
         _jellystat_refresh_lock_path(),
@@ -4515,6 +4606,7 @@ def _get_config():
     radarr_path_map_2 = os.environ.get("RADARR_PATH_MAP_2", "")
     radarr_path_map_3 = os.environ.get("RADARR_PATH_MAP_3", "")
     tautulli_timeout_seconds = _read_int_env("TAUTULLI_TIMEOUT_SECONDS", 60)
+    tracearr_timeout_seconds = _read_int_env("TRACEARR_TIMEOUT_SECONDS", 45)
     default_fetch_seconds = 0
     raw_fetch_seconds = os.environ.get("TAUTULLI_FETCH_SECONDS")
     if raw_fetch_seconds is None or raw_fetch_seconds.strip() == "":
@@ -4524,6 +4616,8 @@ def _get_config():
     jellyfin_timeout_seconds = _read_int_env("JELLYFIN_TIMEOUT_SECONDS", 60)
     jellyfin_page_size = _read_int_env("JELLYFIN_PAGE_SIZE", 250)
     jellyfin_history_page_size = _read_int_env("JELLYFIN_HISTORY_PAGE_SIZE", 250)
+    emby_timeout_seconds = _read_int_env("EMBY_TIMEOUT_SECONDS", 60)
+    emby_page_size = _read_int_env("EMBY_PAGE_SIZE", 250)
     jellystat_timeout_seconds = _read_int_env("JELLYSTAT_TIMEOUT_SECONDS", 60)
     jellystat_stats_page_size = _read_int_env("JELLYSTAT_STATS_PAGE_SIZE", 500)
     jellystat_history_page_size = _read_int_env("JELLYSTAT_HISTORY_PAGE_SIZE", 250)
@@ -4592,6 +4686,16 @@ def _get_config():
         "plex_history_last_viewed_at": _read_int_env("PLEX_HISTORY_LAST_VIEWED_AT", 0),
         "plex_cache_path": os.environ.get("PLEX_CACHE_PATH", _default_plex_cache_path()),
         "plex_refresh_stale_seconds": _read_int_env("PLEX_REFRESH_STALE_SECONDS", 3600),
+        "emby_url": _normalize_url(os.environ.get("EMBY_URL", "")),
+        "emby_api_key": _resolve_secret_env("EMBY_API_KEY", ""),
+        "emby_api_key_configured": bool(_resolve_secret_env("EMBY_API_KEY", "")),
+        "emby_user_id": os.environ.get("EMBY_USER_ID", "").strip(),
+        "emby_library_ids_sonarr": os.environ.get("EMBY_LIBRARY_IDS_SONARR", "").strip(),
+        "emby_library_ids_radarr": os.environ.get("EMBY_LIBRARY_IDS_RADARR", "").strip(),
+        "emby_cache_path": os.environ.get("EMBY_CACHE_PATH", _default_emby_cache_path()),
+        "emby_timeout_seconds": emby_timeout_seconds,
+        "emby_page_size": emby_page_size,
+        "emby_refresh_stale_seconds": _read_int_env("EMBY_REFRESH_STALE_SECONDS", 3600),
         "jellyfin_url": _normalize_url(os.environ.get("JELLYFIN_URL", "")),
         "jellyfin_api_key": _resolve_secret_env("JELLYFIN_API_KEY", ""),
         "jellyfin_api_key_configured": bool(_resolve_secret_env("JELLYFIN_API_KEY", "")),
@@ -4618,6 +4722,12 @@ def _get_config():
         "streamystats_search_limit": _read_int_env("STREAMYSTATS_SEARCH_LIMIT", 8),
         "streamystats_workers": max(_read_int_env("STREAMYSTATS_WORKERS", 4), 1),
         "streamystats_refresh_stale_seconds": _read_int_env("STREAMYSTATS_REFRESH_STALE_SECONDS", 3600),
+        "tracearr_url": _normalize_url(os.environ.get("TRACEARR_URL", "")),
+        "tracearr_api_key": _resolve_secret_env("TRACEARR_API_KEY", ""),
+        "tracearr_api_key_configured": bool(_resolve_secret_env("TRACEARR_API_KEY", "")),
+        "tracearr_cache_path": os.environ.get("TRACEARR_CACHE_PATH", _default_tracearr_cache_path()),
+        "tracearr_timeout_seconds": tracearr_timeout_seconds,
+        "tracearr_refresh_stale_seconds": _read_int_env("TRACEARR_REFRESH_STALE_SECONDS", 3600),
         "media_source_preference": _normalize_media_source_preference(
             os.environ.get("MEDIA_SOURCE_PREFERENCE", "arr")
         ),
@@ -4675,6 +4785,10 @@ def _get_config():
         "arr_circuit_open_seconds": _read_int_env("ARR_CIRCUIT_OPEN_SECONDS", 30),
         "cache_seconds": _read_int_env("CACHE_SECONDS", 300),
         "sortarr_auth_method": _normalize_auth_method(os.environ.get("SORTARR_AUTH_METHOD", "basic")),
+        "sortarr_local_auth_bypass": _read_bool_env("SORTARR_LOCAL_AUTH_BYPASS", False),
+        "sortarr_local_auth_bypass_cidrs": str(
+            os.environ.get("SORTARR_LOCAL_AUTH_BYPASS_CIDRS", "") or ""
+        ).strip(),
         "sortarr_upstream_auth_header": str(
             os.environ.get("SORTARR_UPSTREAM_AUTH_HEADER", DEFAULT_UPSTREAM_AUTH_HEADER) or ""
         ).strip()
@@ -4746,7 +4860,7 @@ def _config_complete(cfg: dict) -> bool:
 
 def _normalize_auth_method(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"basic", "external"}:
+    if normalized in {"basic", "basic_local_bypass", "external"}:
         return normalized
     return "basic"
 
@@ -4760,6 +4874,118 @@ def _upstream_auth_header(cfg: dict | None = None) -> str:
     source = cfg if cfg is not None else _get_config()
     raw = str(source.get("sortarr_upstream_auth_header") or "").strip()
     return raw or DEFAULT_UPSTREAM_AUTH_HEADER
+
+
+def _local_auth_bypass_enabled(cfg: dict | None = None) -> bool:
+    source = cfg if cfg is not None else _get_config()
+    return bool(source.get("sortarr_local_auth_bypass"))
+
+
+def _local_auth_bypass_cidrs_raw(cfg: dict | None = None) -> str:
+    source = cfg if cfg is not None else _get_config()
+    return str(source.get("sortarr_local_auth_bypass_cidrs") or "").strip()
+
+
+def _parse_local_auth_bypass_cidrs(
+    raw: str,
+    *,
+    allow_defaults: bool = False,
+) -> tuple[list[str], list[str], list[ipaddress._BaseNetwork], bool]:
+    entries = [str(part or "").strip() for part in re.split(r"[,\n;]+", str(raw or "")) if str(part or "").strip()]
+    used_defaults = False
+    if allow_defaults and not entries:
+        entries = list(LOCAL_AUTH_BYPASS_DEFAULT_CIDRS)
+        used_defaults = True
+    normalized: list[str] = []
+    errors: list[str] = []
+    networks: list[ipaddress._BaseNetwork] = []
+    seen: set[str] = set()
+    for entry in entries:
+        try:
+            network = ipaddress.ip_network(entry, strict=False)
+        except ValueError:
+            errors.append(f"Invalid local auth bypass CIDR: {entry}")
+            continue
+        label = network.with_prefixlen
+        if label in seen:
+            continue
+        seen.add(label)
+        normalized.append(label)
+        networks.append(network)
+    return normalized, errors, networks, used_defaults
+
+
+def _local_auth_bypass_state(cfg: dict | None = None) -> dict:
+    source = cfg if cfg is not None else _get_config()
+    auth_method = _auth_method(source)
+    enabled = _local_auth_bypass_enabled(source)
+    configured_raw = _local_auth_bypass_cidrs_raw(source)
+    proxy_mode = str(source.get("proxy_preset") or "direct").strip().lower() or "direct"
+    normalized, errors, _networks, used_defaults = _parse_local_auth_bypass_cidrs(
+        configured_raw,
+        allow_defaults=auth_method == "basic_local_bypass" and enabled,
+    )
+    return {
+        "auth_method": auth_method,
+        "enabled": enabled,
+        "configured_raw": configured_raw,
+        "normalized": normalized,
+        "count": len(normalized),
+        "errors": errors,
+        "valid": not errors,
+        "used_defaults": used_defaults,
+        "proxy_mode": proxy_mode,
+        "active": auth_method == "basic_local_bypass" and enabled and proxy_mode == "direct" and not errors,
+    }
+
+
+def _local_auth_bypass_config_issues(cfg: dict | None = None) -> list[str]:
+    source = cfg if cfg is not None else _get_config()
+    if _auth_method(source) != "basic_local_bypass":
+        return []
+    state = _local_auth_bypass_state(source)
+    issues: list[str] = []
+    if not state.get("enabled"):
+        issues.append("local_auth_bypass_not_enabled")
+    if str(state.get("proxy_mode") or "direct") != "direct":
+        issues.append("local_auth_bypass_requires_direct_proxy_mode")
+    if not state.get("valid", False):
+        issues.append("local_auth_bypass_invalid_cidrs")
+    return issues
+
+
+def _request_socket_peer_ip() -> str:
+    return str(request.environ.get("REMOTE_ADDR") or "").strip()
+
+
+def _request_local_auth_bypass_match(cfg: dict | None = None) -> dict:
+    source = cfg if cfg is not None else _get_config()
+    state = _local_auth_bypass_state(source)
+    peer_ip = _request_socket_peer_ip()
+    result = {
+        "allowed": False,
+        "peer_ip": peer_ip,
+        "matched_cidr": "",
+        "active": bool(state.get("active")),
+    }
+    if not state.get("active") or not peer_ip:
+        return result
+    try:
+        peer_addr = ipaddress.ip_address(peer_ip)
+    except ValueError:
+        return result
+    _, _, networks, _ = _parse_local_auth_bypass_cidrs(
+        state.get("configured_raw") or "",
+        allow_defaults=bool(state.get("used_defaults")),
+    )
+    for network in networks:
+        if peer_addr.version != network.version:
+            continue
+        if peer_addr in network:
+            result["allowed"] = True
+            result["matched_cidr"] = network.with_prefixlen
+            return result
+    return result
 
 
 def _valid_upstream_auth_header(value: str) -> bool:
@@ -4793,6 +5019,8 @@ def _auth_configuration_ready(cfg: dict | None = None) -> bool:
     source = cfg if cfg is not None else _get_config()
     if _auth_method(source) == "external":
         return not _external_auth_config_issues(source)
+    if _auth_method(source) == "basic_local_bypass":
+        return _basic_auth_configured(source) and not _local_auth_bypass_config_issues(source)
     return _basic_auth_configured(source)
 
 
@@ -4818,6 +5046,10 @@ def _security_setup_reasons(cfg: dict | None = None) -> list[str]:
     reasons: list[str] = []
     if _auth_method(cfg) == "external":
         reasons.extend(_external_auth_config_issues(cfg))
+    elif _auth_method(cfg) == "basic_local_bypass":
+        reasons.extend(_local_auth_bypass_config_issues(cfg))
+        if not _basic_auth_configured(cfg):
+            reasons.append("missing_basic_auth")
     elif not _basic_auth_configured(cfg):
         reasons.append("missing_basic_auth")
     if not _allow_unsafe_ephemeral_recovery() and _require_persistent_secret_key() and _EPHEMERAL_APP_SECRET_KEY:
@@ -4851,9 +5083,11 @@ def _setup_test_slot_secret(cfg: dict, slot: str) -> tuple[str, str, str]:
         "radarr_2": ("radarr", str(cfg.get("radarr_url_2") or "").strip(), str(cfg.get("radarr_api_key_2") or "").strip()),
         "radarr_3": ("radarr", str(cfg.get("radarr_url_3") or "").strip(), str(cfg.get("radarr_api_key_3") or "").strip()),
         "tautulli": ("tautulli", str(cfg.get("tautulli_url") or "").strip(), str(cfg.get("tautulli_api_key") or "").strip()),
+        "tracearr": ("tracearr", str(cfg.get("tracearr_url") or "").strip(), str(cfg.get("tracearr_api_key") or "").strip()),
         "jellystat": ("jellystat", str(cfg.get("jellystat_url") or "").strip(), str(cfg.get("jellystat_api_key") or "").strip()),
         "streamystats": ("streamystats", str(cfg.get("streamystats_url") or "").strip(), str(cfg.get("streamystats_api_key") or "").strip()),
         "jellyfin": ("jellyfin", str(cfg.get("jellyfin_url") or "").strip(), str(cfg.get("jellyfin_api_key") or "").strip()),
+        "emby": ("emby", str(cfg.get("emby_url") or "").strip(), str(cfg.get("emby_api_key") or "").strip()),
         "plex": ("plex", str(cfg.get("plex_url") or "").strip(), str(cfg.get("plex_token") or "").strip()),
     }
     return slot_map.get(normalized_slot, ("", "", ""))
@@ -4884,21 +5118,21 @@ def _resolve_setup_test_secret(
 
 def _normalize_media_source_preference(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "arr", "plex", "jellyfin"}:
+    if normalized in {"auto", "arr", "plex", "jellyfin", "emby"}:
         return normalized
     return "arr"
 
 
 def _normalize_history_source_preference(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "tautulli", "jellystat", "streamystats", "plex"}:
+    if normalized in {"auto", "tautulli", "tracearr", "jellystat", "streamystats", "plex"}:
         return normalized
     return "auto"
 
 
 def _normalize_insights_provider_preference(value: str) -> str:
     normalized = str(value or "").strip().lower()
-    if normalized in {"auto", "plex", "jellyfin"}:
+    if normalized in {"auto", "plex", "jellyfin", "emby"}:
         return normalized
     return "auto"
 
@@ -4907,6 +5141,8 @@ def _configured_media_sources(cfg: dict) -> list[str]:
     sources: list[str] = []
     if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
         sources.append("arr")
+    if cfg.get("emby_url") and cfg.get("emby_api_key"):
+        sources.append("emby")
     if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
         sources.append("jellyfin")
     if cfg.get("plex_url") and cfg.get("plex_token"):
@@ -4918,6 +5154,8 @@ def _configured_history_sources(cfg: dict) -> list[str]:
     available: list[str] = []
     if cfg.get("tautulli_url") and cfg.get("tautulli_api_key"):
         available.append("tautulli")
+    if cfg.get("tracearr_url") and cfg.get("tracearr_api_key"):
+        available.append("tracearr")
     if cfg.get("jellystat_url") and cfg.get("jellystat_api_key"):
         available.append("jellystat")
     if cfg.get("streamystats_url") and cfg.get("streamystats_api_key") and _streamystats_credentials_ready_cfg(cfg):
@@ -4927,31 +5165,195 @@ def _configured_history_sources(cfg: dict) -> list[str]:
     return available
 
 
+def _configured_insights_providers(cfg: dict) -> list[str]:
+    available: list[str] = []
+    if cfg.get("plex_url") and cfg.get("plex_token"):
+        available.append("plex")
+    if cfg.get("emby_url") and cfg.get("emby_api_key"):
+        available.append("emby")
+    if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
+        available.append("jellyfin")
+    return available
+
+
+def _selected_media_source(cfg: dict) -> str:
+    return _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+
+
+def _selected_history_source(cfg: dict) -> str:
+    return _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
+
+
+def _selected_insights_provider(cfg: dict) -> str:
+    return _normalize_insights_provider_preference(cfg.get("insights_provider_preference", "auto"))
+
+
+def _provider_state_payload(cfg: dict) -> dict[str, dict[str, object]]:
+    media_selected = _selected_media_source(cfg)
+    media_available = _configured_media_sources(cfg)
+    media_effective = _effective_media_source(cfg)
+    media_reason = ""
+    if media_selected == "auto":
+        if media_effective:
+            media_reason = "auto selected, using first available provider"
+        else:
+            media_reason = "no media providers are configured"
+    elif not media_effective:
+        media_reason = "selected provider is not configured"
+
+    history_selected = _selected_history_source(cfg)
+    history_available = _configured_history_sources(cfg)
+    history_effective = _history_provider(cfg)
+    history_reason = ""
+    if history_selected == "auto":
+        if history_effective == "plex" and _effective_media_source(cfg) == "plex":
+            history_reason = "auto selected, reusing Plex from media source"
+        elif history_effective:
+            history_reason = "auto selected, using first available provider"
+        else:
+            history_reason = "no history providers are configured"
+    elif not history_effective:
+        history_reason = "selected provider is not configured"
+    elif history_selected == "plex" and _effective_media_source(cfg) == "plex":
+        history_reason = "reusing Plex from media source"
+
+    insights_selected = _selected_insights_provider(cfg)
+    insights_available = _configured_insights_providers(cfg)
+    insights_effective = _playback_insights_provider(cfg)
+    insights_reason = ""
+    if insights_selected == "auto":
+        if insights_effective:
+            if insights_effective == history_effective and insights_effective in {"plex", "emby", "jellyfin"}:
+                insights_reason = "auto selected, following history source"
+            elif insights_effective == media_effective and insights_effective in {"plex", "emby", "jellyfin"}:
+                insights_reason = "auto selected, following media source"
+            else:
+                insights_reason = "auto selected, using first available provider"
+        else:
+            insights_reason = "no enrichment providers are configured"
+    elif not insights_effective:
+        insights_reason = "selected provider is not configured"
+
+    return {
+        "media": {
+            "selected": media_selected,
+            "available": media_available,
+            "effective": media_effective,
+            "reason": media_reason,
+        },
+        "history": {
+            "selected": history_selected,
+            "available": history_available,
+            "effective": history_effective,
+            "reason": history_reason,
+        },
+        "enrichment": {
+            "selected": insights_selected,
+            "available": insights_available,
+            "effective": insights_effective,
+            "reason": insights_reason,
+        },
+    }
+
+
+def _provider_state_label(value: str) -> str:
+    key = str(value or "").strip().lower()
+    if key == "arr":
+        return "Sonarr/Radarr"
+    if key == "plex":
+        return "Plex"
+    if key == "emby":
+        return "Emby"
+    if key == "jellyfin":
+        return "Jellyfin"
+    if key == "tautulli":
+        return "Tautulli"
+    if key == "tracearr":
+        return "Tracearr"
+    if key == "jellystat":
+        return "Jellystat"
+    if key == "streamystats":
+        return "Streamystats"
+    if key == "auto":
+        return "Auto"
+    if not key:
+        return "none"
+    return key
+
+
+def _provider_role_label(role: str) -> str:
+    key = str(role or "").strip().lower()
+    if key == "media":
+        return "media"
+    if key == "history":
+        return "history"
+    return "enrichment"
+
+
+def _setup_provider_selection_warnings(cfg: dict) -> list[str]:
+    warnings: list[str] = []
+    provider_state = _provider_state_payload(cfg)
+    for role_key in ("media", "history", "enrichment"):
+        state = provider_state.get(role_key) or {}
+        selected = str(state.get("selected") or "").strip().lower()
+        effective = str(state.get("effective") or "").strip().lower()
+        if not selected or selected == "auto" or selected == effective:
+            continue
+        role_label = _provider_role_label(role_key)
+        selected_label = _provider_state_label(selected)
+        effective_label = _provider_state_label(effective)
+        if not effective:
+            warnings.append(
+                f"{selected_label} is selected for {role_label}, but it is not configured yet, so {role_label} is currently unavailable."
+            )
+        else:
+            warnings.append(
+                f"{selected_label} is selected for {role_label}, but {effective_label} is currently active."
+            )
+    return warnings
+
+
+def _setup_provider_selection_notice(cfg: dict) -> str:
+    return ""
+
+
 def _playback_provider(cfg: dict) -> str:
     available = _configured_history_sources(cfg)
     if not available:
         return ""
     preferred = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
-    if preferred != "auto" and preferred in available:
-        return preferred
+    if preferred != "auto":
+        return preferred if preferred in available else ""
     return available[0]
+
+
+def _history_provider(cfg: dict) -> str:
+    return _playback_provider(cfg)
 
 
 def _effective_media_source(cfg: dict) -> str:
     preferred = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
-    if preferred == "jellyfin" and cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
-        return "jellyfin"
-    if preferred == "plex" and cfg.get("plex_url") and cfg.get("plex_token"):
-        return "plex"
+    if preferred == "arr":
+        return "arr" if (cfg.get("sonarr_instances") or cfg.get("radarr_instances")) else ""
+    if preferred == "emby":
+        return "emby" if (cfg.get("emby_url") and cfg.get("emby_api_key")) else ""
+    if preferred == "jellyfin":
+        return "jellyfin" if (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")) else ""
+    if preferred == "plex":
+        return "plex" if (cfg.get("plex_url") and cfg.get("plex_token")) else ""
     if preferred == "auto":
         if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
             return "arr"
+        if cfg.get("emby_url") and cfg.get("emby_api_key"):
+            return "emby"
         if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
             return "jellyfin"
         if cfg.get("plex_url") and cfg.get("plex_token"):
             return "plex"
     if cfg.get("sonarr_instances") or cfg.get("radarr_instances"):
         return "arr"
+    if cfg.get("emby_url") and cfg.get("emby_api_key"):
+        return "emby"
     if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
         return "jellyfin"
     if cfg.get("plex_url") and cfg.get("plex_token"):
@@ -4964,10 +5366,12 @@ def _provider_option_set(cfg: dict) -> dict:
     history_available = _configured_history_sources(cfg)
     media_selected = _effective_media_source(cfg)
     history_selected = _playback_provider(cfg)
+    insights_selected = _playback_insights_provider(cfg)
     has_arr = "arr" in media_available
+    has_emby = "emby" in media_available
     has_plex = "plex" in media_available
     has_jellyfin = "jellyfin" in media_available or "jellyfin" in history_available
-    supports_tables = has_arr or media_selected in {"plex", "jellyfin"}
+    supports_tables = has_arr or media_selected in {"plex", "jellyfin", "emby"}
     return {
         "configured": {
             "media_sources": media_available,
@@ -4977,35 +5381,55 @@ def _provider_option_set(cfg: dict) -> dict:
             "media_source": media_selected,
             "history_source": history_selected,
         },
+        "effective": {
+            "media_source": media_selected,
+            "history_source": history_selected,
+            "insights_provider": insights_selected,
+        },
         "capabilities": {
             "arr_tables": supports_tables,
             "arr_file_history": has_arr,
+            # Playback overlays follow the active history/playback provider only.
+            # Direct media providers such as Emby/Jellyfin can still expose
+            # provider-specific insights without enabling row-level playback columns.
             "playback_overlay": bool(history_selected),
             "plex_insights": has_plex,
             "plex_live_events": has_plex,
-            "provider_insights": has_plex or has_jellyfin,
+            "provider_insights": has_plex or has_jellyfin or has_emby,
             "provider_live_events": has_plex,
+            "emby_media": has_emby,
         },
     }
 
 
 def _playback_insights_provider(cfg: dict) -> str:
     preferred = _normalize_insights_provider_preference(cfg.get("insights_provider_preference", "auto"))
-    if preferred == "plex" and cfg.get("plex_url") and cfg.get("plex_token"):
-        return "plex"
-    if preferred == "jellyfin" and cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
-        return "jellyfin"
+    if preferred == "plex":
+        return "plex" if (cfg.get("plex_url") and cfg.get("plex_token")) else ""
+    if preferred == "emby":
+        return "emby" if (cfg.get("emby_url") and cfg.get("emby_api_key")) else ""
+    if preferred == "jellyfin":
+        return "jellyfin" if (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key")) else ""
     provider = _playback_provider(cfg)
-    if provider in {"plex", "jellyfin"}:
+    if provider in {"plex", "jellyfin", "emby"}:
         return provider
     media_source = _effective_media_source(cfg)
-    if media_source in {"plex", "jellyfin"}:
+    if media_source in {"plex", "jellyfin", "emby"}:
         return media_source
     if cfg.get("plex_url") and cfg.get("plex_token"):
         return "plex"
+    if cfg.get("emby_url") and cfg.get("emby_api_key"):
+        return "emby"
     if cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"):
         return "jellyfin"
     return ""
+
+
+def _playback_overlay_provider(cfg: dict) -> str:
+    provider = _playback_insights_provider(cfg)
+    if provider:
+        return provider
+    return _playback_provider(cfg)
 
 
 def _emit_startup_config_lints(cfg: dict) -> None:
@@ -5086,9 +5510,9 @@ def _emit_startup_config_lints(cfg: dict) -> None:
 
     auth_method = _auth_method(cfg)
     raw_auth_method = str(os.environ.get("SORTARR_AUTH_METHOD") or "").strip()
-    if raw_auth_method and raw_auth_method.lower() not in {"basic", "external"}:
+    if raw_auth_method and raw_auth_method.lower() not in {"basic", "basic_local_bypass", "external"}:
         logger.warning(
-            "Invalid SORTARR_AUTH_METHOD=%r. Valid values: basic|external.",
+            "Invalid SORTARR_AUTH_METHOD=%r. Valid values: basic|basic_local_bypass|external.",
             os.environ.get("SORTARR_AUTH_METHOD"),
         )
     if auth_method == "external":
@@ -5097,6 +5521,21 @@ def _emit_startup_config_lints(cfg: dict) -> None:
             logger.warning(
                 "External authentication is enabled but not fully configured: %s.",
                 ", ".join(external_issues),
+            )
+    elif auth_method == "basic_local_bypass":
+        local_bypass_state = _local_auth_bypass_state(cfg)
+        local_bypass_issues = _local_auth_bypass_config_issues(cfg)
+        if local_bypass_issues:
+            logger.warning(
+                "Basic local auth bypass is enabled but not fully configured: %s.",
+                ", ".join(local_bypass_issues),
+            )
+        elif local_bypass_state.get("active"):
+            bypass_scope = "built-in private CIDRs" if local_bypass_state.get("used_defaults") else "custom CIDRs"
+            logger.warning(
+                "Basic local auth bypass is enabled for direct peer addresses using %s (%s range(s)).",
+                bypass_scope,
+                local_bypass_state.get("count", 0),
             )
 
     mode = _normalize_proxy_mode(os.environ.get("SORTARR_PROXY_MODE", ""))
@@ -5167,12 +5606,16 @@ def _emit_startup_config_lints(cfg: dict) -> None:
 
 
 def _playback_label(provider: str) -> str:
+    if provider == "emby":
+        return "Emby"
     if provider == "jellyfin":
         return "Jellyfin"
     if provider == "jellystat":
         return "Jellystat"
     if provider == "streamystats":
         return "Streamystats"
+    if provider == "tracearr":
+        return "Tracearr"
     if provider == "tautulli":
         return "Tautulli"
     if provider == "plex":
@@ -5185,9 +5628,13 @@ def _playback_enabled(cfg: dict) -> bool:
 
 
 def _get_playback_index_state(cfg: dict) -> tuple[str, dict | None, int]:
-    provider = _playback_provider(cfg)
-    if provider == "jellyfin":
+    provider = _history_provider(cfg)
+    if provider == "emby":
+        data, ts = _cache.get_emby_state()
+    elif provider == "jellyfin":
         data, ts = _cache.get_jellyfin_state()
+    elif provider == "tracearr":
+        data, ts = _cache.get_tracearr_state()
     elif provider == "jellystat":
         data, ts = _cache.get_jellystat_state()
     elif provider == "streamystats":
@@ -5202,9 +5649,13 @@ def _get_playback_index_state(cfg: dict) -> tuple[str, dict | None, int]:
 
 
 def _playback_refresh_in_progress(cfg: dict, provider: str | None = None) -> bool:
-    provider = provider or _playback_provider(cfg)
+    provider = provider or _history_provider(cfg)
+    if provider == "emby":
+        return _emby_refresh_in_progress(cfg)
     if provider == "jellyfin":
         return _jellyfin_refresh_in_progress(cfg)
+    if provider == "tracearr":
+        return _tracearr_refresh_in_progress(cfg)
     if provider == "tautulli":
         return _tautulli_refresh_in_progress(cfg)
     if provider == "jellystat":
@@ -5371,6 +5822,48 @@ def _collect_cached_counts(app_name: str) -> tuple[dict, int]:
     return counts, latest_ts
 
 
+def _normalized_match_counts(summary_counts: dict | None) -> dict:
+    counts = {
+        "total": 0,
+        "matched": 0,
+        "unmatched": 0,
+        "skipped": 0,
+        "unavailable": 0,
+        "pending": 0,
+    }
+    if not isinstance(summary_counts, dict):
+        return counts
+    for key in counts:
+        counts[key] = _safe_int(summary_counts.get(key))
+    return counts
+
+
+def _collect_effective_status_counts(app_name: str, cfg: dict) -> tuple[dict, int]:
+    counts, latest_ts = _collect_cached_counts(app_name)
+    if _safe_int(counts.get("total")) > 0:
+        return counts, latest_ts
+    if not _media_fallback_provider(cfg, app_name):
+        return counts, latest_ts
+
+    existing_summary, existing_ts = _collect_cached_existing_match_health(app_name)
+    existing_counts = _normalized_match_counts(
+        existing_summary.get("counts") if isinstance(existing_summary, dict) else {}
+    )
+    if _safe_int(existing_counts.get("total")) > 0:
+        return existing_counts, max(latest_ts, existing_ts)
+
+    rows, rows_ts = _collect_rows_for_match_health(app_name, cfg)
+    if rows:
+        row_summary = _summarize_existing_match_health(rows)
+        row_counts = _normalized_match_counts(
+            row_summary.get("counts") if isinstance(row_summary, dict) else {}
+        )
+        if _safe_int(row_counts.get("total")) > 0:
+            return row_counts, max(latest_ts, existing_ts, rows_ts)
+
+    return counts, max(latest_ts, existing_ts, rows_ts)
+
+
 def _merge_count_item_lists(*lists: list[dict]) -> list[dict]:
     counts: dict[str, int] = {}
     for items in lists:
@@ -5428,6 +5921,15 @@ def _collect_cached_existing_match_health(app_name: str) -> tuple[dict, int]:
 
 def _fallback_media_cache_info(app_name: str, cfg: dict) -> dict:
     provider = _media_fallback_provider(cfg, app_name)
+    if provider == "emby":
+        memory_data, memory_ts = _cache.get_emby_state()
+        disk_info = _cache_file_info(cfg.get("emby_cache_path"))
+        return {
+            "provider": provider,
+            "memory_ts": _safe_int(memory_ts) if memory_data else 0,
+            "disk_ts": _safe_int(disk_info.get("ts")),
+            "disk_age_seconds": disk_info.get("age_seconds"),
+        }
     if provider == "jellyfin":
         memory_data, memory_ts = _cache.get_jellyfin_state()
         disk_info = _cache_file_info(cfg.get("jellyfin_cache_path"))
@@ -5556,6 +6058,11 @@ def _summarize_match_health(
     media_type: str,
     provider_label: str,
 ) -> dict:
+    unmatched_reason = (
+        f"No {provider_label} match for title/year"
+        if str(provider_label or "").strip().lower() == "tracearr"
+        else f"No {provider_label} match for IDs or title"
+    )
     counts = {
         "total": len(rows),
         "matched": 0,
@@ -5596,7 +6103,7 @@ def _summarize_match_health(
                         reason = f"Matched by {provider_label}"
                 else:
                     status = "unmatched"
-                    reason = f"No {provider_label} match for IDs or title"
+                    reason = unmatched_reason
         if status in counts:
             counts[status] += 1
         if reason:
@@ -5802,6 +6309,35 @@ def _request_auth_context(cfg: dict | None = None, *, allow_setup_repair: bool =
             "status_code": 503,
             "message": "Basic auth misconfigured: username is required.",
         }
+
+    if method == "basic_local_bypass":
+        local_bypass_issues = _local_auth_bypass_config_issues(source)
+        if local_bypass_issues:
+            if allow_setup_repair or endpoint in {"index", "api_config", "api_setup_secret_key"} or not _config_complete(source):
+                return {
+                    **default_context,
+                    "authorized": True,
+                    "failure_reason": "basic_local_bypass_repair_allowed",
+                    "status_code": 200,
+                    "message": "",
+                }
+            return {
+                **default_context,
+                "failure_reason": "invalid_local_auth_bypass",
+                "status_code": 503,
+                "message": "Basic local auth bypass is enabled but not fully configured.",
+            }
+        bypass_match = _request_local_auth_bypass_match(source)
+        if bypass_match.get("allowed"):
+            return {
+                **default_context,
+                "authorized": True,
+                "auth_source": "basic_local_bypass",
+                "identity": str(bypass_match.get("peer_ip") or ""),
+                "failure_reason": "",
+                "status_code": 200,
+                "message": "",
+            }
 
     auth = request.authorization
     if (
@@ -6397,6 +6933,65 @@ def _tautulli_test_connection(base_url: str, api_key: str, timeout: int = 10) ->
     return None
 
 
+def _tracearr_request(
+    base_url: str,
+    api_key: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    service_url = _validated_service_base_url(base_url, "Tracearr")
+    route = path if str(path or "").startswith("/") else f"/{path}"
+    url = f"{service_url.rstrip('/')}{route}"
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 10
+    headers = {
+        "Authorization": f"Bearer {str(api_key or '').strip()}",
+        "Accept": "application/json",
+    }
+    http = session or _http
+    response = http.get(url, headers=headers, params=params, timeout=request_timeout)
+    response.raise_for_status()
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise RuntimeError("Tracearr response was not JSON") from exc
+
+
+def _tracearr_get(
+    base_url: str,
+    api_key: str,
+    path: str,
+    *,
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    return _tracearr_request(
+        base_url,
+        api_key,
+        path,
+        params=params,
+        timeout=timeout,
+        session=session,
+    )
+
+
+def _tracearr_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str | None:
+    try:
+        _tracearr_get(base_url, api_key, "/api/v1/public/health", timeout=timeout)
+        return None
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"Connection failed (HTTP {status})."
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Tracearr connection test failed (%s).", type(exc).__name__)
+        return _sanitize_connection_test_failure(_safe_exception_message(exc), "API key")
+
+
 def _plex_test_connection(base_url: str, token: str, client_id: str, timeout: int = 10) -> str | None:
     try:
         payload = _plex_request(base_url, token, client_id, "/", timeout=timeout)
@@ -6708,6 +7303,8 @@ def _build_strict_title_year_id_map(
 
 
 TAUTULLI_METADATA_CACHE_VERSION = 1
+TRACEARR_CACHE_VERSION = 1
+EMBY_CACHE_VERSION = 1
 JELLYFIN_CACHE_VERSION = 1
 JELLYSTAT_CACHE_VERSION = 1
 STREAMYSTATS_CACHE_VERSION = 1
@@ -6720,9 +7317,19 @@ def _default_tautulli_metadata_cache_path() -> str:
     return os.path.join(base_dir, "Sortarr.tautulli_cache.json")
 
 
+def _default_tracearr_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.tracearr_cache.json")
+
+
 def _default_jellystat_cache_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH)
     return os.path.join(base_dir, "Sortarr.jellystat_cache.json")
+
+
+def _default_emby_cache_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH)
+    return os.path.join(base_dir, "Sortarr.emby_cache.json")
 
 
 def _default_jellyfin_cache_path() -> str:
@@ -6802,6 +7409,46 @@ def _save_tautulli_metadata_cache(path: str, cache: dict[str, dict]) -> None:
         logger.warning("Failed to write Tautulli metadata cache (path redacted).")
 
 
+def _load_tracearr_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, TRACEARR_CACHE_VERSION):
+        return None
+
+    if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
+        index = _restore_index_keys(payload.get("index"))
+        ts = _safe_int(payload.get("ts"))
+        return {"index": index, "ts": ts}
+    if isinstance(payload, dict):
+        return {"index": _restore_index_keys(payload), "ts": 0}
+    return None
+
+
+def _save_tracearr_cache(path: str, index: dict, ts: float | int) -> None:
+    if not path:
+        return
+    payload = {
+        "version": TRACEARR_CACHE_VERSION,
+        "ts": _safe_int(ts),
+        "index": _stringify_index_keys(index),
+    }
+    try:
+        cache_dir = os.path.dirname(path) or os.getcwd()
+        os.makedirs(cache_dir, exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.warning("Failed to write Tracearr cache (path redacted).")
+
+
 def _load_jellystat_cache(path: str) -> dict | None:
     if not path or not os.path.exists(path):
         return None
@@ -6871,6 +7518,44 @@ def _load_jellyfin_cache(path: str) -> dict | None:
     if isinstance(payload, dict):
         return {"index": _restore_index_keys(payload), "ts": 0}
     return None
+
+
+def _load_emby_cache(path: str) -> dict | None:
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if isinstance(payload, dict) and payload.get("version") not in (None, EMBY_CACHE_VERSION):
+        return None
+
+    if isinstance(payload, dict) and isinstance(payload.get("index"), dict):
+        return {"index": _restore_index_keys(payload.get("index")), "ts": _safe_int(payload.get("ts"))}
+
+    if isinstance(payload, dict):
+        return {"index": _restore_index_keys(payload), "ts": 0}
+    return None
+
+
+def _save_emby_cache(path: str, index: dict, ts: float | int) -> None:
+    if not path:
+        return
+    payload = {
+        "version": EMBY_CACHE_VERSION,
+        "ts": _safe_int(ts),
+        "index": _stringify_index_keys(index),
+    }
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = f"{path}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
+    except OSError:
+        logger.warning("Failed to write Emby cache (path redacted).")
 
 
 def _save_jellyfin_cache(path: str, index: dict, ts: float | int) -> None:
@@ -7568,6 +8253,292 @@ def _streamystats_test_connection(
             return "Connection failed. URL must use http:// or https://."
         logger.warning("Streamystats connection test failed (%s).", type(exc).__name__)
         return _sanitize_connection_test_failure(_safe_exception_message(exc), "credentials")
+
+
+def _emby_request(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str = "",
+    params: dict | None = None,
+    payload: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+    method: str = "GET",
+    headers: dict | None = None,
+):
+    base_url = _validated_service_base_url(base_url, "Emby")
+    route = path if path.startswith("/") else f"/{path}"
+    url = f"{base_url.rstrip('/')}{route}"
+    request_timeout = timeout if isinstance(timeout, (int, float)) and timeout > 0 else 45
+    http = session or _http
+    request_params = dict(params or {})
+    request_headers = {"Accept": "application/json"}
+    if headers:
+        request_headers.update(headers)
+    if not api_key:
+        raise RuntimeError("Emby API key is not set")
+    request_params["api_key"] = api_key
+    request_headers.setdefault("X-Emby-Token", api_key)
+    r = http.request(
+        method,
+        url,
+        params=request_params,
+        json=payload if method.upper() != "GET" else None,
+        headers=request_headers,
+        timeout=request_timeout,
+    )
+    r.raise_for_status()
+    try:
+        return r.json()
+    except ValueError as exc:
+        raise RuntimeError("Emby response was not JSON") from exc
+
+
+def _emby_get(
+    base_url: str,
+    path: str,
+    *,
+    api_key: str = "",
+    params: dict | None = None,
+    timeout: int | float | None = None,
+    session: requests.Session | None = None,
+):
+    return _emby_request(
+        base_url,
+        path,
+        api_key=api_key,
+        params=params,
+        timeout=timeout,
+        session=session,
+        method="GET",
+    )
+
+
+def _emby_test_connection(base_url: str, api_key: str, timeout: int = 10) -> str | None:
+    try:
+        _emby_get(base_url, "/Users", api_key=api_key, timeout=timeout)
+        return None
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "error"
+        return f"Connection failed (HTTP {status})."
+    except (RuntimeError, requests.RequestException, ValueError) as exc:
+        if "must use http:// or https://" in str(exc):
+            return "Connection failed. URL must use http:// or https://."
+        logger.warning("Emby connection test failed (%s).", type(exc).__name__)
+        return _sanitize_connection_test_failure(_safe_exception_message(exc), "API key")
+
+
+def _emby_resolve_user_id(cfg: dict, timeout: int | float | None = None) -> str:
+    configured = str(cfg.get("emby_user_id") or "").strip()
+    if configured:
+        return configured
+    base_url = str(cfg.get("emby_url") or "").strip()
+    api_key = str(cfg.get("emby_api_key") or "").strip()
+    if not (base_url and api_key):
+        return ""
+    users = _emby_get(base_url, "/Users", api_key=api_key, timeout=timeout)
+    if not isinstance(users, list):
+        return ""
+    if len(users) == 1 and isinstance(users[0], dict):
+        return str(users[0].get("Id") or "").strip()
+    for user in users:
+        if isinstance(user, dict) and not bool(user.get("Policy", {}).get("IsDisabled")):
+            user_id = str(user.get("Id") or "").strip()
+            if user_id:
+                return user_id
+    return ""
+
+
+def _emby_fetch_libraries(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    data = _emby_get(
+        base_url,
+        f"/Users/{user_id}/Views",
+        api_key=api_key,
+        params={"IncludeExternalContent": "false"},
+        timeout=timeout,
+    )
+    items = data.get("Items") if isinstance(data, dict) else []
+    return items if isinstance(items, list) else []
+
+
+def _emby_fetch_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    *,
+    parent_id: str = "",
+    include_item_types: list[str] | None = None,
+    fields: list[str] | None = None,
+    page_size: int = 250,
+    recursive: bool = True,
+    timeout: int | float | None = None,
+) -> list[dict]:
+    items: list[dict] = []
+    start_index = 0
+    size = max(1, _safe_int(page_size))
+    while True:
+        params = {
+            "StartIndex": start_index,
+            "Limit": size,
+            "Recursive": "true" if recursive else "false",
+            "EnableUserData": "true",
+        }
+        if parent_id:
+            params["ParentId"] = parent_id
+        if include_item_types:
+            params["IncludeItemTypes"] = ",".join(include_item_types)
+        if fields:
+            params["Fields"] = ",".join(fields)
+        data = _emby_get(
+            base_url,
+            f"/Users/{user_id}/Items",
+            api_key=api_key,
+            params=params,
+            timeout=timeout,
+        )
+        if not isinstance(data, dict):
+            break
+        chunk = data.get("Items") or []
+        if not isinstance(chunk, list) or not chunk:
+            break
+        items.extend(chunk)
+        total = _safe_int(data.get("TotalRecordCount"))
+        start_index += len(chunk)
+        if total <= 0 or start_index >= total:
+            break
+    return items
+
+
+def _emby_fetch_sessions(base_url: str, api_key: str, timeout: int | float | None = None) -> list[dict]:
+    payload = _emby_get(
+        base_url,
+        "/Sessions",
+        api_key=api_key,
+        timeout=timeout,
+    )
+    return payload if isinstance(payload, list) else []
+
+
+def _emby_fetch_playback_info(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    item_id: str,
+    timeout: int | float | None = None,
+) -> dict:
+    item_key = str(item_id or "").strip()
+    if not item_key:
+        return {}
+    payload = _emby_request(
+        base_url,
+        f"/Items/{item_key}/PlaybackInfo",
+        api_key=api_key,
+        params={"UserId": user_id},
+        payload={},
+        timeout=timeout,
+        method="POST",
+    )
+    return payload if isinstance(payload, dict) else {}
+
+
+def _emby_item_needs_playback_info(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    streams = item.get("MediaStreams") if isinstance(item.get("MediaStreams"), list) else []
+    if streams:
+        return False
+    runtime_ticks = _safe_int(item.get("RunTimeTicks") or item.get("CumulativeRunTimeTicks"))
+    if runtime_ticks > 0:
+        return False
+    media_sources = item.get("MediaSources") if isinstance(item.get("MediaSources"), list) else []
+    for source in media_sources:
+        if not isinstance(source, dict):
+            continue
+        if _safe_int(source.get("Size")) > 0:
+            return False
+        media_streams = source.get("MediaStreams") if isinstance(source.get("MediaStreams"), list) else []
+        if media_streams:
+            return False
+    return True
+
+
+def _emby_merge_playback_info_item(item: dict, playback_info: dict) -> dict:
+    merged = dict(item) if isinstance(item, dict) else {}
+    info = playback_info if isinstance(playback_info, dict) else {}
+    media_sources = info.get("MediaSources") if isinstance(info.get("MediaSources"), list) else []
+    if media_sources:
+        merged["MediaSources"] = media_sources
+        if not (isinstance(merged.get("MediaStreams"), list) and merged.get("MediaStreams")):
+            primary_source = next((source for source in media_sources if isinstance(source, dict)), {})
+            streams = primary_source.get("MediaStreams") if isinstance(primary_source.get("MediaStreams"), list) else []
+            if streams:
+                merged["MediaStreams"] = streams
+            if not _safe_int(merged.get("RunTimeTicks")):
+                runtime_ticks = _safe_int(primary_source.get("RunTimeTicks"))
+                if runtime_ticks > 0:
+                    merged["RunTimeTicks"] = runtime_ticks
+            if not _safe_int(merged.get("CumulativeRunTimeTicks")):
+                runtime_ticks = _safe_int(primary_source.get("RunTimeTicks"))
+                if runtime_ticks > 0:
+                    merged["CumulativeRunTimeTicks"] = runtime_ticks
+            if not str(merged.get("Path") or "").strip():
+                merged["Path"] = str(primary_source.get("Path") or "").strip()
+    elif isinstance(info.get("MediaStreams"), list) and info.get("MediaStreams"):
+        merged["MediaStreams"] = info.get("MediaStreams")
+    if not _safe_int(merged.get("RunTimeTicks")):
+        runtime_ticks = _safe_int(info.get("RunTimeTicks"))
+        if runtime_ticks > 0:
+            merged["RunTimeTicks"] = runtime_ticks
+    return merged
+
+
+def _emby_backfill_playback_info_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    items: list[dict],
+    timeout: int | float | None = None,
+    max_workers: int = 8,
+) -> list[dict]:
+    prepared = [dict(item) if isinstance(item, dict) else item for item in (items or [])]
+    work: list[tuple[int, str]] = []
+    for idx, item in enumerate(prepared):
+        if not isinstance(item, dict):
+            continue
+        item_id = str(item.get("Id") or "").strip()
+        if item_id and _emby_item_needs_playback_info(item):
+            work.append((idx, item_id))
+    if not work:
+        return prepared
+
+    workers = max(1, min(_safe_int(max_workers) or 8, 12, len(work)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(
+                _emby_fetch_playback_info,
+                base_url,
+                api_key,
+                user_id,
+                item_id,
+                timeout,
+            ): idx
+            for idx, item_id in work
+        }
+        for future in as_completed(futures):
+            idx = futures[future]
+            try:
+                playback_info = future.result()
+            except Exception as exc:
+                logger.warning("Emby PlaybackInfo backfill failed (%s).", type(exc).__name__)
+                continue
+            prepared[idx] = _emby_merge_playback_info_item(prepared[idx], playback_info)
+    return prepared
 
 
 def _jellyfin_auth_header(
@@ -8335,6 +9306,33 @@ def _jellyfin_item_year(item: dict) -> str:
     return ""
 
 
+def _path_year_hint(path_value: str) -> str:
+    path_text = str(path_value or "").strip()
+    if not path_text:
+        return ""
+    parts = [part for part in re.split(r"[\\/]+", path_text) if part]
+    for part in reversed(parts[-3:]):
+        match = re.search(r"\((19|20)\d{2}\)", part)
+        if match:
+            return match.group(0).strip("()")
+    return ""
+
+
+def _emby_item_year(item: dict) -> str:
+    year = str(item.get("ProductionYear") or "").strip()
+    if year and year.isdigit():
+        return year
+    for date_value in (
+        item.get("PremiereDate"),
+        item.get("EndDate"),
+        item.get("LastPlayedDate"),
+    ):
+        date_text = str(date_value or "").strip()
+        if len(date_text) >= 4 and date_text[:4].isdigit():
+            return date_text[:4]
+    return _path_year_hint(item.get("Path") or "")
+
+
 def _jellyfin_ticks_to_seconds(value) -> int:
     ticks = _safe_int(value)
     if ticks <= 0:
@@ -8378,7 +9376,7 @@ def _jellyfin_raw_stats_from_item(item: dict) -> dict:
     }
 
 
-def _jellyfin_build_index(items: list[dict], media_type: str) -> dict:
+def _jellyfin_build_index(items: list[dict], media_type: str, item_year_resolver=None) -> dict:
     index = {
         "tvdb": {},
         "tmdb": {},
@@ -8390,6 +9388,7 @@ def _jellyfin_build_index(items: list[dict], media_type: str) -> dict:
         "title_year_variant": {},
         "title_variant": {},
     }
+    year_resolver = item_year_resolver or _jellyfin_item_year
     title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
     for item in items or []:
         item_type = str(item.get("Type") or "").strip().lower()
@@ -8406,21 +9405,22 @@ def _jellyfin_build_index(items: list[dict], media_type: str) -> dict:
         if ids.get("imdb"):
             _tautulli_merge_raw(index["imdb"].setdefault(str(ids["imdb"]), {}), raw)
         title = str(item.get("Name") or "").strip()
-        year = _jellyfin_item_year(item)
+        year = year_resolver(item)
         seen = set()
         _merge_title_keys_cached(index, raw, title, year, title_key_cache, seen)
     return index
 
 
-def _jellyfin_build_id_map(items: list[dict], media_type: str) -> dict[str, dict]:
+def _jellyfin_build_id_map(items: list[dict], media_type: str, item_year_resolver=None) -> dict[str, dict]:
     id_map: dict[str, dict] = {}
+    year_resolver = item_year_resolver or _jellyfin_item_year
     for item in items or []:
         item_id = str(item.get("Id") or "").strip()
         if not item_id:
             continue
         id_map[item_id] = {
             "title": str(item.get("Name") or "").strip(),
-            "year": _jellyfin_item_year(item),
+            "year": year_resolver(item),
             "media_type": media_type,
         }
     return id_map
@@ -8524,9 +9524,16 @@ def _jellyfin_media_summary_from_item(item: dict) -> dict:
     }
 
 
-def _jellyfin_build_media_index(series_items: list[dict], episode_items: list[dict], movie_items: list[dict]) -> dict:
-    shows_index = _jellyfin_build_index(series_items, "show")
-    movies_index = _jellyfin_build_index(movie_items, "movie")
+def _jellyfin_build_media_index(
+    series_items: list[dict],
+    episode_items: list[dict],
+    movie_items: list[dict],
+    *,
+    item_year_resolver=None,
+) -> dict:
+    year_resolver = item_year_resolver or _jellyfin_item_year
+    shows_index = _jellyfin_build_index(series_items, "show", item_year_resolver=year_resolver)
+    movies_index = _jellyfin_build_index(movie_items, "movie", item_year_resolver=year_resolver)
     episodes_by_series: dict[str, list[dict]] = {}
     for item in episode_items or []:
         series_id = str(item.get("SeriesId") or "").strip()
@@ -8540,8 +9547,8 @@ def _jellyfin_build_media_index(series_items: list[dict], episode_items: list[di
         "shows": shows_index,
         "movies": movies_index,
         "meta": {
-            "show_id_map": _jellyfin_build_id_map(series_items, "show"),
-            "movie_id_map": _jellyfin_build_id_map(movie_items, "movie"),
+            "show_id_map": _jellyfin_build_id_map(series_items, "show", item_year_resolver=year_resolver),
+            "movie_id_map": _jellyfin_build_id_map(movie_items, "movie", item_year_resolver=year_resolver),
         },
     }
 
@@ -9540,9 +10547,17 @@ def _plex_rows_from_index(app_name: str, index: dict) -> list[dict]:
 
 
 def _get_playback_index(cfg: dict, provider: str, force: bool = False) -> tuple[dict | None, int]:
+    if provider == "emby":
+        data = _get_emby_index(cfg, force=force, include_history=False)
+        _, ts = _cache.get_emby_state()
+        return data, _safe_int(ts)
     if provider == "jellyfin":
         data = _get_jellyfin_index(cfg, force=force)
         _, ts = _cache.get_jellyfin_state()
+        return data, _safe_int(ts)
+    if provider == "tracearr":
+        data = _get_tracearr_index(cfg, force=force)
+        _, ts = _cache.get_tracearr_state()
         return data, _safe_int(ts)
     if provider == "streamystats":
         data = _get_streamystats_index(cfg, force=force)
@@ -9573,6 +10588,16 @@ def _is_plex_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
     return _effective_media_source(cfg) == "plex"
 
 
+def _is_emby_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
+    if app_name not in ("sonarr", "radarr"):
+        return False
+    if cfg.get(f"{app_name}_instances"):
+        return False
+    if not (cfg.get("emby_url") and cfg.get("emby_api_key")):
+        return False
+    return _effective_media_source(cfg) == "emby"
+
+
 def _is_jellyfin_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
     if app_name not in ("sonarr", "radarr"):
         return False
@@ -9584,6 +10609,8 @@ def _is_jellyfin_media_fallback_enabled(cfg: dict, app_name: str) -> bool:
 
 
 def _media_fallback_provider(cfg: dict, app_name: str) -> str:
+    if _is_emby_media_fallback_enabled(cfg, app_name):
+        return "emby"
     if _is_jellyfin_media_fallback_enabled(cfg, app_name):
         return "jellyfin"
     if _is_plex_media_fallback_enabled(cfg, app_name):
@@ -9593,6 +10620,8 @@ def _media_fallback_provider(cfg: dict, app_name: str) -> str:
 
 def _get_media_fallback_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
     provider = _media_fallback_provider(cfg, app_name)
+    if provider == "emby":
+        return _get_emby_media_rows(app_name, cfg, force=force)
     if provider == "jellyfin":
         return _get_jellyfin_media_rows(app_name, cfg, force=force)
     if provider == "plex":
@@ -9602,6 +10631,9 @@ def _get_media_fallback_rows(app_name: str, cfg: dict, force: bool = False) -> t
 
 def _start_media_fallback_refresh(cfg: dict, app_name: str) -> tuple[bool, str, bool]:
     provider = _media_fallback_provider(cfg, app_name)
+    if provider == "emby":
+        started = _start_emby_background_refresh(cfg)
+        return bool(started), provider, _emby_refresh_in_progress(cfg)
     if provider == "jellyfin":
         started = _start_jellyfin_background_refresh(cfg)
         return bool(started), provider, _jellyfin_refresh_in_progress(cfg)
@@ -9609,6 +10641,56 @@ def _start_media_fallback_refresh(cfg: dict, app_name: str) -> tuple[bool, str, 
         started = _start_plex_background_refresh(cfg)
         return bool(started), provider, _plex_refresh_in_progress(cfg)
     return False, "", False
+
+
+def _get_emby_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
+    cached_index = _get_emby_index_cached()
+    had_cached_index = bool(cached_index)
+    if not had_cached_index:
+        disk_cache = _load_emby_cache(cfg.get("emby_cache_path") or "")
+        had_cached_index = bool(disk_cache and isinstance(disk_cache.get("index"), dict))
+    warning = ""
+    notice = ""
+    media_type = "shows" if app_name == "sonarr" else "movies"
+    provider = _history_provider(cfg)
+    provider_label = _playback_label(provider)
+    index = _get_emby_index(cfg, force=force, include_history=False)
+    if not index:
+        return [], "Emby media data is unavailable.", "", not had_cached_index
+    rows = _emby_rows_from_index(app_name, index)
+    cold_cache = not had_cached_index
+
+    if provider:
+        playback_index = index if provider == "emby" else None
+        try:
+            if playback_index is None:
+                playback_index, _ = _get_playback_index(cfg, provider, force=force)
+        except Exception as exc:
+            warning = _append_warning(warning, f"{provider_label} data unavailable.")
+            logger.warning("Configured playback index fetch failed (%s).", type(exc).__name__)
+            playback_index = None
+        _apply_tautulli_stats(rows, playback_index or {}, media_type, provider_label=provider_label)
+        refresh_needed = force or not playback_index
+        started = False
+        if refresh_needed:
+            if provider == "emby":
+                started = _start_emby_background_refresh(cfg)
+            elif provider == "jellyfin":
+                started = _start_jellyfin_background_refresh(cfg)
+            elif provider == "tracearr":
+                started = _start_tracearr_background_refresh(cfg)
+            elif provider == "tautulli":
+                started = _start_tautulli_background_refresh(cfg)
+            elif provider == "jellystat":
+                started = _start_jellystat_background_refresh(cfg)
+            elif provider == "streamystats":
+                started = _start_streamystats_background_refresh(cfg)
+            elif provider == "plex":
+                started = _start_plex_background_refresh(cfg)
+        if started or _playback_refresh_in_progress(cfg, provider):
+            notice = f"{provider_label} matching in progress."
+
+    return rows, warning, notice, cold_cache
 
 
 def _get_jellyfin_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
@@ -9643,6 +10725,8 @@ def _get_jellyfin_media_rows(app_name: str, cfg: dict, force: bool = False) -> t
         if refresh_needed:
             if provider == "jellyfin":
                 started = _start_jellyfin_background_refresh(cfg)
+            elif provider == "tracearr":
+                started = _start_tracearr_background_refresh(cfg)
             elif provider == "tautulli":
                 started = _start_tautulli_background_refresh(cfg)
             elif provider == "jellystat":
@@ -9687,7 +10771,9 @@ def _get_plex_media_rows(app_name: str, cfg: dict, force: bool = False) -> tuple
         refresh_needed = force or not playback_index
         started = False
         if refresh_needed:
-            if provider == "tautulli":
+            if provider == "tracearr":
+                started = _start_tracearr_background_refresh(cfg)
+            elif provider == "tautulli":
                 started = _start_tautulli_background_refresh(cfg)
             elif provider == "jellystat":
                 started = _start_jellystat_background_refresh(cfg)
@@ -10329,6 +11415,12 @@ def _provider_index_ready(cfg: dict, provider: str) -> tuple[dict | None, int, b
     if name == "tautulli":
         data, ts = _cache.get_tautulli_state()
         return data, ts, bool(data) or _start_tautulli_background_refresh(cfg)
+    if name == "emby":
+        data, ts = _cache.get_emby_state()
+        return data, ts, bool(data) or _start_emby_background_refresh(cfg)
+    if name == "tracearr":
+        data, ts = _cache.get_tracearr_state()
+        return data, ts, bool(data) or _start_tracearr_background_refresh(cfg)
     if name == "jellyfin":
         data, ts = _cache.get_jellyfin_state()
         return data, ts, bool(data) or _start_jellyfin_background_refresh(cfg)
@@ -10903,6 +11995,8 @@ def _jellyfin_rows_from_index(app_name: str, index: dict) -> list[dict]:
     media_index = index.get(media_type) if isinstance(index, dict) else {}
     if not isinstance(media_index, dict):
         return []
+    meta = index.get("meta") if isinstance(index, dict) else {}
+    source_provider = str(meta.get("provider") or "jellyfin").strip().lower() if isinstance(meta, dict) else "jellyfin"
     rows: list[dict] = []
     instance_id = f"jellyfin-{app_name}"
     if app_name == "sonarr":
@@ -10917,7 +12011,7 @@ def _jellyfin_rows_from_index(app_name: str, index: dict) -> list[dict]:
             if not title:
                 continue
             ids = _jellyfin_provider_ids(item)
-            year = _jellyfin_item_year(item)
+            year = _emby_item_year(item) if source_provider == "emby" else _jellyfin_item_year(item)
             episodes = episodes_by_series.get(str(item.get("Id") or "").strip(), [])
             episode_summaries = [_jellyfin_media_summary_from_item(ep) for ep in episodes if isinstance(ep, dict)]
             total_bytes = sum(_safe_int(summary.get("fileBytes")) for summary in episode_summaries)
@@ -11018,7 +12112,7 @@ def _jellyfin_rows_from_index(app_name: str, index: dict) -> list[dict]:
             if not title:
                 continue
             ids = _jellyfin_provider_ids(item)
-            year = _jellyfin_item_year(item)
+            year = _emby_item_year(item) if source_provider == "emby" else _jellyfin_item_year(item)
             summary = _jellyfin_media_summary_from_item(item)
             file_size_gb = _bytes_to_gib(_safe_int(summary.get("fileBytes"))) if _safe_int(summary.get("fileBytes")) > 0 else 0
             runtime_mins = round(_safe_int(summary.get("durationSeconds")) / 60.0, 2) if _safe_int(summary.get("durationSeconds")) > 0 else 0
@@ -11094,6 +12188,72 @@ def _jellyfin_rows_from_index(app_name: str, index: dict) -> list[dict]:
             rows.append(row)
     rows.sort(key=lambda row: (str(row.get("Title") or "").lower(), str(row.get("Year") or "")))
     return rows
+
+
+def _emby_rows_from_index(app_name: str, index: dict) -> list[dict]:
+    rows = _jellyfin_rows_from_index(app_name, index)
+    instance_id = f"emby-{app_name}"
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        row["InstanceId"] = instance_id
+        row["InstanceName"] = "Emby"
+        item_id = str(row.pop("JellyfinItemId", "") or "").strip()
+        if item_id:
+            row["EmbyItemId"] = item_id
+    return rows
+
+
+def _emby_series_item_id_for_row(cfg: dict, series_id: int | str, provider_item_id: str = "") -> str:
+    direct = str(provider_item_id or "").strip()
+    if direct:
+        return direct
+    index = _get_emby_index(cfg, force=False, include_history=False) or {}
+    rows = _emby_rows_from_index("sonarr", index)
+    wanted = str(series_id or "").strip()
+    for row in rows:
+        if str(row.get("SeriesId") or "").strip() == wanted:
+            return str(row.get("EmbyItemId") or "").strip()
+    return ""
+
+
+def _emby_stream_image(base_url: str, api_key: str, item_id: str, image_type: str = "Primary", max_width: int = 320):
+    base_url = _validated_service_base_url(base_url, "Emby")
+    item_id = str(item_id or "").strip()
+    if not item_id:
+        return jsonify({"error": "invalid id"}), 400
+    url = f"{base_url.rstrip('/')}/Items/{quote(item_id)}/Images/{quote(str(image_type or 'Primary'))}"
+    params = {"api_key": api_key}
+    if max_width > 0:
+        params["maxWidth"] = max_width
+    try:
+        upstream = requests.get(url, params=params, stream=True, timeout=30)  # nosec
+    except Exception as exc:
+        logging.warning("Emby asset proxy upstream error: %s", exc)
+        return jsonify({"error": "upstream fetch failed"}), 502
+    if upstream.status_code != 200:
+        try:
+            upstream.close()
+        except Exception:
+            logger.debug("Emby asset upstream close failed after non-200 response.")
+        if upstream.status_code == 404:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({"error": "upstream fetch failed"}), 502
+    content_type = upstream.headers.get("Content-Type") or "application/octet-stream"
+    content_length = upstream.headers.get("Content-Length")
+    headers_out = {"Content-Type": content_type, "Cache-Control": "private, max-age=3600"}
+    if content_length:
+        headers_out["Content-Length"] = content_length
+
+    def generate():
+        try:
+            for chunk in upstream.iter_content(8192):
+                if chunk:
+                    yield chunk
+        finally:
+            upstream.close()
+
+    return Response(generate(), headers=headers_out)
 
 
 def _plex_series_item_id_for_row(cfg: dict, series_id: int | str, provider_item_id: str = "") -> str:
@@ -11418,6 +12578,298 @@ def _streamystats_empty_media_index() -> dict:
         "title_year_variant": {},
         "title_variant": {},
     }
+
+
+def _tracearr_empty_media_index() -> dict:
+    return _streamystats_empty_media_index()
+
+
+def _tracearr_empty_index() -> dict:
+    return {
+        "shows": _tracearr_empty_media_index(),
+        "movies": _tracearr_empty_media_index(),
+        "meta": {"provider": "tracearr", "server": {}, "stats": {}},
+    }
+
+
+def _tracearr_raw_from_row(row: dict) -> dict:
+    user_ids = row.get("userIds")
+    if not isinstance(user_ids, list):
+        user_ids = row.get("user_ids")
+    if not isinstance(user_ids, list):
+        nested_user = row.get("user")
+        if isinstance(nested_user, dict):
+            nested_user_id = nested_user.get("id") or nested_user.get("userId") or nested_user.get("user_id")
+            user_ids = [nested_user_id] if str(nested_user_id or "").strip() else []
+    if not isinstance(user_ids, list):
+        single_user_id = row.get("userId") or row.get("user_id")
+        user_ids = [single_user_id] if str(single_user_id or "").strip() else []
+    if not isinstance(user_ids, list):
+        user_ids = []
+    normalized_user_ids = sorted({
+        str(item or "").strip()
+        for item in user_ids
+        if str(item or "").strip()
+    })
+    users_watched = _safe_int(row.get("usersWatched") or row.get("users_watched"))
+    if users_watched <= 0 and normalized_user_ids:
+        users_watched = len(normalized_user_ids)
+    play_count = _safe_int(row.get("playCount") or row.get("play_count"))
+    if play_count <= 0:
+        play_count = _safe_int(row.get("segmentCount") or row.get("segment_count"))
+    if play_count <= 0:
+        play_count = 1
+    return {
+        "play_count": play_count,
+        "users_watched": users_watched,
+        "user_ids": normalized_user_ids,
+        "last_epoch": (
+            _normalize_epoch(row.get("lastEpoch") or row.get("last_epoch"))
+            or _parse_iso_epoch(row.get("startedAt") or row.get("started_at"))
+        ),
+        "total_seconds": (
+            _safe_int(row.get("totalSeconds") or row.get("total_seconds"))
+            or int(round((_safe_float(row.get("durationMs") or row.get("duration_ms")) or 0) / 1000.0))
+            or int(round((_safe_float(row.get("progressMs") or row.get("progress_ms")) or 0) / 1000.0))
+        ),
+        "duration_seconds": 0,
+        "total_seconds_source": "tracearr_total",
+        "tracearr_meta": {
+            "server_id": str(row.get("serverId") or row.get("server_id") or "").strip(),
+            "rating_key": str(row.get("ratingKey") or row.get("rating_key") or "").strip(),
+            "year": str(row.get("year") or "").strip(),
+        },
+    }
+
+
+def _tracearr_raw_stats_from_library_item(item: dict) -> dict:
+    return {
+        "play_count": 0,
+        "users_watched": 0,
+        "user_ids": [],
+        "last_epoch": 0,
+        "total_seconds": 0,
+        "duration_seconds": 0,
+        "total_seconds_source": "",
+        "tracearr_meta": {
+            "server_id": str(item.get("serverId") or item.get("server_id") or "").strip(),
+            "rating_key": str(item.get("ratingKey") or item.get("rating_key") or "").strip(),
+            "year": str(item.get("year") or "").strip(),
+        },
+    }
+
+
+def _tracearr_build_library_index(items: list[dict]) -> dict:
+    index = _tracearr_empty_index()
+    episode_agg = _tracearr_empty_media_index()
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    stats = {
+        "items_total": 0,
+        "shows_total": 0,
+        "movies_total": 0,
+        "shows_with_ids": 0,
+        "movies_with_ids": 0,
+    }
+    server_ids: set[str] = set()
+
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        item_type = str(item.get("mediaType") or item.get("media_type") or "").strip().lower()
+        if item_type not in {"movie", "show", "episode"}:
+            continue
+        stats["items_total"] += 1
+        server_id = str(item.get("serverId") or item.get("server_id") or "").strip()
+        if server_id:
+            server_ids.add(server_id)
+        ids_present = any(
+            str(item.get(key) or "").strip()
+            for key in ("tvdbId", "tvdb_id", "tmdbId", "tmdb_id", "imdbId", "imdb_id")
+        )
+        raw = _tracearr_raw_stats_from_library_item(item)
+
+        if item_type == "episode":
+            stats["shows_total"] += 1
+            if ids_present:
+                stats["shows_with_ids"] += 1
+            title_candidates = _tautulli_title_candidates(
+                item.get("grandparentTitle") or item.get("grandparent_title") or item.get("title")
+            )
+            year = str(item.get("year") or "").strip()
+            tvdb_id = str(item.get("tvdbId") or item.get("tvdb_id") or "").strip()
+            tmdb_id = str(item.get("tmdbId") or item.get("tmdb_id") or "").strip()
+            imdb_id = str(item.get("imdbId") or item.get("imdb_id") or "").strip()
+            if tvdb_id:
+                _tautulli_merge_into(episode_agg["tvdb"], tvdb_id, raw)
+            if tmdb_id:
+                _tautulli_merge_into(episode_agg["tmdb"], tmdb_id, raw)
+            if imdb_id:
+                _tautulli_merge_into(episode_agg["imdb"], imdb_id, raw)
+            seen = set()
+            for title in title_candidates:
+                _merge_title_keys_cached(episode_agg, raw, title, year, title_key_cache, seen)
+            continue
+
+        media_type = "shows" if item_type == "show" else "movies"
+        if media_type == "shows":
+            stats["shows_total"] += 1
+            if ids_present:
+                stats["shows_with_ids"] += 1
+        else:
+            stats["movies_total"] += 1
+            if ids_present:
+                stats["movies_with_ids"] += 1
+        target = index.get(media_type)
+        if not isinstance(target, dict):
+            continue
+        tvdb_id = str(item.get("tvdbId") or item.get("tvdb_id") or "").strip()
+        tmdb_id = str(item.get("tmdbId") or item.get("tmdb_id") or "").strip()
+        imdb_id = str(item.get("imdbId") or item.get("imdb_id") or "").strip()
+        if media_type == "shows" and tvdb_id:
+            _tautulli_merge_into(target["tvdb"], tvdb_id, raw)
+        if tmdb_id:
+            _tautulli_merge_into(target["tmdb"], tmdb_id, raw)
+        if imdb_id:
+            _tautulli_merge_into(target["imdb"], imdb_id, raw)
+        title_candidates = _tautulli_title_candidates(
+            item.get("title"),
+            item.get("grandparentTitle") or item.get("grandparent_title"),
+        )
+        year = str(item.get("year") or "").strip()
+        seen = set()
+        for title in title_candidates:
+            _merge_title_keys_cached(target, raw, title, year, title_key_cache, seen)
+
+    for bucket in [
+        "tvdb",
+        "tmdb",
+        "imdb",
+        "title_year",
+        "title",
+        "title_year_relaxed",
+        "title_relaxed",
+        "title_year_variant",
+        "title_variant",
+    ]:
+        for key, raw in episode_agg[bucket].items():
+            if key not in index["shows"][bucket]:
+                index["shows"][bucket][key] = raw
+
+    index["meta"] = {
+        "provider": "tracearr",
+        "server": {"ids": sorted(server_ids)},
+        "stats": stats,
+    }
+    return index
+
+
+def _tracearr_add_row_match(index: dict, row: dict) -> None:
+    source_media_type = str(row.get("mediaType") or row.get("media_type") or "").strip().lower()
+    if source_media_type not in {"show", "episode", "movie"}:
+        return
+    media_type = "shows" if source_media_type in {"show", "episode"} else "movies"
+    target = index.get(media_type)
+    if not isinstance(target, dict):
+        return
+    raw = _tracearr_raw_from_row(row)
+    if source_media_type == "episode":
+        tvdb_id = str(row.get("showTvdbId") or row.get("show_tvdb_id") or row.get("tvdbId") or row.get("tvdb_id") or "").strip()
+        tmdb_id = str(row.get("showTmdbId") or row.get("show_tmdb_id") or row.get("tmdbId") or row.get("tmdb_id") or "").strip()
+        imdb_id = str(row.get("showImdbId") or row.get("show_imdb_id") or row.get("imdbId") or row.get("imdb_id") or "").strip()
+    else:
+        tvdb_id = str(row.get("tvdbId") or row.get("tvdb_id") or "").strip()
+        tmdb_id = str(row.get("tmdbId") or row.get("tmdb_id") or "").strip()
+        imdb_id = str(row.get("imdbId") or row.get("imdb_id") or "").strip()
+    if media_type == "shows" and tvdb_id:
+        _tautulli_merge_into(target["tvdb"], tvdb_id, raw)
+    if tmdb_id:
+        _tautulli_merge_into(target["tmdb"], tmdb_id, raw)
+    if imdb_id:
+        _tautulli_merge_into(target["imdb"], imdb_id, raw)
+    if media_type == "shows":
+        title = str(
+            row.get("showTitle")
+            or row.get("show_title")
+            or row.get("grandparentTitle")
+            or row.get("grandparent_title")
+            or row.get("title")
+            or row.get("mediaTitle")
+            or row.get("media_title")
+            or ""
+        ).strip()
+    else:
+        title = str(
+            row.get("title")
+            or row.get("mediaTitle")
+            or row.get("media_title")
+            or ""
+        ).strip()
+    if not title:
+        return
+    year = str(row.get("year") or "").strip()
+    seen = set()
+    title_key_cache: dict[str, tuple[str, str, list[str]]] = {}
+    for candidate in _tautulli_title_candidates(title):
+        _merge_title_keys_cached(target, raw, candidate, year, title_key_cache, seen)
+
+
+def _tracearr_build_history_index(rows: list[dict]) -> dict:
+    index = _tracearr_empty_index()
+    stats = {
+        "rows_total": 0,
+        "shows_total": 0,
+        "movies_total": 0,
+        "shows_with_ids": 0,
+        "movies_with_ids": 0,
+    }
+    server_ids: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        stats["rows_total"] += 1
+        media_type = str(row.get("mediaType") or row.get("media_type") or "").strip().lower()
+        if media_type in {"show", "episode"}:
+            stats["shows_total"] += 1
+        else:
+            stats["movies_total"] += 1
+        if media_type == "episode":
+            ids_present = any(
+                str(row.get(key) or "").strip()
+                for key in (
+                    "showTvdbId",
+                    "show_tvdb_id",
+                    "showTmdbId",
+                    "show_tmdb_id",
+                    "showImdbId",
+                    "show_imdb_id",
+                    "tvdbId",
+                    "tvdb_id",
+                    "tmdbId",
+                    "tmdb_id",
+                    "imdbId",
+                    "imdb_id",
+                )
+            )
+        else:
+            ids_present = any(
+                str(row.get(key) or "").strip()
+                for key in ("tvdbId", "tvdb_id", "tmdbId", "tmdb_id", "imdbId", "imdb_id")
+            )
+        if ids_present:
+            if media_type in {"show", "episode"}:
+                stats["shows_with_ids"] += 1
+            else:
+                stats["movies_with_ids"] += 1
+        server_id = str(row.get("serverId") or row.get("server_id") or "").strip()
+        if server_id:
+            server_ids.add(server_id)
+        _tracearr_add_row_match(index, row)
+    index["meta"] = {
+        "provider": "tracearr",
+        "server": {"ids": sorted(server_ids)},
+        "stats": stats,
+    }
+    return index
 
 
 def _streamystats_empty_index() -> dict:
@@ -12482,6 +13934,15 @@ def _get_jellyfin_index_cached() -> dict | None:
     return data
 
 
+def _get_emby_index_state() -> tuple[dict | None, int]:
+    return _cache.get_emby_state()
+
+
+def _get_emby_index_cached() -> dict | None:
+    data, _ = _cache.get_emby_state()
+    return data
+
+
 def _get_streamystats_index_state() -> tuple[dict | None, int]:
     return _cache.get_streamystats_state()
 
@@ -12489,6 +13950,215 @@ def _get_streamystats_index_state() -> tuple[dict | None, int]:
 def _get_streamystats_index_cached() -> dict | None:
     data, _ = _cache.get_streamystats_state()
     return data
+
+
+def _get_tracearr_index_cached() -> dict | None:
+    data, _ = _cache.get_tracearr_state()
+    return data
+
+
+def _tracearr_capabilities_from_meta(meta: dict | None) -> dict:
+    if not isinstance(meta, dict):
+        meta = {}
+    capabilities = meta.get("capabilities") if isinstance(meta.get("capabilities"), dict) else {}
+    stats = meta.get("stats") if isinstance(meta.get("stats"), dict) else {}
+
+    library_items_endpoint = capabilities.get("library_items_endpoint")
+    if library_items_endpoint is None:
+        library_items_endpoint = bool(_safe_int(stats.get("library_items_endpoint_available")))
+
+    stable_ids_in_library = capabilities.get("stable_ids_in_library")
+    if stable_ids_in_library is None:
+        stable_ids_in_library = bool(
+            _safe_int(stats.get("shows_with_ids")) or _safe_int(stats.get("movies_with_ids"))
+        )
+
+    stable_ids_in_history = capabilities.get("stable_ids_in_history")
+    if stable_ids_in_history is None:
+        stable_ids_in_history = bool(
+            _safe_int(stats.get("history_shows_with_ids")) or _safe_int(stats.get("history_movies_with_ids"))
+        )
+
+    matching_mode = str(capabilities.get("matching_mode") or "").strip().lower()
+    if matching_mode not in {"stable_ids", "title_year"}:
+        matching_mode = "stable_ids" if (stable_ids_in_library or stable_ids_in_history) else "title_year"
+
+    return {
+        "library_items_endpoint": bool(library_items_endpoint),
+        "stable_ids_in_library": bool(stable_ids_in_library),
+        "stable_ids_in_history": bool(stable_ids_in_history),
+        "matching_mode": matching_mode,
+    }
+
+
+def _tracearr_extract_rows_page(payload: dict | None) -> tuple[list[dict], int]:
+    if not isinstance(payload, dict):
+        return [], 0
+    rows = payload.get("data")
+    if not isinstance(rows, list):
+        rows = payload.get("rows")
+    if not isinstance(rows, list):
+        rows = []
+    meta = payload.get("meta")
+    total_pages = 0
+    if isinstance(meta, dict):
+        total_pages = _safe_int(
+            meta.get("totalPages") or meta.get("total_pages") or meta.get("pages") or meta.get("pageCount")
+        )
+    if total_pages <= 0 and rows:
+        total = _safe_int(meta.get("total")) if isinstance(meta, dict) else 0
+        page_size = _safe_int(meta.get("pageSize") or meta.get("page_size")) if isinstance(meta, dict) else 0
+        page_size = page_size or len(rows)
+        if total > 0 and page_size > 0:
+            total_pages = max(1, int(math.ceil(float(total) / float(page_size))))
+    return [row for row in rows if isinstance(row, dict)], total_pages
+
+
+def _tracearr_fetch_public_history_rows(cfg: dict) -> list[dict]:
+    base_url = str(cfg.get("tracearr_url") or "").strip()
+    api_key = str(cfg.get("tracearr_api_key") or "").strip()
+    request_timeout = _safe_int(cfg.get("tracearr_timeout_seconds")) or 45
+    page_size = 100
+    all_rows: list[dict] = []
+    total_pages = 1
+    page = 1
+    while page <= total_pages:
+        payload = _tracearr_get(
+            base_url,
+            api_key,
+            "/api/v1/public/history",
+            params={"page": page, "pageSize": page_size},
+            timeout=request_timeout,
+        )
+        rows, payload_total_pages = _tracearr_extract_rows_page(payload if isinstance(payload, dict) else None)
+        if page == 1 and payload_total_pages > 0:
+            total_pages = payload_total_pages
+        all_rows.extend(rows)
+        if not rows:
+            break
+        if payload_total_pages > total_pages:
+            total_pages = payload_total_pages
+        if payload_total_pages <= 0 and len(rows) < page_size:
+            break
+        page += 1
+    return all_rows
+
+
+def _tracearr_fetch_public_library_items(cfg: dict) -> list[dict]:
+    base_url = str(cfg.get("tracearr_url") or "").strip()
+    api_key = str(cfg.get("tracearr_api_key") or "").strip()
+    request_timeout = _safe_int(cfg.get("tracearr_timeout_seconds")) or 45
+    page_size = 100
+    all_rows: list[dict] = []
+    total_pages = 1
+    page = 1
+    while page <= total_pages:
+        payload = _tracearr_get(
+            base_url,
+            api_key,
+            "/api/v1/public/library/items",
+            params={"page": page, "pageSize": page_size},
+            timeout=request_timeout,
+        )
+        rows, payload_total_pages = _tracearr_extract_rows_page(payload if isinstance(payload, dict) else None)
+        if page == 1 and payload_total_pages > 0:
+            total_pages = payload_total_pages
+        all_rows.extend(rows)
+        if not rows:
+            break
+        if payload_total_pages > total_pages:
+            total_pages = payload_total_pages
+        if payload_total_pages <= 0 and len(rows) < page_size:
+            break
+        page += 1
+    return all_rows
+
+
+def _get_tracearr_index(
+    cfg: dict,
+    force: bool = False,
+    include_history: bool = True,
+) -> dict | None:
+    del include_history
+    if not (cfg.get("tracearr_url") and cfg.get("tracearr_api_key")):
+        return None
+
+    cached_data, _ = _cache.get_tracearr_state()
+    if not force and cached_data:
+        return cached_data
+
+    cache_path = cfg.get("tracearr_cache_path") or ""
+    disk_cache = None if force else _load_tracearr_cache(cache_path)
+    if not force and disk_cache and disk_cache.get("index"):
+        index = disk_cache.get("index")
+        ts = _safe_int(disk_cache.get("ts")) or time.time()
+        _cache.set_tracearr(index, ts)
+        return index
+
+    library_items_endpoint_available = True
+    try:
+        library_items = _tracearr_fetch_public_library_items(cfg)
+    except Exception:
+        library_items_endpoint_available = False
+        library_items = []
+    history_rows = _tracearr_fetch_public_history_rows(cfg)
+    index = _tracearr_build_library_index(library_items)
+    history_index = _tracearr_build_history_index(history_rows)
+    for bucket in [
+        "tvdb",
+        "tmdb",
+        "imdb",
+        "title_year",
+        "title",
+        "title_year_relaxed",
+        "title_relaxed",
+        "title_year_variant",
+        "title_variant",
+    ]:
+        for key, raw in history_index.get("shows", {}).get(bucket, {}).items():
+            if key in index["shows"][bucket]:
+                _tautulli_apply_history(index["shows"][bucket][key], raw)
+            else:
+                index["shows"][bucket][key] = raw
+        for key, raw in history_index.get("movies", {}).get(bucket, {}).items():
+            if key in index["movies"][bucket]:
+                _tautulli_apply_history(index["movies"][bucket][key], raw)
+            else:
+                index["movies"][bucket][key] = raw
+    index_meta = index.get("meta") if isinstance(index.get("meta"), dict) else {}
+    history_meta = history_index.get("meta") if isinstance(history_index.get("meta"), dict) else {}
+    combined_stats = {}
+    if isinstance(index_meta.get("stats"), dict):
+        combined_stats.update(index_meta.get("stats") or {})
+    if isinstance(history_meta.get("stats"), dict):
+        for key, value in (history_meta.get("stats") or {}).items():
+            combined_stats[f"history_{key}"] = value
+    combined_stats["library_items_endpoint_available"] = 1 if library_items_endpoint_available else 0
+    capabilities = {
+        "library_items_endpoint": bool(library_items_endpoint_available),
+        "stable_ids_in_library": bool(
+            _safe_int(combined_stats.get("shows_with_ids")) or _safe_int(combined_stats.get("movies_with_ids"))
+        ),
+        "stable_ids_in_history": bool(
+            _safe_int(combined_stats.get("history_shows_with_ids"))
+            or _safe_int(combined_stats.get("history_movies_with_ids"))
+        ),
+    }
+    capabilities["matching_mode"] = (
+        "stable_ids"
+        if capabilities["stable_ids_in_library"] or capabilities["stable_ids_in_history"]
+        else "title_year"
+    )
+    index["meta"] = {
+        "provider": "tracearr",
+        "server": index_meta.get("server") or history_meta.get("server") or {},
+        "stats": combined_stats,
+        "capabilities": capabilities,
+    }
+    now = time.time()
+    _save_tracearr_cache(cache_path, index, now)
+    _cache.set_tracearr(index, now)
+    return index
 
 
 def _get_streamystats_index(
@@ -12614,6 +14284,162 @@ def _get_jellyfin_index(
     now = time.time()
     _save_jellyfin_cache(cache_path, index, now)
     _cache.set_jellyfin(index, now)
+    return index
+
+
+def _emby_library_ids_for_media(cfg: dict, libraries: list[dict], media_type: str) -> list[str]:
+    if media_type == "show":
+        raw = cfg.get("emby_library_ids_sonarr") or ""
+        allowed_types = {"tvshows", "tvshow", "series", "show"}
+    else:
+        raw = cfg.get("emby_library_ids_radarr") or ""
+        allowed_types = {"movies", "movie"}
+    override = _split_csv_values(raw)
+    if override:
+        return override
+    ids: list[str] = []
+    for lib in libraries or []:
+        lib_id = str(lib.get("Id") or "").strip()
+        if not lib_id:
+            continue
+        collection = str(lib.get("CollectionType") or lib.get("Type") or "").strip().lower()
+        if collection in allowed_types:
+            ids.append(lib_id)
+    return ids
+
+
+def _get_emby_index(
+    cfg: dict,
+    force: bool = False,
+    include_history: bool = True,
+) -> dict | None:
+    del include_history
+    if not (cfg.get("emby_url") and cfg.get("emby_api_key")):
+        return None
+
+    cached_data, _ = _cache.get_emby_state()
+    if not force and cached_data:
+        return cached_data
+
+    cache_path = cfg.get("emby_cache_path") or ""
+    disk_cache = None if force else _load_emby_cache(cache_path)
+    if not force and disk_cache and disk_cache.get("index"):
+        index = disk_cache.get("index")
+        ts = _safe_int(disk_cache.get("ts")) or time.time()
+        _cache.set_emby(index, ts)
+        return index
+
+    base_url = cfg.get("emby_url") or ""
+    api_key = cfg.get("emby_api_key") or ""
+    request_timeout = _safe_int(cfg.get("emby_timeout_seconds"))
+    if request_timeout <= 0:
+        request_timeout = 60
+    page_size = _safe_int(cfg.get("emby_page_size"))
+    if page_size <= 0:
+        page_size = 250
+    user_id = _emby_resolve_user_id(cfg, timeout=request_timeout)
+    if not user_id:
+        raise RuntimeError("Emby user id could not be resolved")
+    libraries = _emby_fetch_libraries(base_url, api_key, user_id, timeout=request_timeout)
+    show_lib_ids = _emby_library_ids_for_media(cfg, libraries, "show")
+    movie_lib_ids = _emby_library_ids_for_media(cfg, libraries, "movie")
+    fields = [
+        "ProviderIds",
+        "Path",
+        "MediaStreams",
+        "MediaSources",
+        "DateCreated",
+        "Genres",
+        "Studios",
+        "PremiereDate",
+        "Overview",
+        "Status",
+        "RunTimeTicks",
+        "CumulativeRunTimeTicks",
+        "IndexNumber",
+        "ParentIndexNumber",
+        "SeasonId",
+        "SeriesId",
+        "EndDate",
+    ]
+    show_items: list[dict] = []
+    episode_items: list[dict] = []
+    for lib_id in show_lib_ids:
+        show_items.extend(
+            _emby_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Series"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+        episode_items.extend(
+            _emby_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Episode"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+    episode_items = _emby_backfill_playback_info_items(
+        base_url,
+        api_key,
+        user_id,
+        episode_items,
+        timeout=request_timeout,
+    )
+    movie_items: list[dict] = []
+    for lib_id in movie_lib_ids:
+        movie_items.extend(
+            _emby_fetch_items(
+                base_url,
+                api_key,
+                user_id,
+                parent_id=lib_id,
+                include_item_types=["Movie"],
+                fields=fields,
+                page_size=page_size,
+                recursive=True,
+                timeout=request_timeout,
+            )
+        )
+    movie_items = _emby_backfill_playback_info_items(
+        base_url,
+        api_key,
+        user_id,
+        movie_items,
+        timeout=request_timeout,
+    )
+
+    index = _jellyfin_build_media_index(
+        show_items,
+        episode_items,
+        movie_items,
+        item_year_resolver=_emby_item_year,
+    )
+    meta = index.get("meta") if isinstance(index.get("meta"), dict) else {}
+    meta.update(
+        {
+            "user_id": user_id,
+            "library_ids": {"shows": show_lib_ids, "movies": movie_lib_ids},
+            "server_url": _normalize_url(base_url),
+            "provider": "emby",
+        }
+    )
+    index["meta"] = meta
+    now = time.time()
+    _save_emby_cache(cache_path, index, now)
+    _cache.set_emby(index, now)
     return index
 
 
@@ -12779,6 +14605,26 @@ def _tautulli_refresh_lock_path() -> str:
     return os.path.join(base_dir, "Sortarr.tautulli_refresh.lock")
 
 
+def _tracearr_refresh_lock_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.tracearr_refresh.lock")
+
+
+def _tracearr_refresh_marker_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.tracearr_refresh.done")
+
+
+def _touch_tracearr_refresh_marker() -> None:
+    path = _tracearr_refresh_marker_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        logger.warning("Failed to write Tracearr refresh marker (path redacted).")
+
+
 def _tautulli_refresh_marker_path() -> str:
     base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
     return os.path.join(base_dir, "Sortarr.tautulli_refresh.done")
@@ -12792,6 +14638,26 @@ def _touch_tautulli_refresh_marker() -> None:
             handle.write(str(time.time()))
     except OSError:
         logger.warning("Failed to write Tautulli refresh marker (path redacted).")
+
+
+def _emby_refresh_lock_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.emby_refresh.lock")
+
+
+def _emby_refresh_marker_path() -> str:
+    base_dir = os.path.dirname(ENV_FILE_PATH) or os.getcwd()
+    return os.path.join(base_dir, "Sortarr.emby_refresh.done")
+
+
+def _touch_emby_refresh_marker() -> None:
+    path = _emby_refresh_marker_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(str(time.time()))
+    except OSError:
+        logger.warning("Failed to write Emby refresh marker (path redacted).")
 
 
 def _jellyfin_refresh_lock_path() -> str:
@@ -12886,6 +14752,18 @@ def _maybe_bust_arr_cache_on_tautulli_refresh() -> None:
         _cache.clear_app("radarr")
 
 
+def _maybe_bust_arr_cache_on_tracearr_refresh() -> None:
+    marker_path = _tracearr_refresh_marker_path()
+    try:
+        mtime = os.path.getmtime(marker_path)
+    except OSError:
+        return
+    if _playback_refresh_state["tracearr_seen"] is None or mtime > _playback_refresh_state["tracearr_seen"]:
+        _playback_refresh_state["tracearr_seen"] = mtime
+        _cache.clear_app("sonarr")
+        _cache.clear_app("radarr")
+
+
 def _maybe_bust_arr_cache_on_jellyfin_refresh() -> None:
     marker_path = _jellyfin_refresh_marker_path()
     try:
@@ -12935,9 +14813,11 @@ def _maybe_bust_arr_cache_on_plex_refresh() -> None:
 
 
 def _maybe_bust_arr_cache_on_playback_refresh(cfg: dict) -> None:
-    provider = _playback_provider(cfg)
+    provider = _history_provider(cfg)
     if provider == "jellyfin":
         _maybe_bust_arr_cache_on_jellyfin_refresh()
+    elif provider == "tracearr":
+        _maybe_bust_arr_cache_on_tracearr_refresh()
     elif provider == "jellystat":
         _maybe_bust_arr_cache_on_jellystat_refresh()
     elif provider == "streamystats":
@@ -12949,6 +14829,14 @@ def _maybe_bust_arr_cache_on_playback_refresh(cfg: dict) -> None:
 
 
 def _tautulli_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def _tracearr_refresh_lock_age(lock_path: str) -> float | None:
     try:
         mtime = os.path.getmtime(lock_path)
     except OSError:
@@ -12981,6 +14869,14 @@ def _streamystats_refresh_lock_age(lock_path: str) -> float | None:
 
 
 def _plex_refresh_lock_age(lock_path: str) -> float | None:
+    try:
+        mtime = os.path.getmtime(lock_path)
+    except OSError:
+        return None
+    return max(0.0, time.time() - mtime)
+
+
+def _emby_refresh_lock_age(lock_path: str) -> float | None:
     try:
         mtime = os.path.getmtime(lock_path)
     except OSError:
@@ -13038,6 +14934,19 @@ def _clear_stale_tautulli_refresh_lock(lock_path: str, stale_seconds: int) -> bo
     return True
 
 
+def _clear_stale_tracearr_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Tracearr", _release_tracearr_refresh_lock):
+        return True
+    if stale_seconds <= 0:
+        return False
+    age = _tracearr_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Tracearr refresh lock detected (age %.0fs); clearing.", age)
+    _release_tracearr_refresh_lock(lock_path, None)
+    return True
+
+
 def _clear_stale_jellyfin_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
     if _clear_dead_refresh_lock(lock_path, "Jellyfin", _release_jellyfin_refresh_lock):
         return True
@@ -13048,6 +14957,19 @@ def _clear_stale_jellyfin_refresh_lock(lock_path: str, stale_seconds: int) -> bo
         return False
     logger.warning("Stale Jellyfin refresh lock detected (age %.0fs); clearing.", age)
     _release_jellyfin_refresh_lock(lock_path, None)
+    return True
+
+
+def _clear_stale_emby_refresh_lock(lock_path: str, stale_seconds: int) -> bool:
+    if _clear_dead_refresh_lock(lock_path, "Emby", _release_emby_refresh_lock):
+        return True
+    if stale_seconds <= 0:
+        return False
+    age = _emby_refresh_lock_age(lock_path)
+    if age is None or age < stale_seconds:
+        return False
+    logger.warning("Stale Emby refresh lock detected (age %.0fs); clearing.", age)
+    _release_emby_refresh_lock(lock_path, None)
     return True
 
 
@@ -13103,6 +15025,18 @@ def _tautulli_refresh_in_progress(cfg: dict | None = None) -> bool:
     return os.path.exists(lock_path)
 
 
+def _tracearr_refresh_in_progress(cfg: dict | None = None) -> bool:
+    lock_path = _tracearr_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    stale_seconds = 3600
+    if cfg is not None:
+        stale_seconds = _safe_int(cfg.get("tracearr_refresh_stale_seconds") or stale_seconds)
+    if _clear_stale_tracearr_refresh_lock(lock_path, stale_seconds):
+        return False
+    return os.path.exists(lock_path)
+
+
 def _jellyfin_refresh_in_progress(cfg: dict | None = None) -> bool:
     lock_path = _jellyfin_refresh_lock_path()
     if not os.path.exists(lock_path):
@@ -13123,6 +15057,18 @@ def _plex_refresh_in_progress(cfg: dict | None = None) -> bool:
     if cfg is not None:
         stale_seconds = _safe_int(cfg.get("plex_refresh_stale_seconds") or stale_seconds)
     if _clear_stale_plex_refresh_lock(lock_path, stale_seconds):
+        return False
+    return os.path.exists(lock_path)
+
+
+def _emby_refresh_in_progress(cfg: dict | None = None) -> bool:
+    lock_path = _emby_refresh_lock_path()
+    if not os.path.exists(lock_path):
+        return False
+    stale_seconds = 3600
+    if cfg is not None:
+        stale_seconds = _safe_int(cfg.get("emby_refresh_stale_seconds") or stale_seconds)
+    if _clear_stale_emby_refresh_lock(lock_path, stale_seconds):
         return False
     return os.path.exists(lock_path)
 
@@ -13169,8 +15115,40 @@ def _acquire_tautulli_refresh_lock(lock_path: str, stale_seconds: int = 0):
     return lock_path
 
 
+def _acquire_tracearr_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_tracearr_refresh_lock(lock_path, stale_seconds)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
+        pass
+    return lock_path
+
+
 def _acquire_jellyfin_refresh_lock(lock_path: str, stale_seconds: int = 0):
     _clear_stale_jellyfin_refresh_lock(lock_path, stale_seconds)
+    try:
+        fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(str(os.getpid()))
+    except OSError:
+        pass
+    return lock_path
+
+
+def _acquire_emby_refresh_lock(lock_path: str, stale_seconds: int = 0):
+    _clear_stale_emby_refresh_lock(lock_path, stale_seconds)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
@@ -13243,7 +15221,21 @@ def _release_tautulli_refresh_lock(lock_path: str, _lock_token=None) -> None:
         pass
 
 
+def _release_tracearr_refresh_lock(lock_path: str, _lock_token=None) -> None:
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
 def _release_jellyfin_refresh_lock(lock_path: str, _lock_token=None) -> None:
+    try:
+        os.remove(lock_path)
+    except OSError:
+        pass
+
+
+def _release_emby_refresh_lock(lock_path: str, _lock_token=None) -> None:
     try:
         os.remove(lock_path)
     except OSError:
@@ -13340,6 +15332,34 @@ def _start_jellyfin_background_refresh(cfg: dict) -> bool:
         thread.start()
     except Exception:
         _release_jellyfin_refresh_lock(lock_path, fd)
+        raise
+    return True
+
+
+def _start_emby_background_refresh(cfg: dict) -> bool:
+    if not (cfg.get("emby_url") and cfg.get("emby_api_key")):
+        return False
+    lock_path = _emby_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("emby_refresh_stale_seconds"))
+    fd = _acquire_emby_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            index = _get_emby_index(cfg, force=True, include_history=False)
+            if index:
+                _touch_emby_refresh_marker()
+        except Exception as exc:
+            logger.warning("Emby refresh failed: %s", exc)
+        finally:
+            _release_emby_refresh_lock(lock_path, fd)
+
+    thread = threading.Thread(target=worker, name="sortarr-emby-refresh", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_emby_refresh_lock(lock_path, fd)
         raise
     return True
 
@@ -13557,6 +15577,150 @@ def _start_tautulli_deep_refresh(cfg: dict) -> bool:
         thread.start()
     except Exception:
         _release_tautulli_refresh_lock(lock_path, fd)
+        raise
+    return True
+
+
+def _apply_tracearr_to_caches(cfg: dict, index: dict) -> None:
+    _, index_ts = _cache.get_tracearr_state()
+    totals = {"shows": 0, "movies": 0}
+    progress_instances: dict[str, dict[str, set[str]]] = {}
+    disk_caches: dict[str, dict[str, dict]] = {}
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        memory_snapshot = _cache.get_app_snapshot(app_name)
+        memory_ids: set[str] = set()
+        memory_total = 0
+        for instance_id, entry in memory_snapshot.items():
+            data = entry.get("data")
+            if isinstance(data, list) and data:
+                memory_ids.add(str(instance_id))
+                memory_total += len(data)
+
+        cache_path = cfg.get("sonarr_cache_path") if app_name == "sonarr" else cfg.get("radarr_cache_path")
+        disk_cache = _load_arr_cache(cache_path)
+        disk_caches[app_name] = {"path": cache_path, "cache": disk_cache}
+
+        disk_only_ids: set[str] = set()
+        disk_only_total = 0
+        for instance_id, cached_entry in disk_cache.items():
+            if str(instance_id) in memory_ids:
+                continue
+            data = cached_entry.get("data")
+            if isinstance(data, list) and data:
+                disk_only_ids.add(str(instance_id))
+                disk_only_total += len(data)
+
+        totals[media_type] = memory_total + disk_only_total
+        progress_instances[app_name] = {
+            "disk_only": disk_only_ids,
+            "memory_ids": memory_ids,
+        }
+
+    _init_tautulli_match_progress(totals)
+    provider_label = _playback_label("tracearr")
+
+    for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+        disk_only_ids = progress_instances.get(app_name, {}).get("disk_only", set())
+        memory_ids = progress_instances.get(app_name, {}).get("memory_ids", set())
+
+        for instance_id in memory_ids:
+            entry = _cache.get_app_entry_snapshot(app_name, instance_id)
+            if not entry:
+                continue
+            if _apply_tautulli_stats_once(
+                entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=media_type,
+                provider_label=provider_label,
+            ):
+                _cache.update_app_entry(
+                    app_name,
+                    instance_id,
+                    data=entry.get("data") or [],
+                    ts=entry.get("ts") or 0,
+                    tautulli_index_ts=entry.get("tautulli_index_ts") or 0,
+                )
+
+        cache_info = disk_caches.get(app_name, {})
+        cache_path = cache_info.get("path")
+        disk_cache = cache_info.get("cache", {})
+        updated = False
+        for instance_id, cached_entry in disk_cache.items():
+            progress_media = media_type if str(instance_id) in disk_only_ids else None
+            if _apply_tautulli_stats_once(
+                cached_entry,
+                index,
+                media_type,
+                index_ts,
+                progress_media_type=progress_media,
+                provider_label=provider_label,
+            ):
+                updated = True
+        if updated:
+            _queue_arr_cache_save(app_name, cache_path, disk_cache, "tracearr_refresh")
+
+
+def _start_tracearr_background_apply(cfg: dict, index: dict | None) -> bool:
+    if not index:
+        return False
+    lock_path = _tracearr_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("tracearr_refresh_stale_seconds"))
+    fd = _acquire_tracearr_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    def worker():
+        try:
+            _apply_tracearr_to_caches(cfg, index)
+        except Exception as exc:
+            logger.warning("Tracearr background apply failed: %s", exc)
+        finally:
+            _release_tracearr_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-tracearr-apply", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_tracearr_refresh_lock(lock_path, fd)
+        raise
+    return True
+
+
+def _start_tracearr_background_refresh(cfg: dict) -> bool:
+    if not (cfg.get("tracearr_url") and cfg.get("tracearr_api_key")):
+        return False
+    lock_path = _tracearr_refresh_lock_path()
+    stale_seconds = _safe_int(cfg.get("tracearr_refresh_stale_seconds"))
+    fd = _acquire_tracearr_refresh_lock(lock_path, stale_seconds)
+    if fd is None:
+        return False
+
+    cache_path = cfg.get("tracearr_cache_path") or ""
+    existing_cache = _load_tracearr_cache(cache_path)
+
+    def worker():
+        try:
+            index = _get_tracearr_index(cfg, force=True, include_history=True)
+            if index:
+                _apply_tracearr_to_caches(cfg, index)
+                if not existing_cache:
+                    _save_tracearr_cache(cache_path, index, time.time())
+                _touch_tracearr_refresh_marker()
+        except Exception as exc:
+            logger.warning("Tracearr refresh failed: %s", exc)
+        finally:
+            _release_tracearr_refresh_lock(lock_path, fd)
+            _reset_tautulli_match_progress()
+
+    thread = threading.Thread(target=worker, name="sortarr-tracearr-refresh", daemon=True)
+    try:
+        thread.start()
+    except Exception:
+        _release_tracearr_refresh_lock(lock_path, fd)
         raise
     return True
 
@@ -14093,6 +16257,22 @@ def _find_tautulli_stats_with_bucket(
                 for key in variant_keys:
                     if (key, year) in title_year_variant_index:
                         return title_year_variant_index[(key, year)], "Title variant + year"
+    def _playback_raw_year(raw: dict) -> int | None:
+        if not isinstance(raw, dict):
+            return None
+        for key in ("year", "Year"):
+            raw_year = str(raw.get(key) or "").strip()
+            if raw_year.isdigit():
+                return int(raw_year)
+        for meta_key in ("plex_meta", "tracearr_meta", "jellyfin_meta", "emby_meta", "streamystats_meta", "jellystat_meta"):
+            meta = raw.get(meta_key)
+            if not isinstance(meta, dict):
+                continue
+            raw_year = str(meta.get("year") or meta.get("Year") or "").strip()
+            if raw_year.isdigit():
+                return int(raw_year)
+        return None
+
     def _title_fallback_allowed(raw: dict) -> bool:
         row_year_raw = str(row.get("Year") or "").strip()
         if not row_year_raw:
@@ -14101,19 +16281,40 @@ def _find_tautulli_stats_with_bucket(
             row_year = int(row_year_raw)
         except ValueError:
             return True
-        plex_meta = raw.get("plex_meta") if isinstance(raw, dict) else None
-        match_year_raw = ""
-        if isinstance(plex_meta, dict):
-            match_year_raw = str(plex_meta.get("year") or "").strip()
-        if not match_year_raw:
+        match_year = _playback_raw_year(raw)
+        if match_year is None:
             # If the *arr row has a year, do not allow title-only fallback
             # when the matched playback entry has no year metadata.
             return False
-        try:
-            match_year = int(match_year_raw)
-        except ValueError:
-            return True
         return abs(row_year - match_year) <= 2
+
+    def _path_title_candidates() -> list[str]:
+        raw_path = str(row.get("Path") or "").strip()
+        if not raw_path:
+            return []
+        normalized = raw_path.replace("\\", "/").rstrip("/")
+        parts = [part.strip() for part in normalized.split("/") if part.strip()]
+        candidates: list[str] = []
+        if parts:
+            leaf = parts[-1]
+            leaf = re.sub(r"\.[A-Za-z0-9]{2,4}$", "", leaf)
+            leaf = re.sub(r"\s*\(\d{4}\)\s*$", "", leaf)
+            leaf = _collapse_whitespace(leaf.strip(" -._"))
+            if leaf:
+                candidates.append(leaf)
+        if len(parts) >= 2:
+            parent = _collapse_whitespace(parts[-2].strip(" -._"))
+            if parent:
+                candidates.append(parent)
+        deduped: list[str] = []
+        seen_candidates = set()
+        for candidate in candidates:
+            key = _normalize_title_key(candidate)
+            if not key or key in seen_candidates:
+                continue
+            seen_candidates.add(key)
+            deduped.append(candidate)
+        return deduped
 
     # Fallback: if no year-scoped title match exists, allow plain title buckets.
     # This intentionally handles common Plex/*arr year drift while keeping ID
@@ -14135,6 +16336,29 @@ def _find_tautulli_stats_with_bucket(
                     raw = title_variant_index[key]
                     if _title_fallback_allowed(raw):
                         return raw, "Title variant"
+
+    for candidate in _path_title_candidates():
+        path_title_key = _normalize_title_key(candidate)
+        if year and path_title_key and (path_title_key, year) in title_year_index:
+            return title_year_index[(path_title_key, year)], "Path title + year"
+        if path_title_key and path_title_key in title_index:
+            raw = title_index[path_title_key]
+            if _title_fallback_allowed(raw):
+                return raw, "Path title"
+        relaxed_key = _relaxed_title_key(candidate)
+        if year and relaxed_key and (relaxed_key, year) in title_year_relaxed_index:
+            return title_year_relaxed_index[(relaxed_key, year)], "Path title + year (relaxed)"
+        if relaxed_key and relaxed_key in title_relaxed_index:
+            raw = title_relaxed_index[relaxed_key]
+            if _title_fallback_allowed(raw):
+                return raw, "Path title (relaxed)"
+        for key in _title_variant_keys(candidate):
+            if year and (key, year) in title_year_variant_index:
+                return title_year_variant_index[(key, year)], "Path title variant + year"
+            if key in title_variant_index:
+                raw = title_variant_index[key]
+                if _title_fallback_allowed(raw):
+                    return raw, "Path title variant"
 
     return None, ""
 
@@ -14398,6 +16622,11 @@ def _apply_tautulli_stats(
     has_index_source = isinstance(data, dict)
     has_index_data = has_index_source and any(bucket for bucket in data.values() if bucket)
     provider_label = provider_label or "Tautulli"
+    unmatched_reason = (
+        f"No {provider_label} match for title/year"
+        if str(provider_label or "").strip().lower() == "tracearr"
+        else f"No {provider_label} match for IDs or title"
+    )
     for row in rows:
         row["TautulliMatched"] = False
         row["TautulliMatchStatus"] = "unavailable"
@@ -14451,7 +16680,7 @@ def _apply_tautulli_stats(
                 row["WatchContentRatio"] = round(watch_hours_val / content_hours_val, 4)
         else:
             row["TautulliMatchStatus"] = "unmatched"
-            row["TautulliMatchReason"] = f"No {provider_label} match for IDs or title"
+            row["TautulliMatchReason"] = unmatched_reason
             status = "unmatched"
         _advance_tautulli_match_progress(progress_media_type, status)
 
@@ -14567,18 +16796,40 @@ def _normalize_frame_rate_fps(value) -> float:
         raw = str(value).strip()
         if not raw:
             return 0.0
-        frac = re.fullmatch(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", raw)
-        if frac:
-            denom = float(frac.group(2))
+        left, sep, right = raw.partition("/")
+        if sep:
+            try:
+                numerator = float(left.strip())
+                denom = float(right.strip())
+            except (TypeError, ValueError):
+                return 0.0
             if denom <= 0:
                 return 0.0
-            num = float(frac.group(1)) / denom
+            num = numerator / denom
         else:
-            match = re.search(r"\d+(?:\.\d+)?", raw)
-            if not match:
+            token_chars = []
+            decimal_seen = False
+            digit_seen = False
+            for char in raw:
+                if char.isdigit():
+                    token_chars.append(char)
+                    digit_seen = True
+                    continue
+                if char == "." and digit_seen and not decimal_seen:
+                    token_chars.append(char)
+                    decimal_seen = True
+                    continue
+                if digit_seen:
+                    break
+            if not digit_seen:
+                return 0.0
+            token = "".join(token_chars)
+            if token.endswith("."):
+                token = token[:-1]
+            if not token:
                 return 0.0
             try:
-                num = float(match.group(0))
+                num = float(token)
             except (TypeError, ValueError):
                 return 0.0
     if not math.isfinite(num) or num <= 0 or num > 240:
@@ -16656,7 +18907,9 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
     if provider:
         apply_started = False
         if defer_playback_overlay:
-            if provider == "tautulli":
+            if provider == "tracearr":
+                apply_started = _start_tracearr_background_apply(cfg, cached_playback)
+            elif provider == "tautulli":
                 apply_started = _start_tautulli_background_apply(cfg, cached_playback)
             elif provider == "jellystat":
                 apply_started = _start_jellystat_background_apply(cfg, cached_playback)
@@ -16667,7 +18920,9 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
         refresh_needed = force or not cached_playback
         started = False
         if refresh_needed:
-            if provider == "tautulli":
+            if provider == "tracearr":
+                started = _start_tracearr_background_refresh(cfg)
+            elif provider == "tautulli":
                 started = _start_tautulli_background_refresh(cfg)
             elif provider == "jellystat":
                 started = _start_jellystat_background_refresh(cfg)
@@ -16675,7 +18930,9 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                 started = _start_streamystats_background_refresh(cfg)
             elif provider == "plex":
                 started = _start_plex_background_refresh(cfg)
-        if provider == "tautulli":
+        if provider == "tracearr":
+            in_progress = _tracearr_refresh_in_progress(cfg)
+        elif provider == "tautulli":
             in_progress = _tautulli_refresh_in_progress(cfg)
         elif provider == "jellystat":
             in_progress = _jellystat_refresh_in_progress(cfg)
@@ -16723,13 +18980,17 @@ def index():
 def _setup_form_values(cfg: dict, form=None) -> dict:
     values = dict(cfg)
     values.setdefault("sortarr_auth_method", "basic")
+    values.setdefault("sortarr_local_auth_bypass", False)
+    values.setdefault("sortarr_local_auth_bypass_cidrs", "")
     values.setdefault("sortarr_upstream_auth_header", DEFAULT_UPSTREAM_AUTH_HEADER)
     values.setdefault("clear_basic_auth_pass", False)
     values.setdefault("insights_provider_preference", _normalize_insights_provider_preference(values.get("insights_provider_preference", "auto")))
     for key in (
+        "clear_emby_connection",
         "clear_plex_connection",
         "clear_jellyfin_connection",
         "clear_tautulli_connection",
+        "clear_tracearr_connection",
         "clear_jellystat_connection",
         "clear_streamystats_connection",
         "clear_sonarr_instance_2",
@@ -16751,16 +19012,21 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             "radarr_name_3",
             "plex_client_id",
             "plex_section_filters",
+            "emby_user_id",
+            "emby_library_ids_sonarr",
+            "emby_library_ids_radarr",
             "jellyfin_username",
             "jellyfin_user_id",
             "jellyfin_library_ids_sonarr",
             "jellyfin_library_ids_radarr",
             "tautulli_url",
+            "tracearr_url",
             "jellystat_library_ids_sonarr",
             "jellystat_library_ids_radarr",
             "streamystats_server_id",
             "streamystats_username",
             "basic_auth_user",
+            "sortarr_local_auth_bypass_cidrs",
             "sortarr_upstream_auth_header",
             "sortarr_proxy_hops",
             "sortarr_proxy_hops_for",
@@ -16809,7 +19075,9 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             "radarr_url_api_3",
             "radarr_url_external_3",
             "plex_url",
+            "emby_url",
             "jellyfin_url",
+            "tracearr_url",
             "jellystat_url",
             "streamystats_url",
         ):
@@ -16827,6 +19095,7 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         values["sortarr_auth_method"] = _normalize_auth_method(
             form_value("sortarr_auth_method", str(values.get("sortarr_auth_method") or "basic"))
         )
+        values["sortarr_local_auth_bypass"] = form.get("sortarr_local_auth_bypass") == "1"
         proxy_preset = form_value("proxy_preset", str(values.get("proxy_preset") or "single")).lower()
         if proxy_preset not in {"direct", "single", "double", "custom"}:
             proxy_preset = "single"
@@ -16835,9 +19104,11 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         values["sortarr_allow_unsafe_ephemeral_recovery"] = form.get("sortarr_allow_unsafe_ephemeral_recovery") == "1"
         values["clear_basic_auth_pass"] = form.get("clear_basic_auth_pass") == "1"
         for key in (
+            "clear_emby_connection",
             "clear_plex_connection",
             "clear_jellyfin_connection",
             "clear_tautulli_connection",
+            "clear_tracearr_connection",
             "clear_jellystat_connection",
             "clear_streamystats_connection",
             "clear_sonarr_instance_2",
@@ -16868,9 +19139,11 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         "radarr_api_key_2",
         "radarr_api_key_3",
         "plex_token",
+        "emby_api_key",
         "jellyfin_api_key",
         "jellyfin_password",
         "tautulli_api_key",
+        "tracearr_api_key",
         "jellystat_api_key",
         "streamystats_api_key",
         "streamystats_password",
@@ -16880,6 +19153,12 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         values[key] = ""
     values["basic_auth_pass_configured"] = bool(cfg.get("basic_auth_pass"))
     values["sortarr_secret_key_configured"] = bool(cfg.get("sortarr_secret_key")) and not bool(cfg.get("sortarr_secret_key_ephemeral"))
+    if values.get("clear_emby_connection"):
+        values["emby_url"] = ""
+        values["emby_api_key_configured"] = False
+        values["emby_user_id"] = ""
+        values["emby_library_ids_sonarr"] = ""
+        values["emby_library_ids_radarr"] = ""
     if values.get("clear_plex_connection"):
         values["plex_url"] = ""
         values["plex_token_configured"] = False
@@ -16895,6 +19174,9 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
     if values.get("clear_tautulli_connection"):
         values["tautulli_url"] = ""
         values["tautulli_api_key_configured"] = False
+    if values.get("clear_tracearr_connection"):
+        values["tracearr_url"] = ""
+        values["tracearr_api_key_configured"] = False
     if values.get("clear_jellystat_connection"):
         values["jellystat_url"] = ""
         values["jellystat_api_key_configured"] = False
@@ -16926,6 +19208,9 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             values[key] = ""
         values["radarr_api_key_3_configured"] = False
         values["radarr_path_maps_3"] = [""]
+    values["media_source"] = _effective_media_source(values)
+    values["history_source"] = _history_provider(values)
+    values["insights_provider"] = _playback_insights_provider(values)
     return values
 
 
@@ -16975,16 +19260,20 @@ def _setup_advanced_summary(cfg: dict) -> dict:
 
 def _setup_optional_section_open(cfg: dict, field_errors: dict | None = None) -> bool:
     errors = field_errors or {}
-    if any(key in errors for key in ("plex", "jellyfin", "tautulli", "jellystat", "streamystats")):
+    if any(key in errors for key in ("plex", "jellyfin", "tautulli", "tracearr", "jellystat", "streamystats")):
         return True
     return any(
         str(cfg.get(key) or "").strip()
         for key in (
+            "emby_url",
             "plex_url",
             "jellyfin_url",
             "tautulli_url",
+            "tracearr_url",
             "jellystat_url",
             "streamystats_url",
+            "emby_library_ids_sonarr",
+            "emby_library_ids_radarr",
             "plex_section_filters",
             "jellyfin_library_ids_sonarr",
             "jellyfin_library_ids_radarr",
@@ -17005,9 +19294,11 @@ def _setup_error_key_to_field_name(key: str) -> str:
         "radarr_1": "radarr_url",
         "radarr_2": "radarr_url_2",
         "radarr_3": "radarr_url_3",
+        "emby": "emby_url",
         "plex": "plex_url",
         "jellyfin": "jellyfin_url",
         "tautulli": "tautulli_url",
+        "tracearr": "tracearr_url",
         "jellystat": "jellystat_url",
         "streamystats": "streamystats_url",
     }
@@ -17032,8 +19323,18 @@ def _setup_error_step_for_key(key: str, cfg: dict | None = None) -> str:
         "streamystats_password",
         "tautulli_url",
         "tautulli_api_key",
+        "tracearr_url",
+        "tracearr_api_key",
     }:
         return "2"
+    if field_name in {
+        "emby_url",
+        "emby_api_key",
+        "emby_user_id",
+        "emby_library_ids_sonarr",
+        "emby_library_ids_radarr",
+    }:
+        return "1" if media_pref == "emby" else "3"
     if field_name in {
         "plex_url",
         "plex_token",
@@ -17052,6 +19353,8 @@ def _setup_error_step_for_key(key: str, cfg: dict | None = None) -> str:
         return "1" if media_pref == "jellyfin" else "3"
     if field_name in {
         "sortarr_auth_method",
+        "sortarr_local_auth_bypass",
+        "sortarr_local_auth_bypass_cidrs",
         "basic_auth_user",
         "basic_auth_pass",
         "sortarr_upstream_auth_header",
@@ -17091,12 +19394,16 @@ def _setup_provider_ready(cfg: dict, provider: str) -> bool:
     provider = str(provider or "").strip().lower()
     if provider == "plex":
         return bool(str(cfg.get("plex_url") or "").strip() and _setup_effective_secret_configured(cfg, "plex_token"))
+    if provider == "emby":
+        return bool(str(cfg.get("emby_url") or "").strip() and _setup_effective_secret_configured(cfg, "emby_api_key"))
     if provider == "jellyfin":
         return bool(
             str(cfg.get("jellyfin_url") or "").strip() and _setup_effective_secret_configured(cfg, "jellyfin_api_key")
         )
     if provider == "tautulli":
         return bool(str(cfg.get("tautulli_url") or "").strip() and _setup_effective_secret_configured(cfg, "tautulli_api_key"))
+    if provider == "tracearr":
+        return bool(str(cfg.get("tracearr_url") or "").strip() and _setup_effective_secret_configured(cfg, "tracearr_api_key"))
     if provider == "jellystat":
         return bool(str(cfg.get("jellystat_url") or "").strip() and _setup_effective_secret_configured(cfg, "jellystat_api_key"))
     if provider == "streamystats":
@@ -17123,6 +19430,7 @@ def _setup_step_states(
     setup_required: bool = False,
 ) -> dict[str, dict[str, str]]:
     errors = field_errors or {}
+    provider_state = _provider_state_payload(cfg)
 
     def state_payload(state: str, label: str) -> dict[str, str]:
         return {"state": state, "label": label}
@@ -17133,75 +19441,61 @@ def _setup_step_states(
     security_error = any(_setup_error_step_for_key(key, cfg) == "4" for key in errors)
     advanced_error = any(_setup_error_step_for_key(key, cfg) == "5" for key in errors)
 
-    has_arr_media = any(_setup_instance_ready(cfg, prefix, suffix) for prefix in ("sonarr", "radarr") for suffix in ("", "_2", "_3"))
-    has_jellyfin_media = _setup_provider_ready(cfg, "jellyfin")
-    has_plex_media = _setup_provider_ready(cfg, "plex")
-    media_pref = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
+    media_state_data = provider_state.get("media") or {}
     if media_error:
-        media_state = state_payload("needs-attention", "Needs attention")
-    elif not (has_arr_media or has_jellyfin_media or has_plex_media):
-        media_state = state_payload("needs-attention", "Action needed")
-    elif media_pref == "arr" and not has_arr_media:
-        media_state = state_payload("needs-attention", "Needs attention")
-    elif media_pref == "jellyfin" and not has_jellyfin_media:
-        media_state = state_payload("needs-attention", "Needs attention")
-    elif media_pref == "plex" and not has_plex_media:
-        media_state = state_payload("needs-attention", "Needs attention")
+        media_state = state_payload("needs-attention", "Needs setup")
+    elif not list(media_state_data.get("available") or []):
+        media_state = state_payload("needs-attention", "Needs setup")
+    elif str(media_state_data.get("selected") or "").strip().lower() != "auto" and not str(media_state_data.get("effective") or "").strip():
+        media_state = state_payload("needs-attention", "Needs setup")
     else:
-        media_state = state_payload("ready", "Ready")
+        media_state = state_payload("ready", "In use")
 
-    history_pref = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
-    history_ready = {
-        "plex": _setup_provider_ready(cfg, "plex"),
-        "tautulli": _setup_provider_ready(cfg, "tautulli"),
-        "jellystat": _setup_provider_ready(cfg, "jellystat"),
-        "streamystats": _setup_provider_ready(cfg, "streamystats"),
-    }
+    history_state_data = provider_state.get("history") or {}
     if history_error:
-        history_state = state_payload("needs-attention", "Needs attention")
-    elif history_pref == "plex" and _setup_history_reuses_media_provider(cfg, "plex"):
-        history_state = state_payload("ready", "Ready")
-    elif history_pref in history_ready and not history_ready.get(history_pref):
-        history_state = state_payload("needs-attention", "Needs attention")
-    elif any(history_ready.values()):
-        history_state = state_payload("ready", "Ready")
+        history_state = state_payload("needs-attention", "Needs setup")
+    elif str(history_state_data.get("selected") or "").strip().lower() != "auto" and not str(history_state_data.get("effective") or "").strip():
+        history_state = state_payload("needs-attention", "Needs setup")
+    elif list(history_state_data.get("available") or []):
+        history_state = state_payload("ready", "In use")
     else:
-        history_state = state_payload("optional", "Optional")
+        history_state = state_payload("optional", "Not set")
 
-    playback_ready = {
-        "jellyfin": _setup_provider_ready(cfg, "jellyfin"),
-        "plex": _setup_provider_ready(cfg, "plex"),
-    }
-    playback_missing_required = history_pref == "plex" and not playback_ready["plex"] and not _setup_history_reuses_media_provider(cfg, "plex")
-    if playback_error or playback_missing_required:
-        playback_state = state_payload("needs-attention", "Needs attention")
-    elif any(playback_ready.values()):
-        playback_state = state_payload("configured", "Configured")
+    enrichment_state_data = provider_state.get("enrichment") or {}
+    if playback_error:
+        playback_state = state_payload("needs-attention", "Needs setup")
+    elif str(enrichment_state_data.get("selected") or "").strip().lower() != "auto" and not str(enrichment_state_data.get("effective") or "").strip():
+        playback_state = state_payload("needs-attention", "Needs setup")
+    elif list(enrichment_state_data.get("available") or []):
+        playback_state = state_payload("configured", "Available")
     else:
-        playback_state = state_payload("optional", "Optional")
+        playback_state = state_payload("optional", "Not set")
 
     auth_method = _normalize_auth_method(cfg.get("sortarr_auth_method", "basic"))
     basic_ready = bool(str(cfg.get("basic_auth_user") or "").strip() and _setup_effective_secret_configured(cfg, "basic_auth_pass"))
     external_ready = bool(str(cfg.get("sortarr_upstream_auth_header") or DEFAULT_UPSTREAM_AUTH_HEADER).strip())
+    local_bypass_ready = not _local_auth_bypass_config_issues(cfg)
     secret_ready = bool(_setup_effective_secret_configured(cfg, "sortarr_secret_key") and not bool(cfg.get("sortarr_secret_key_ephemeral")))
     if security_error:
-        security_state = state_payload("needs-attention", "Needs attention")
+        security_state = state_payload("needs-attention", "Needs setup")
     elif auth_method == "basic" and not basic_ready:
-        security_state = state_payload("needs-attention", "Needs attention")
+        security_state = state_payload("needs-attention", "Needs setup")
+    elif auth_method == "basic_local_bypass" and (not basic_ready or not local_bypass_ready):
+        security_state = state_payload("needs-attention", "Needs setup")
     elif auth_method == "external" and not external_ready:
-        security_state = state_payload("needs-attention", "Needs attention")
+        security_state = state_payload("needs-attention", "Needs setup")
     elif setup_required and not secret_ready:
-        security_state = state_payload("configured", "Save required")
+        security_state = state_payload("configured", "Save needed")
     else:
         security_state = state_payload("ready", "Ready")
 
     advanced_summary = _setup_advanced_summary(cfg)
     if advanced_error:
-        advanced_state = state_payload("needs-attention", "Needs attention")
+        advanced_state = state_payload("needs-attention", "Check settings")
     elif advanced_summary.get("count"):
-        advanced_state = state_payload("configured", "Configured")
+        advanced_state = state_payload("configured", "Custom")
     else:
-        advanced_state = state_payload("optional", "Optional")
+        advanced_state = state_payload("optional", "Default")
 
     return {
         "step1": media_state,
@@ -17251,6 +19545,89 @@ def _setup_resolve_secret_value(data: dict, cfg: dict, key: str) -> str:
     return raw or _setup_cfg_env_value(cfg, key)
 
 
+def _setup_secret_state(key: str) -> tuple[str, str, str]:
+    raw = str(os.environ.get(key) or "").strip()
+    file_ref = _secret_file_ref(key)
+    target = str(os.environ.get(f"{key}_CRED_TARGET") or "").strip()
+    if not target and raw.lower().startswith("wincred:"):
+        target = raw.split(":", 1)[1].strip()
+    return raw, file_ref, target
+
+
+def _setup_value_changed(data: dict, cfg: dict, env_key: str) -> bool:
+    current = str(data.get(env_key) or "").strip()
+    existing = _setup_cfg_env_value(cfg, env_key)
+    return current != existing
+
+
+def _setup_secret_changed(data: dict, key: str) -> bool:
+    current_raw = str(data.get(key) or "").strip()
+    current_file = str(data.get(f"{key}_FILE") or "").strip()
+    current_target = str(data.get(f"{key}_CRED_TARGET") or "").strip()
+    # Blank secret fields in Setup mean "keep the existing secret source/value".
+    # Without this guard, every save re-tests all configured providers because the
+    # form intentionally omits persisted secret values.
+    if not (current_raw or current_file or current_target):
+        return False
+    current = (current_raw, current_file, current_target)
+    return current != _setup_secret_state(key)
+
+
+def _setup_arr_connection_changed(data: dict, cfg: dict, prefix: str, suffix: str = "") -> bool:
+    return any(
+        (
+            _setup_value_changed(data, cfg, f"{prefix}_URL{suffix}"),
+            _setup_value_changed(data, cfg, f"{prefix}_URL_API{suffix}"),
+            _setup_secret_changed(data, f"{prefix}_API_KEY{suffix}"),
+        )
+    )
+
+
+def _setup_provider_connection_changed(data: dict, cfg: dict, provider: str) -> bool:
+    provider = str(provider or "").strip().lower()
+    if provider == "tautulli":
+        return _setup_value_changed(data, cfg, "TAUTULLI_URL") or _setup_secret_changed(data, "TAUTULLI_API_KEY")
+    if provider == "tracearr":
+        return _setup_value_changed(data, cfg, "TRACEARR_URL") or _setup_secret_changed(data, "TRACEARR_API_KEY")
+    if provider == "jellystat":
+        return (
+            _setup_value_changed(data, cfg, "JELLYSTAT_URL")
+            or _setup_secret_changed(data, "JELLYSTAT_API_KEY")
+        )
+    if provider == "streamystats":
+        return any(
+            (
+                _setup_value_changed(data, cfg, "STREAMYSTATS_URL"),
+                _setup_secret_changed(data, "STREAMYSTATS_API_KEY"),
+                _setup_value_changed(data, cfg, "STREAMYSTATS_SERVER_ID"),
+                _setup_value_changed(data, cfg, "STREAMYSTATS_USERNAME"),
+                _setup_secret_changed(data, "STREAMYSTATS_PASSWORD"),
+                _setup_value_changed(data, cfg, "JELLYFIN_USERNAME"),
+                _setup_secret_changed(data, "JELLYFIN_PASSWORD"),
+            )
+        )
+    if provider == "emby":
+        return _setup_value_changed(data, cfg, "EMBY_URL") or _setup_secret_changed(data, "EMBY_API_KEY")
+    if provider == "jellyfin":
+        return any(
+            (
+                _setup_value_changed(data, cfg, "JELLYFIN_URL"),
+                _setup_secret_changed(data, "JELLYFIN_API_KEY"),
+                _setup_value_changed(data, cfg, "JELLYFIN_USERNAME"),
+                _setup_secret_changed(data, "JELLYFIN_PASSWORD"),
+            )
+        )
+    if provider == "plex":
+        return any(
+            (
+                _setup_value_changed(data, cfg, "PLEX_URL"),
+                _setup_secret_changed(data, "PLEX_TOKEN"),
+                _setup_value_changed(data, cfg, "PLEX_CLIENT_ID"),
+            )
+        )
+    return False
+
+
 def _setup_instance_url(data: dict, cfg: dict, prefix: str, suffix: str = "") -> str:
     return str(
         data.get(f"{prefix}_URL_API{suffix}")
@@ -17273,6 +19650,10 @@ def _validate_setup_media_section(data: dict, cfg: dict, field_errors: dict[str,
     has_sonarr = bool(has_sonarr or cfg.get("sonarr_instances"))
     has_radarr = bool(has_radarr or cfg.get("radarr_instances"))
     has_arr_media = bool(has_sonarr or has_radarr)
+    has_emby_media = bool(
+        (data.get("EMBY_URL") and _setup_has_secret_value(data, cfg, "EMBY_API_KEY"))
+        or (cfg.get("emby_url") and cfg.get("emby_api_key"))
+    )
     has_jellyfin_media = bool(
         (data.get("JELLYFIN_URL") and _setup_has_secret_value(data, cfg, "JELLYFIN_API_KEY"))
         or (cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"))
@@ -17281,31 +19662,19 @@ def _validate_setup_media_section(data: dict, cfg: dict, field_errors: dict[str,
         (data.get("PLEX_URL") and _setup_has_secret_value(data, cfg, "PLEX_TOKEN"))
         or (cfg.get("plex_url") and cfg.get("plex_token"))
     )
-    if not (has_arr_media or has_jellyfin_media or has_plex_media):
+    if not (has_arr_media or has_emby_media or has_jellyfin_media or has_plex_media):
         setup_warnings.append("Security settings saved. Continue Setup to add a media source.")
         return "", "setup"
 
     media_preference = data.get("MEDIA_SOURCE_PREFERENCE", "arr")
     if media_preference == "arr" and not has_arr_media:
-        return _setup_add_field_error(
-            field_errors,
-            "media_source_preference",
-            "Preferred media source is Sonarr/Radarr, but no Sonarr or Radarr instance is fully configured.",
-        ), "index"
+        return "", "setup"
+    if media_preference == "emby" and not has_emby_media:
+        return "", "setup"
     if media_preference == "jellyfin" and not has_jellyfin_media:
-        _setup_add_field_error(field_errors, "jellyfin", "Provide URL and API key or change preferred media source.")
-        return _setup_add_field_error(
-            field_errors,
-            "media_source_preference",
-            "Preferred media source is Jellyfin, but Jellyfin is not fully configured.",
-        ), "index"
+        return "", "setup"
     if media_preference == "plex" and not has_plex_media:
-        _setup_add_field_error(field_errors, "plex", "Provide URL and token or change preferred media source.")
-        return _setup_add_field_error(
-            field_errors,
-            "media_source_preference",
-            "Preferred media source is Plex, but Plex is not fully configured.",
-        ), "index"
+        return "", "setup"
 
     sonarr2 = _setup_instance_url(data, cfg, "SONARR", "_2") and _setup_has_secret_value(data, cfg, "SONARR_API_KEY_2")
     sonarr3 = _setup_instance_url(data, cfg, "SONARR", "_3") and _setup_has_secret_value(data, cfg, "SONARR_API_KEY_3")
@@ -17327,9 +19696,11 @@ def _validate_setup_media_section(data: dict, cfg: dict, field_errors: dict[str,
     return "", "index"
 
 
-def _validate_setup_history_section(data: dict, cfg: dict, field_errors: dict[str, str]) -> str:
+def _validate_setup_history_section(data: dict, cfg: dict, field_errors: dict[str, str], setup_warnings: list[str]) -> str:
     tautulli_url = data.get("TAUTULLI_URL") or ""
     tautulli_api_key = _setup_resolve_secret_value(data, cfg, "TAUTULLI_API_KEY")
+    tracearr_url = data.get("TRACEARR_URL") or ""
+    tracearr_api_key = _setup_resolve_secret_value(data, cfg, "TRACEARR_API_KEY")
     jellystat_url = data.get("JELLYSTAT_URL") or ""
     jellystat_api_key = _setup_resolve_secret_value(data, cfg, "JELLYSTAT_API_KEY")
     streamystats_url = data.get("STREAMYSTATS_URL") or ""
@@ -17351,45 +19722,33 @@ def _validate_setup_history_section(data: dict, cfg: dict, field_errors: dict[st
     plex_ready = bool(data.get("PLEX_URL") and _setup_resolve_secret_value(data, cfg, "PLEX_TOKEN"))
     plex_reused = media_preference == "plex" and history_preference in {"auto", "plex"} and plex_ready
     if history_preference == "tautulli" and not (tautulli_url and tautulli_api_key):
-        _setup_add_field_error(field_errors, "tautulli", "Provide URL and API key or change preferred history source.")
-        return _setup_add_field_error(
-            field_errors,
-            "history_source_preference",
-            "Preferred history source is Tautulli, but Tautulli is not fully configured.",
-        )
+        return ""
+    if history_preference == "tracearr" and not (tracearr_url and tracearr_api_key):
+        return ""
     if history_preference == "jellystat" and not (jellystat_url and jellystat_api_key):
-        _setup_add_field_error(field_errors, "jellystat", "Provide URL and API key or change preferred history source.")
-        return _setup_add_field_error(
-            field_errors,
-            "history_source_preference",
-            "Preferred history source is Jellystat, but Jellystat is not fully configured.",
-        )
+        return ""
     if history_preference == "streamystats" and not streamystats_ready:
-        if not (streamystats_url and streamystats_api_key):
-            _setup_add_field_error(field_errors, "streamystats", "Provide URL and API key or change preferred history source.")
-        else:
-            _setup_add_field_error(
-                field_errors,
-                "streamystats_username",
-                "Provide Jellyfin username/password for Streamystats or change preferred history source.",
-            )
-            _setup_add_field_error(
-                field_errors,
-                "streamystats_password",
-                "Provide Jellyfin username/password for Streamystats or change preferred history source.",
-            )
-        return _setup_add_field_error(
-            field_errors,
-            "history_source_preference",
-            "Preferred history source is Streamystats, but Streamystats is not fully configured.",
-        )
+        return ""
     if history_preference == "plex" and not plex_reused and not plex_ready:
-        _setup_add_field_error(field_errors, "plex", "Provide URL and token or change preferred history source.")
-        return _setup_add_field_error(
-            field_errors,
-            "history_source_preference",
-            "Preferred history source is Plex, but Plex is not fully configured.",
-        )
+        return ""
+    return ""
+
+
+def _validate_setup_playback_section(data: dict, cfg: dict, field_errors: dict[str, str], setup_warnings: list[str]) -> str:
+    insights_preference = data.get("INSIGHTS_PROVIDER_PREFERENCE", "auto")
+    if insights_preference == "auto":
+        return ""
+
+    plex_ready = bool(data.get("PLEX_URL") and _setup_resolve_secret_value(data, cfg, "PLEX_TOKEN"))
+    emby_ready = bool(data.get("EMBY_URL") and _setup_resolve_secret_value(data, cfg, "EMBY_API_KEY"))
+    jellyfin_ready = bool(data.get("JELLYFIN_URL") and _setup_resolve_secret_value(data, cfg, "JELLYFIN_API_KEY"))
+
+    if insights_preference == "plex" and not plex_ready:
+        return ""
+    if insights_preference == "emby" and not emby_ready:
+        return ""
+    if insights_preference == "jellyfin" and not jellyfin_ready:
+        return ""
     return ""
 
 
@@ -17404,6 +19763,8 @@ def _validate_setup_connection_section(data: dict, cfg: dict, field_errors: dict
         ("Radarr", "RADARR", 3),
     ]:
         suffix = "" if idx == 1 else f"_{idx}"
+        if not _setup_arr_connection_changed(data, cfg, prefix, suffix):
+            continue
         url = _setup_instance_url(data, cfg, prefix, suffix)
         api_key = _setup_resolve_secret_value(data, cfg, f"{prefix}_API_KEY{suffix}")
         name = (data.get(f"{prefix}_NAME{suffix}") or "").strip()
@@ -17418,21 +19779,28 @@ def _validate_setup_connection_section(data: dict, cfg: dict, field_errors: dict
 
     tautulli_url = data.get("TAUTULLI_URL") or ""
     tautulli_api_key = _setup_resolve_secret_value(data, cfg, "TAUTULLI_API_KEY")
-    if tautulli_url and tautulli_api_key:
+    if _setup_provider_connection_changed(data, cfg, "tautulli") and tautulli_url and tautulli_api_key:
         failure = _tautulli_test_connection(tautulli_url, tautulli_api_key, timeout=10)
         if failure:
             connection_errors["tautulli"] = failure
 
+    tracearr_url = data.get("TRACEARR_URL") or ""
+    tracearr_api_key = _setup_resolve_secret_value(data, cfg, "TRACEARR_API_KEY")
+    if _setup_provider_connection_changed(data, cfg, "tracearr") and tracearr_url and tracearr_api_key:
+        failure = _tracearr_test_connection(tracearr_url, tracearr_api_key, timeout=10)
+        if failure:
+            connection_errors["tracearr"] = failure
+
     jellystat_url = data.get("JELLYSTAT_URL") or ""
     jellystat_api_key = _setup_resolve_secret_value(data, cfg, "JELLYSTAT_API_KEY")
-    if jellystat_url and jellystat_api_key:
+    if _setup_provider_connection_changed(data, cfg, "jellystat") and jellystat_url and jellystat_api_key:
         failure = _jellystat_test_connection(jellystat_url, jellystat_api_key, timeout=10)
         if failure:
             connection_errors["jellystat"] = failure
 
     streamystats_url = data.get("STREAMYSTATS_URL") or ""
     streamystats_api_key = _setup_resolve_secret_value(data, cfg, "STREAMYSTATS_API_KEY")
-    if streamystats_url and streamystats_api_key:
+    if _setup_provider_connection_changed(data, cfg, "streamystats") and streamystats_url and streamystats_api_key:
         streamystats_cfg = dict(cfg)
         streamystats_cfg.update(
             {
@@ -17456,7 +19824,13 @@ def _validate_setup_connection_section(data: dict, cfg: dict, field_errors: dict
     jellyfin_api_key = _setup_resolve_secret_value(data, cfg, "JELLYFIN_API_KEY")
     jellyfin_username = str(data.get("JELLYFIN_USERNAME") or "").strip()
     jellyfin_password = _setup_resolve_secret_value(data, cfg, "JELLYFIN_PASSWORD")
-    if jellyfin_url and jellyfin_api_key:
+    emby_url = data.get("EMBY_URL") or ""
+    emby_api_key = _setup_resolve_secret_value(data, cfg, "EMBY_API_KEY")
+    if _setup_provider_connection_changed(data, cfg, "emby") and emby_url and emby_api_key:
+        failure = _emby_test_connection(emby_url, emby_api_key, timeout=10)
+        if failure:
+            connection_errors["emby"] = failure
+    if _setup_provider_connection_changed(data, cfg, "jellyfin") and jellyfin_url and jellyfin_api_key:
         failure = _jellyfin_test_connection(
             jellyfin_url,
             jellyfin_api_key,
@@ -17470,7 +19844,7 @@ def _validate_setup_connection_section(data: dict, cfg: dict, field_errors: dict
     plex_url = data.get("PLEX_URL") or ""
     plex_token = _setup_resolve_secret_value(data, cfg, "PLEX_TOKEN")
     plex_client_id = data.get("PLEX_CLIENT_ID") or ""
-    if plex_url and plex_token:
+    if _setup_provider_connection_changed(data, cfg, "plex") and plex_url and plex_token:
         if not plex_client_id:
             plex_client_id = secrets.token_hex(12)
             data["PLEX_CLIENT_ID"] = plex_client_id
@@ -17629,13 +20003,17 @@ def setup():
         auth_method = _normalize_auth_method(
             request.form.get("sortarr_auth_method", cfg.get("sortarr_auth_method", "basic"))
         )
+        local_auth_bypass_enabled = request.form.get("sortarr_local_auth_bypass") == "1"
+        local_auth_bypass_cidrs_input = request.form.get("sortarr_local_auth_bypass_cidrs", "").strip()
+        local_auth_bypass_cidrs = local_auth_bypass_cidrs_input
         upstream_auth_header = (
             request.form.get("sortarr_upstream_auth_header", cfg.get("sortarr_upstream_auth_header", DEFAULT_UPSTREAM_AUTH_HEADER))
             or ""
         ).strip() or DEFAULT_UPSTREAM_AUTH_HEADER
         auth_error = ""
+        local_auth_bypass_error = ""
         clear_basic_auth_pass = False
-        if auth_method == "basic":
+        if auth_method != "external":
             basic_auth_user = request.form.get("basic_auth_user", "").strip()
             basic_auth_pass_raw = request.form.get("basic_auth_pass", "").strip()
             clear_basic_auth_pass = request.form.get("clear_basic_auth_pass") == "1"
@@ -17724,6 +20102,24 @@ def setup():
                 external_auth_error = (
                     "External authentication requires Waitress trusted proxy to be set to the immediate proxy IP/host."
                 )
+        elif auth_method == "basic_local_bypass":
+            if not local_auth_bypass_enabled:
+                local_auth_bypass_error = "Local auth bypass must be explicitly enabled for this authentication mode."
+            elif proxy_preset != "direct":
+                local_auth_bypass_error = "Local auth bypass requires Proxy mode to be Direct."
+            else:
+                normalized_cidrs, cidr_errors, _, used_defaults = _parse_local_auth_bypass_cidrs(
+                    local_auth_bypass_cidrs_input,
+                    allow_defaults=True,
+                )
+                if cidr_errors:
+                    local_auth_bypass_error = "; ".join(cidr_errors)
+                else:
+                    local_auth_bypass_cidrs = ",".join(normalized_cidrs)
+                    if used_defaults:
+                        setup_warnings.append(
+                            "Local auth bypass is enabled with the built-in private-network CIDR set. Review it carefully before exposing this install beyond your trusted LAN."
+                        )
 
         sortarr_secret_key_raw = request.form.get("sortarr_secret_key", "").strip()
         existing_sortarr_secret_key_file = (
@@ -17829,6 +20225,13 @@ def setup():
             "PLEX_CLIENT_ID": plex_client_id,
             "PLEX_SECTION_FILTERS": plex_section_filters,
             "PLEX_HISTORY_PAGE_SIZE": plex_history_page_size,
+            "EMBY_URL": _normalize_url(request.form.get("emby_url", "")),
+            "EMBY_API_KEY": request.form.get("emby_api_key", "").strip(),
+            "EMBY_USER_ID": request.form.get("emby_user_id", "").strip(),
+            "EMBY_LIBRARY_IDS_SONARR": request.form.get("emby_library_ids_sonarr", "").strip(),
+            "EMBY_LIBRARY_IDS_RADARR": request.form.get("emby_library_ids_radarr", "").strip(),
+            "EMBY_TIMEOUT_SECONDS": str(cfg.get("emby_timeout_seconds") or ""),
+            "EMBY_PAGE_SIZE": str(cfg.get("emby_page_size") or ""),
             "JELLYFIN_URL": _normalize_url(request.form.get("jellyfin_url", "")),
             "JELLYFIN_API_KEY": request.form.get("jellyfin_api_key", "").strip(),
             "JELLYFIN_USERNAME": request.form.get("jellyfin_username", "").strip(),
@@ -17841,6 +20244,8 @@ def setup():
             "INSIGHTS_PROVIDER_PREFERENCE": insights_provider_preference,
             "TAUTULLI_URL": _normalize_url(request.form.get("tautulli_url", "")),
             "TAUTULLI_API_KEY": request.form.get("tautulli_api_key", "").strip(),
+            "TRACEARR_URL": _normalize_url(request.form.get("tracearr_url", "")),
+            "TRACEARR_API_KEY": request.form.get("tracearr_api_key", "").strip(),
             "JELLYSTAT_URL": _normalize_url(request.form.get("jellystat_url", "")),
             "JELLYSTAT_API_KEY": request.form.get("jellystat_api_key", "").strip(),
             "JELLYSTAT_LIBRARY_IDS_SONARR": request.form.get("jellystat_library_ids_sonarr", "").strip(),
@@ -17867,6 +20272,8 @@ def setup():
             "RADARR_WANTED_WORKERS": radarr_wanted_workers,
             "RADARR_INSTANCE_WORKERS": radarr_instance_workers,
             "SORTARR_AUTH_METHOD": auth_method,
+            "SORTARR_LOCAL_AUTH_BYPASS": "1" if local_auth_bypass_enabled else "0",
+            "SORTARR_LOCAL_AUTH_BYPASS_CIDRS": local_auth_bypass_cidrs,
             "SORTARR_UPSTREAM_AUTH_HEADER": upstream_auth_header,
             "BASIC_AUTH_USER": basic_auth_user,
             "BASIC_AUTH_PASS": basic_auth_pass,
@@ -17881,10 +20288,21 @@ def setup():
             "CACHE_SECONDS": str(cache_seconds if cache_seconds is not None else ""),
         }
         _normalize_setup_secret_payload(data)
-        if auth_method == "basic" and (not basic_auth_user or clear_basic_auth_pass):
+        if auth_method in {"basic", "basic_local_bypass"} and (not basic_auth_user or clear_basic_auth_pass):
             data["BASIC_AUTH_PASS"] = ""
             data["BASIC_AUTH_PASS_FILE"] = ""
             data["BASIC_AUTH_PASS_CRED_TARGET"] = ""
+        if request.form.get("clear_emby_connection") == "1":
+            for key in (
+                "EMBY_URL",
+                "EMBY_API_KEY",
+                "EMBY_API_KEY_FILE",
+                "EMBY_API_KEY_CRED_TARGET",
+                "EMBY_USER_ID",
+                "EMBY_LIBRARY_IDS_SONARR",
+                "EMBY_LIBRARY_IDS_RADARR",
+            ):
+                data[key] = ""
         if request.form.get("clear_plex_connection") == "1":
             for key in ("PLEX_URL", "PLEX_TOKEN", "PLEX_TOKEN_FILE", "PLEX_TOKEN_CRED_TARGET", "PLEX_SECTION_FILTERS"):
                 data[key] = ""
@@ -17905,6 +20323,9 @@ def setup():
                 data[key] = ""
         if request.form.get("clear_tautulli_connection") == "1":
             for key in ("TAUTULLI_URL", "TAUTULLI_API_KEY", "TAUTULLI_API_KEY_FILE", "TAUTULLI_API_KEY_CRED_TARGET"):
+                data[key] = ""
+        if request.form.get("clear_tracearr_connection") == "1":
+            for key in ("TRACEARR_URL", "TRACEARR_API_KEY", "TRACEARR_API_KEY_FILE", "TRACEARR_API_KEY_CRED_TARGET"):
                 data[key] = ""
         if request.form.get("clear_jellystat_connection") == "1":
             for key in (
@@ -18046,6 +20467,7 @@ def setup():
             or proxy_error
             or trusted_origins_error
             or auth_error
+            or local_auth_bypass_error
             or external_auth_error
         )
 
@@ -18084,6 +20506,13 @@ def setup():
             if auth_error:
                 auth_field = "sortarr_upstream_auth_header" if auth_method == "external" else ("basic_auth_user" if "username" in auth_error.lower() else "basic_auth_pass")
                 _setup_add_field_error(field_errors, auth_field, auth_error)
+            if local_auth_bypass_error:
+                target_field = (
+                    "proxy_preset"
+                    if "proxy mode" in local_auth_bypass_error.lower()
+                    else ("sortarr_local_auth_bypass_cidrs" if "cidr" in local_auth_bypass_error.lower() else "sortarr_local_auth_bypass")
+                )
+                _setup_add_field_error(field_errors, target_field, local_auth_bypass_error)
             if external_auth_error:
                 target_field = "sortarr_waitress_trusted_proxy" if "trusted proxy" in external_auth_error.lower() else "proxy_preset"
                 _setup_add_field_error(field_errors, target_field, external_auth_error)
@@ -18102,7 +20531,9 @@ def setup():
         else:
             error, redirect_endpoint = _validate_setup_media_section(data, cfg, field_errors, setup_warnings)
             if not error:
-                error = _validate_setup_history_section(data, cfg, field_errors)
+                error = _validate_setup_history_section(data, cfg, field_errors, setup_warnings)
+            if not error:
+                error = _validate_setup_playback_section(data, cfg, field_errors, setup_warnings)
             if not error:
                 error = _validate_setup_connection_section(data, cfg, field_errors)
         proxy_trust_settings_changed = _proxy_trust_settings_changed(data)
@@ -18116,6 +20547,8 @@ def setup():
                 _write_env_file(ENV_FILE_PATH, data)
                 for k, v in data.items():
                     os.environ[k] = v
+                if has_request_context() and hasattr(g, "_sortarr_config_cache"):
+                    g._sortarr_config_cache = None
                 _enforce_secret_policy_flags(ENV_FILE_PATH)
                 runtime_secret = str(data.get("SORTARR_SECRET_KEY") or "").strip()
                 if runtime_secret and not runtime_secret.lower().startswith("wincred:"):
@@ -18135,15 +20568,28 @@ def setup():
                     setup_warnings.append(
                         "Proxy header trust settings were saved. Restart Sortarr for Waitress to apply them."
                     )
+                saved_cfg = _get_config()
+                provider_selection_warnings = _setup_provider_selection_warnings(saved_cfg)
+                provider_selection_notice = _setup_provider_selection_notice(saved_cfg)
+                if provider_selection_notice:
+                    setup_warnings.append(provider_selection_notice)
+                if not _config_complete(saved_cfg):
+                    redirect_endpoint = "setup"
                 if setup_warnings:
                     session["sortarr_setup_warning"] = " ".join(setup_warnings)
+                else:
+                    session.pop("sortarr_setup_warning", None)
                 _invalidate_cache()
                 if redirect_endpoint == "index":
                     completion_message = "Setup saved. Continue into the app with the updated settings."
                     if auth_method == "basic":
                         completion_message = "Setup saved. Continue into the app and sign in with the updated Basic Auth credentials if prompted."
+                    elif auth_method == "basic_local_bypass":
+                        completion_message = "Setup saved. Continue into the app. Trusted direct local-network clients in the configured CIDR ranges can bypass the Basic Auth prompt."
                     elif auth_method == "external":
                         completion_message = "Setup saved. Continue into the app through your trusted reverse proxy."
+                    if provider_selection_warnings:
+                        completion_message += " Review the setup notice for selected providers that are not currently effective."
                     session["sortarr_setup_completed"] = {
                         "target_url": url_for("index"),
                         "message": completion_message,
@@ -18184,6 +20630,7 @@ def setup():
         field_errors=field_errors,
         setup_required=setup_required,
     )
+    setup_provider_state = _provider_state_payload(setup_values)
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
@@ -18195,6 +20642,7 @@ def setup():
         field_errors=field_errors,
         values=setup_values,
         advanced_summary=advanced_summary,
+        setup_provider_state=setup_provider_state,
         setup_step_states=setup_step_states,
         error_steps=error_steps,
         focus_field=focus_field,
@@ -18210,11 +20658,15 @@ def setup():
 
 
 def _frontend_bootstrap_config(cfg: dict) -> dict:
-    provider = _playback_provider(cfg)
-    playback_enabled = bool(provider)
+    provider_state = _provider_state_payload(cfg)
+    history_provider = _history_provider(cfg)
+    overlay_provider = _playback_overlay_provider(cfg)
+    playback_enabled = bool(history_provider)
+    emby_configured = bool(cfg.get("emby_url") and cfg.get("emby_api_key"))
     plex_configured = bool(cfg.get("plex_url") and cfg.get("plex_token"))
     jellyfin_configured = bool(cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"))
     streamystats_configured = bool(cfg.get("streamystats_url") and cfg.get("streamystats_api_key"))
+    tracearr_configured = bool(cfg.get("tracearr_url") and cfg.get("tracearr_api_key"))
     insights_provider = _playback_insights_provider(cfg)
     media_source_preference = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
     history_source_preference = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
@@ -18238,6 +20690,13 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
     sonarr_configured = bool(cfg.get("sonarr_instances")) or bool(_media_fallback_provider(cfg, "sonarr"))
     radarr_configured = bool(cfg.get("radarr_instances")) or bool(_media_fallback_provider(cfg, "radarr"))
     plex_scope = _get_plex_library_scope(cfg)
+    tracearr_index = _get_tracearr_index_cached() if tracearr_configured else None
+    tracearr_meta = (
+        tracearr_index.get("meta")
+        if isinstance(tracearr_index, dict) and isinstance(tracearr_index.get("meta"), dict)
+        else {}
+    )
+    tracearr_capabilities = _tracearr_capabilities_from_meta(tracearr_meta)
     return {
         "sonarr_url": sonarr_public_base,
         "radarr_url": radarr_public_base,
@@ -18245,10 +20704,17 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
         "radarr_instances": radarr_instances_public,
         "tautulli_configured": playback_enabled,
         "playback_configured": playback_enabled,
-        "playback_provider": provider,
+        "playback_provider": overlay_provider,
+        "history_provider": history_provider,
+        "overlay_provider": overlay_provider,
+        "provider_state": provider_state,
+        "emby_configured": emby_configured,
         "plex_configured": plex_configured,
         "jellyfin_configured": jellyfin_configured,
         "streamystats_configured": streamystats_configured,
+        "tracearr_configured": tracearr_configured,
+        "tracearr_matching_mode": tracearr_capabilities.get("matching_mode"),
+        "tracearr_capabilities": tracearr_capabilities,
         "insights_provider": insights_provider,
         "media_source_preference": media_source_preference,
         "media_source": effective_media_source,
@@ -18276,6 +20742,7 @@ def api_config():
             "setup_required": bool(setup_reasons),
             "setup_reasons": setup_reasons,
             "auth_method": _auth_method(cfg),
+            "local_auth_bypass": _local_auth_bypass_state(cfg),
             "upstream_auth_header": _upstream_auth_header(cfg),
             "external_auth_config_valid": not _external_auth_config_issues(cfg),
             "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
@@ -18290,8 +20757,10 @@ def api_status():
     cfg = _get_config()
     lite_raw = str(request.args.get("lite") or "").strip().lower()
     lite = lite_raw in {"1", "true", "yes"}
-    provider = _playback_provider(cfg)
-    playback_enabled = bool(provider)
+    history_provider = _history_provider(cfg)
+    overlay_provider = _playback_overlay_provider(cfg)
+    provider, _, playback_ts = _get_playback_index_state(cfg)
+    playback_enabled = bool(history_provider)
     refresh_in_progress = _playback_refresh_in_progress(cfg, provider) if playback_enabled else False
     apps = {}
     for app_name in ("sonarr", "radarr"):
@@ -18301,7 +20770,7 @@ def api_status():
             latest_ts = _collect_cache_latest_ts(app_name)
             counts = None
         else:
-            counts, latest_ts = _collect_cached_counts(app_name)
+            counts, latest_ts = _collect_effective_status_counts(app_name, cfg)
         cache_path = cfg.get(f"{app_name}_cache_path")
         disk_info = _cache_file_info(cache_path)
         fallback_cache = _fallback_media_cache_info(app_name, cfg) if app_configured else {}
@@ -18374,7 +20843,6 @@ def api_status():
             requested_ids = [item for item in requested_ids if item in available_ids]
         plex_selected[app_name] = requested_ids
 
-    _, _, playback_ts = _get_playback_index_state(cfg)
     if not playback_enabled:
         tautulli_status = "disabled"
     elif refresh_in_progress:
@@ -18384,19 +20852,32 @@ def api_status():
     else:
         tautulli_status = "ready"
     tautulli_partial = playback_enabled and (refresh_in_progress or playback_ts <= 0)
+    tracearr_capabilities = {}
+    if history_provider == "tracearr":
+        tracearr_index, _ = _cache.get_tracearr_state()
+        tracearr_meta = (
+            tracearr_index.get("meta")
+            if isinstance(tracearr_index, dict) and isinstance(tracearr_index.get("meta"), dict)
+            else {}
+        )
+        tracearr_capabilities = _tracearr_capabilities_from_meta(tracearr_meta)
 
     return jsonify(
         {
             "apps": apps,
             "tautulli": {
                 "configured": playback_enabled,
-                "provider": provider,
-                "label": _playback_label(provider),
+                "provider": history_provider,
+                "history_provider": history_provider,
+                "overlay_provider": overlay_provider,
+                "label": _playback_label(history_provider),
                 "status": tautulli_status,
                 "partial": tautulli_partial,
                 "refresh_in_progress": refresh_in_progress,
                 "index_ts": playback_ts,
                 "index_age_seconds": _age_seconds(playback_ts),
+                "tracearr_matching_mode": tracearr_capabilities.get("matching_mode"),
+                "tracearr_capabilities": tracearr_capabilities,
             },
             "scope": {
                 "plex": {
@@ -18500,8 +20981,12 @@ def api_setup_test():
         failure = _arr_test_connection(url, api_key, timeout=10)
     elif kind == "tautulli":
         failure = _tautulli_test_connection(url, api_key, timeout=10)
+    elif kind == "tracearr":
+        failure = _tracearr_test_connection(url, api_key, timeout=10)
     elif kind == "jellystat":
         failure = _jellystat_test_connection(url, api_key, timeout=10)
+    elif kind == "emby":
+        failure = _emby_test_connection(url, api_key, timeout=10)
     elif kind == "plex":
         if not client_id:
             cfg = _get_config()
@@ -18583,6 +21068,9 @@ def api_tautulli_refresh():
     if provider == "tautulli":
         started = _start_tautulli_background_refresh(cfg)
         refresh_in_progress = _tautulli_refresh_in_progress(cfg)
+    elif provider == "tracearr":
+        started = _start_tracearr_background_refresh(cfg)
+        refresh_in_progress = _tracearr_refresh_in_progress(cfg)
     elif provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
         refresh_in_progress = _jellystat_refresh_in_progress(cfg)
@@ -18614,6 +21102,9 @@ def api_tautulli_deep_refresh():
     if provider == "tautulli":
         started = _start_tautulli_deep_refresh(cfg)
         refresh_in_progress = _tautulli_refresh_in_progress(cfg)
+    elif provider == "tracearr":
+        started = _start_tracearr_background_refresh(cfg)
+        refresh_in_progress = _tracearr_refresh_in_progress(cfg)
     elif provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
         refresh_in_progress = _jellystat_refresh_in_progress(cfg)
@@ -18809,6 +21300,23 @@ def api_sonarr_series_seasons(series_id: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
     fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider == "emby":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
+        series_item_id = _emby_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        index = _get_emby_index(cfg, force=False, include_history=False) or {}
+        seasons = _jellyfin_season_payloads(index, series_item_id, include_specials=include_specials)
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "emby",
+                "provider_item_id": series_item_id,
+                "fast_mode": False,
+                "seasons": seasons,
+            }
+        )
     if not instances and fallback_provider == "jellyfin":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
@@ -18884,6 +21392,26 @@ def api_sonarr_series_episodes(series_id: int, season_number: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
     fallback_provider = _media_fallback_provider(cfg, "sonarr")
+    if not instances and fallback_provider == "emby":
+        provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
+        series_item_id = _emby_series_item_id_for_row(cfg, series_id, provider_item_id)
+        if not series_item_id:
+            return jsonify({"error": "Series not found."}), 404
+        episodes = _jellyfin_episode_payloads(
+            _get_emby_index(cfg, force=False, include_history=False) or {},
+            series_item_id,
+            season_number,
+        )
+        return jsonify(
+            {
+                "series_id": series_id,
+                "provider": "emby",
+                "provider_item_id": series_item_id,
+                "season_number": season_number,
+                "fast_mode": False,
+                "episodes": episodes,
+            }
+        )
     if not instances and fallback_provider == "jellyfin":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         series_item_id = _jellyfin_series_item_id_for_row(cfg, series_id, provider_item_id)
@@ -19332,6 +21860,7 @@ def api_arr_health(app_name: str):
 def api_clear_caches():
     cfg = _get_config()
     _playback_refresh_state["tautulli_seen"] = None
+    _playback_refresh_state["tracearr_seen"] = None
     _playback_refresh_state["jellystat_seen"] = None
     _playback_refresh_state["streamystats_seen"] = None
     _playback_refresh_state["jellyfin_seen"] = None
@@ -19339,23 +21868,28 @@ def api_clear_caches():
     _invalidate_cache()
     _wipe_cache_files()
     started = False
-    provider = _playback_provider(cfg)
-    if provider == "tautulli":
+    history_provider = _history_provider(cfg)
+    overlay_provider = _playback_overlay_provider(cfg)
+    if history_provider == "tautulli":
         started = _start_tautulli_background_refresh(cfg)
-    elif provider == "jellystat":
+    elif history_provider == "tracearr":
+        started = _start_tracearr_background_refresh(cfg)
+    elif history_provider == "jellystat":
         started = _start_jellystat_background_refresh(cfg)
-    elif provider == "streamystats":
+    elif history_provider == "streamystats":
         started = _start_streamystats_background_refresh(cfg)
-    elif provider == "jellyfin":
+    elif history_provider == "jellyfin":
         started = _start_jellyfin_background_refresh(cfg)
-    elif provider == "plex":
+    elif history_provider == "plex":
         started = _start_plex_background_refresh(cfg)
     return jsonify(
         {
             "ok": True,
             "tautulli_refresh_started": started,
             "playback_refresh_started": started,
-            "playback_provider": provider,
+            "playback_provider": overlay_provider,
+            "history_provider": history_provider,
+            "overlay_provider": overlay_provider,
         }
     )
 
@@ -19543,6 +22077,21 @@ def api_jellyfin_asset(item_id: str, image_type: str):
         return jsonify({"error": "invalid image type"}), 400
     max_width = _safe_int(request.args.get("maxWidth")) or _safe_int(request.args.get("max_width")) or 320
     return _jellyfin_stream_image(base_url, api_key, item_id, image_type=image_type, max_width=max_width)
+
+
+@app.route("/api/emby/asset/<item_id>/<image_type>")
+@_auth_required
+def api_emby_asset(item_id: str, image_type: str):
+    cfg = _get_config()
+    base_url = cfg.get("emby_url") or ""
+    api_key = cfg.get("emby_api_key") or ""
+    if not (base_url and api_key):
+        return jsonify({"error": "Emby is not configured."}), 503
+    image_type = str(image_type or "").strip() or "Primary"
+    if not re.match(r"^[A-Za-z0-9_-]{1,24}$", image_type):
+        return jsonify({"error": "invalid image type"}), 400
+    max_width = _safe_int(request.args.get("maxWidth")) or _safe_int(request.args.get("max_width")) or 320
+    return _emby_stream_image(base_url, api_key, item_id, image_type=image_type, max_width=max_width)
 
 
 @app.route("/api/plex/asset/<item_id>/<image_type>")
@@ -19848,16 +22397,18 @@ def api_mismatches():
     limit = max(1, min(limit, 5000))
 
     cfg = _get_config()
-    providers = [
-        provider
-        for provider in _configured_history_sources(cfg)
-        if provider in ("tautulli", "plex", "jellystat", "streamystats")
-    ]
+    providers: list[str] = []
+    for provider in _configured_history_sources(cfg):
+        if provider in ("tautulli", "tracearr", "plex", "jellystat", "streamystats", "jellyfin", "emby"):
+            providers.append(provider)
+    insights_provider = _playback_insights_provider(cfg)
+    if insights_provider in ("plex", "jellyfin", "emby") and insights_provider not in providers:
+        providers.append(insights_provider)
 
     provider_states = []
     provider_rows: dict[str, list[dict]] = {}
 
-    if len(providers) < 2:
+    if not providers:
         return jsonify(
             {
                 "generated_at": datetime.datetime.now(datetime.timezone.utc)
@@ -19876,7 +22427,7 @@ def api_mismatches():
                     "selected_library_ids": [],
                     "available_library_ids": [],
                 },
-                "message": "At least two playback providers must be configured to compare mismatches.",
+                "message": "No history or overlay providers are configured for mismatch analysis.",
             }
         )
 
@@ -19906,7 +22457,7 @@ def api_mismatches():
         rows = _apply_plex_library_scope(rows, selected_ids)
 
     media_type = "shows" if app_name == "sonarr" else "movies"
-    active_playback_provider = _playback_provider(cfg)
+    active_playback_provider = _history_provider(cfg)
     existing_overlay_summary = _summarize_existing_match_health(rows)
     existing_overlay_counts = existing_overlay_summary.get("counts") if isinstance(existing_overlay_summary, dict) else {}
     existing_overlay_settled = bool(
@@ -19931,7 +22482,7 @@ def api_mismatches():
                 provider_mode = "ready"
                 provider_error = ""
                 refresh_in_progress = False
-            elif provider in ("tautulli", "jellyfin", "plex", "jellystat", "streamystats"):
+            elif provider in ("tautulli", "tracearr", "jellyfin", "plex", "jellystat", "streamystats", "emby"):
                 index, index_ts, ready_or_started = _provider_index_ready(cfg, provider)
                 if not index:
                     if ready_or_started or refresh_in_progress:
@@ -20094,7 +22645,7 @@ def api_playback_match_diagnostics():
 
     cfg = _get_config()
     provider = _playback_provider(cfg)
-    if provider not in ("tautulli", "jellyfin", "streamystats", "plex"):
+    if provider not in ("tautulli", "tracearr", "jellyfin", "streamystats", "plex"):
         provider_label = _playback_label(provider) if provider else "Playback"
         return jsonify(
             {
@@ -20249,6 +22800,27 @@ def api_playback_match_diagnostics():
                 else {},
                 "stats": stats,
                 "index_bucket_counts": bucket_counts,
+            }
+        }
+    elif provider == "tracearr":
+        if not (cfg.get("tracearr_url") and cfg.get("tracearr_api_key")):
+            return jsonify({"error": "Tracearr is not configured.", "provider": provider}), 503
+
+        index, index_ts = _cache.get_tracearr_state()
+        provider_label = _playback_label("tracearr")
+        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+        meta = index.get("meta") if isinstance(index, dict) else {}
+        if not isinstance(meta, dict):
+            meta = {}
+        core["refresh_state"]["index_ts"] = _safe_int(index_ts)
+        core["refresh_state"]["index_age_seconds"] = _age_seconds(index_ts) if index_ts else None
+        core["provider_details"] = {
+            "tracearr": {
+                "index_available": bool(index),
+                "match_health": app_health,
+                "server": meta.get("server") if isinstance(meta.get("server"), dict) else {},
+                "stats": meta.get("stats") if isinstance(meta.get("stats"), dict) else {},
+                "capabilities": _tracearr_capabilities_from_meta(meta),
             }
         }
     elif provider == "jellyfin":
@@ -20619,7 +23191,7 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
         if not (plex_url and plex_token):
             raise RuntimeError("Plex is not configured.")
         client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
-        active_playback_provider = _playback_provider(cfg)
+        active_insights_provider = _playback_insights_provider(cfg)
         include_raw = str(
             request_payload.get("include")
             or request_args.get("include")
@@ -20679,7 +23251,7 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
                 refresh_started = False
                 if force_refresh:
                     refresh_started = _start_plex_background_refresh(cfg)
-                elif active_playback_provider == "plex" and not index:
+                elif active_insights_provider == "plex" and not index:
                     refresh_started = _start_plex_background_refresh(cfg)
                 match_health = {
                     "provider": "plex",
@@ -20687,12 +23259,12 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
                     "available": bool(index),
                     "index_ts": _safe_int(index_ts),
                     "apps": {},
-                    "source_provider": active_playback_provider or "plex",
+                    "source_provider": active_insights_provider or "plex",
                     "refresh_in_progress": _playback_refresh_in_progress(cfg, "plex"),
                     "refresh_started": bool(refresh_started),
                 }
                 for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
-                    if active_playback_provider and active_playback_provider != "plex":
+                    if active_insights_provider and active_insights_provider != "plex":
                         app_health, latest_ts = _collect_cached_existing_match_health(app_name)
                     else:
                         rows, latest_ts = _collect_cached_rows(app_name)
@@ -20739,7 +23311,7 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
         if not (base_url and api_key):
             raise RuntimeError("Jellyfin is not configured.")
         timeout = max(5, _safe_int(cfg.get("jellyfin_timeout_seconds")) or 10)
-        active_playback_provider = _playback_provider(cfg)
+        active_insights_provider = _playback_insights_provider(cfg)
         include_raw = str(
             request_payload.get("include")
             or request_args.get("include")
@@ -20787,14 +23359,14 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
                     "index_ts": _safe_int(index_ts),
                     "apps": {},
                     "section_id": section_id,
-                    "source_provider": active_playback_provider or "jellyfin",
+                    "source_provider": active_insights_provider or "jellyfin",
                 }
                 for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
                     if isinstance(scoped_apps, set) and app_name not in scoped_apps:
                         latest_ts = _collect_cache_latest_ts(app_name)
                         rows = []
                         app_health = _summarize_existing_match_health(rows)
-                    elif active_playback_provider and active_playback_provider != "jellyfin":
+                    elif active_insights_provider and active_insights_provider != "jellyfin":
                         app_health, latest_ts = _collect_cached_existing_match_health(app_name)
                     else:
                         rows, latest_ts = _collect_rows_for_match_health(app_name, cfg)
@@ -20821,6 +23393,86 @@ def _playback_insights_payload(cfg: dict, provider: str, force_refresh: bool = F
             payload["match_health"] = match_health
         return payload
 
+    if provider == "emby":
+        base_url = cfg.get("emby_url") or ""
+        api_key = cfg.get("emby_api_key") or ""
+        if not (base_url and api_key):
+            raise RuntimeError("Emby is not configured.")
+        timeout = max(5, _safe_int(cfg.get("emby_timeout_seconds")) or 10)
+        active_insights_provider = _playback_insights_provider(cfg)
+        include_raw = str(
+            request_payload.get("include")
+            or request_args.get("include")
+            or "sections,sessions,match_health"
+        )
+        include = {part.strip().lower() for part in include_raw.split(",") if part.strip()}
+        section_id = str(request_payload.get("section_id") or request_args.get("section_id") or "").strip()
+        errors = {}
+        libraries = []
+        sessions = []
+        match_health = {}
+        try:
+            if "sections" in include or "match_health" in include:
+                user_id = _emby_resolve_user_id(cfg, timeout=timeout)
+                libraries = _jellyfin_summarize_libraries(
+                    _emby_fetch_libraries(base_url, api_key, user_id, timeout=timeout)
+                )
+        except Exception as exc:
+            errors["sections"] = str(exc)
+        try:
+            if "sessions" in include:
+                sessions = _jellyfin_summarize_sessions(
+                    _emby_fetch_sessions(base_url, api_key, timeout=timeout)
+                )
+        except Exception as exc:
+            errors["sessions"] = str(exc)
+        try:
+            if "match_health" in include:
+                index, index_ts = _cache.get_emby_state()
+                if not index:
+                    index = _get_emby_index(cfg, force=force_refresh, include_history=False)
+                    _, index_ts = _cache.get_emby_state()
+                provider_label = _playback_label("emby")
+                scoped_apps = _jellyfin_library_scope_apps(libraries, section_id)
+                match_health = {
+                    "provider": "emby",
+                    "provider_label": provider_label,
+                    "available": bool(index),
+                    "index_ts": _safe_int(index_ts),
+                    "apps": {},
+                    "section_id": section_id,
+                    "source_provider": active_insights_provider or "emby",
+                }
+                for app_name, media_type in (("sonarr", "shows"), ("radarr", "movies")):
+                    if isinstance(scoped_apps, set) and app_name not in scoped_apps:
+                        latest_ts = _collect_cache_latest_ts(app_name)
+                        rows = []
+                        app_health = _summarize_existing_match_health(rows)
+                    elif active_insights_provider and active_insights_provider != "emby":
+                        app_health, latest_ts = _collect_cached_existing_match_health(app_name)
+                    else:
+                        rows, latest_ts = _collect_rows_for_match_health(app_name, cfg)
+                        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+                    app_health["updated_ts"] = latest_ts
+                    match_health["apps"][app_name] = app_health
+        except Exception as exc:
+            errors["match_health"] = str(exc)
+
+        payload = {
+            "ok": True,
+            "provider": "emby",
+            "provider_label": _playback_label("emby"),
+            "errors": errors,
+            "fetched_at": int(time.time()),
+        }
+        if "sections" in include or "match_health" in include:
+            payload["sections"] = libraries
+        if "sessions" in include:
+            payload["sessions"] = sessions
+        if "match_health" in include:
+            payload["match_health"] = match_health
+        return payload
+
     raise RuntimeError("Playback insights are unavailable.")
 
 
@@ -20834,8 +23486,8 @@ def api_playback_insights():
         or request.args.get("provider")
         or ""
     ).strip().lower()
-    provider = requested_provider if requested_provider in {"plex", "jellyfin"} else _playback_insights_provider(cfg)
-    if provider not in {"plex", "jellyfin"}:
+    provider = requested_provider if requested_provider in {"plex", "jellyfin", "emby"} else _playback_insights_provider(cfg)
+    if provider not in {"plex", "jellyfin", "emby"}:
         return jsonify({"error": "Playback insights are unavailable."}), 503
     try:
         payload = _playback_insights_payload(cfg, provider, force_refresh=request.method == "POST", request_payload=request_payload)

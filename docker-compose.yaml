@@ -14,7 +14,7 @@ services:
       - SORTARR_ALLOW_PLAINTEXT_SECRETS=0
       - SORTARR_ALLOW_UNSAFE_EPHEMERAL_RECOVERY=0
       # Optional: allow embedding Sortarr inside a trusted parent origin
-      # eg. SORTARR_FRAME_ANCESTORS=https://dash.example.com
+      # eg. SORTARR_FRAME_ANCESTORS=http://your-trusted-origin
       # Optional: Reverse proxy preset (recommended):
       # eg. SORTARR_PROXY_MODE=single
       # eg. SORTARR_PROXY_MODE=double

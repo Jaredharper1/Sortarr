@@ -104,6 +104,31 @@ body {
   font-size: 0.9rem;
 }
 
+.setup-source-summary {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .setup-provider-chip-row {
+    display: none !important;
+  }
+
+  .setup-source-summary {
+    gap: 6px;
+  }
+}
+
+.setup-hint--subtle {
+  color: var(--text-muted);
+  opacity: 0.9;
+}
+
+.setup-source-note[hidden] {
+  display: none;
+}
+
 .setup-form {
   display: grid;
   gap: 10px;
@@ -368,6 +393,43 @@ html[data-theme="dark"] .setup-task-section--security {
   max-width: calc(100% - 24px);
 }
 
+.setup-provider-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.setup-provider-chip {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 180px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  background: rgba(148, 163, 184, 0.08);
+}
+
+.setup-provider-chip--different {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(191, 219, 254, 0.1);
+}
+
+.setup-provider-chip__role {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.setup-provider-chip__detail {
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text);
+}
+
 .setup-task-status {
   width: fit-content;
   padding: 4px 9px;
@@ -406,11 +468,51 @@ html[data-theme="dark"] .setup-task-status--needs-attention {
   color: #ffb4b4;
 }
 
+html[data-theme="dark"] .setup-provider-chip {
+  border-color: rgba(148, 163, 184, 0.22);
+  background: rgba(30, 41, 59, 0.3);
+}
+
+html[data-theme="dark"] .setup-provider-chip--different {
+  border-color: rgba(96, 165, 250, 0.26);
+  background: rgba(30, 58, 138, 0.22);
+}
+
 .setup-task-summary,
 .setup-task-meta {
   color: var(--muted);
   font-size: 0.86rem;
   line-height: 1.45;
+}
+
+.setup-task-helper {
+  color: var(--text);
+  font-size: 0.85rem;
+  line-height: 1.45;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(96, 165, 250, 0.18);
+  background: rgba(191, 219, 254, 0.08);
+}
+
+html[data-theme="dark"] .setup-task-helper {
+  border-color: rgba(96, 165, 250, 0.22);
+  background: rgba(30, 41, 59, 0.36);
+}
+
+.setup-inline-details {
+  margin-top: 10px;
+}
+
+.setup-inline-details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.setup-inline-details[open] > summary {
+  margin-bottom: 8px;
 }
 
 .setup-task-details {

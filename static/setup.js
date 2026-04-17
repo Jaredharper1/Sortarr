@@ -369,6 +369,10 @@
   }
 
   function updateHistorySourceLock() {
+    const tracearrFields = [
+      document.querySelector('[name="tracearr_url"]'),
+      document.querySelector('[name="tracearr_api_key"]'),
+    ];
     const jellyFields = [
       document.querySelector('[name="jellystat_url"]'),
       document.querySelector('[name="jellystat_api_key"]'),
@@ -379,16 +383,21 @@
       document.querySelector('[name="tautulli_url"]'),
       document.querySelector('[name="tautulli_api_key"]'),
     ];
+    const tracearrTest = document.querySelector('.setup-test[data-kind="tracearr"]');
     const jellyTest = document.querySelector('.setup-test[data-kind="jellystat"]');
     const tautulliTest = document.querySelector('.setup-test[data-kind="tautulli"]');
+    tracearrFields.forEach((field) => toggleFieldDisabled(field, false));
     jellyFields.forEach((field) => toggleFieldDisabled(field, false));
     tautulliFields.forEach((field) => toggleFieldDisabled(field, false));
+    toggleButtonDisabled(tracearrTest, !setupTestsEnabled);
     toggleButtonDisabled(jellyTest, !setupTestsEnabled);
     toggleButtonDisabled(tautulliTest, !setupTestsEnabled);
   }
 
   function initHistorySourceLock() {
     const fields = [
+      document.querySelector('[name="tracearr_url"]'),
+      document.querySelector('[name="tracearr_api_key"]'),
       document.querySelector('[name="tautulli_url"]'),
       document.querySelector('[name="tautulli_api_key"]'),
       document.querySelector('[name="jellystat_url"]'),
@@ -566,20 +575,27 @@
   function updateMediaSourceGuidance() {
     const mediaSource = document.querySelector('[name="media_source_preference"]');
     const plexNotice = document.getElementById("plexMediaSourceNotice");
+    const embyNotice = document.getElementById("embyMediaSourceNotice");
     const jellyfinNotice = document.getElementById("jellyfinMediaSourceNotice");
     const arrActions = document.getElementById("arrMediaSourceActions");
     const arrBlock = document.getElementById("arrMediaSourceBlock");
     const plexMount = document.getElementById("plexMediaSourceMount");
+    const embyMount = document.getElementById("embyMediaSourceMount");
     const jellyfinMount = document.getElementById("jellyfinMediaSourceMount");
     const plexReuseNotice = document.getElementById("plexHistoryReuseNotice");
-    if (!mediaSource || !plexNotice || !jellyfinNotice) return;
+    if (!mediaSource || !plexNotice || !embyNotice || !jellyfinNotice) return;
     const mediaValue = String(mediaSource.value || "").trim().toLowerCase();
     const isPlex = mediaValue === "plex";
+    const isEmby = mediaValue === "emby";
     const isJellyfin = mediaValue === "jellyfin";
     plexNotice.classList.toggle("hidden", !isPlex);
+    embyNotice.classList.toggle("hidden", !isEmby);
     jellyfinNotice.classList.toggle("hidden", !isJellyfin);
     if (plexMount) {
       plexMount.classList.toggle("hidden", !isPlex);
+    }
+    if (embyMount) {
+      embyMount.classList.toggle("hidden", !isEmby);
     }
     if (jellyfinMount) {
       jellyfinMount.classList.toggle("hidden", !isJellyfin);
@@ -589,9 +605,9 @@
     }
     if (!arrBlock || !arrActions) return;
     const keepArrVisible = String(arrBlock.dataset.userRevealed || "0") === "1";
-    const showArrBlock = (!isPlex && !isJellyfin) || keepArrVisible;
+    const showArrBlock = (!isPlex && !isEmby && !isJellyfin) || keepArrVisible;
     arrBlock.classList.toggle("hidden", !showArrBlock);
-    arrActions.classList.toggle("hidden", (!isPlex && !isJellyfin) || showArrBlock);
+    arrActions.classList.toggle("hidden", (!isPlex && !isEmby && !isJellyfin) || showArrBlock);
   }
 
   function updatePlexProviderPlacement() {
@@ -603,6 +619,7 @@
     const isPlex = String(mediaSource.value || "").trim().toLowerCase() === "plex";
     if (isPlex) {
       step1Mount.appendChild(plexBlock);
+      plexBlock.classList.remove("hidden");
     } else {
       step3Mount.appendChild(plexBlock);
     }
@@ -617,8 +634,24 @@
     const isJellyfin = String(mediaSource.value || "").trim().toLowerCase() === "jellyfin";
     if (isJellyfin) {
       step1Mount.appendChild(jellyfinBlock);
+      jellyfinBlock.classList.remove("hidden");
     } else {
       step3Mount.appendChild(jellyfinBlock);
+    }
+  }
+
+  function updateEmbyProviderPlacement() {
+    const mediaSource = document.querySelector('[name="media_source_preference"]');
+    const embyBlock = document.getElementById("embyProviderBlock");
+    const step1Mount = document.getElementById("embyMediaSourceMount");
+    const step3Mount = document.getElementById("embyPlaybackProviderMount");
+    if (!mediaSource || !embyBlock || !step1Mount || !step3Mount) return;
+    const isEmby = String(mediaSource.value || "").trim().toLowerCase() === "emby";
+    if (isEmby) {
+      step1Mount.appendChild(embyBlock);
+      embyBlock.classList.remove("hidden");
+    } else {
+      step3Mount.appendChild(embyBlock);
     }
   }
 
@@ -631,10 +664,12 @@
     const reviewPlexPlaybackBtn = document.getElementById("reviewPlexPlaybackBtn");
     const reviewJellyfinPlaybackBtn = document.getElementById("reviewJellyfinPlaybackBtn");
     const reviewPlexPlaybackMediaBtn = document.getElementById("reviewPlexPlaybackMediaBtn");
+    const reviewEmbyPlaybackMediaBtn = document.getElementById("reviewEmbyPlaybackMediaBtn");
     const reviewJellyfinPlaybackMediaBtn = document.getElementById("reviewJellyfinPlaybackMediaBtn");
     if (mediaSource) {
       mediaSource.addEventListener("change", () => {
         updatePlexProviderPlacement();
+        updateEmbyProviderPlacement();
         updateJellyfinProviderPlacement();
         updateMediaSourceGuidance();
         updateHistoryProviderOrdering();
@@ -642,6 +677,7 @@
         updatePlaybackProviderVisibility();
       });
       updatePlexProviderPlacement();
+      updateEmbyProviderPlacement();
       updateJellyfinProviderPlacement();
       updateMediaSourceGuidance();
     }
@@ -706,6 +742,15 @@
         }
       });
     }
+    if (reviewEmbyPlaybackMediaBtn) {
+      reviewEmbyPlaybackMediaBtn.addEventListener("click", async () => {
+        await openGuideStep(1);
+        const embyUrlField = document.querySelector('[name="emby_url"]');
+        if (embyUrlField) {
+          embyUrlField.focus();
+        }
+      });
+    }
     if (reviewJellyfinPlaybackMediaBtn) {
       reviewJellyfinPlaybackMediaBtn.addEventListener("click", async () => {
         await openGuideStep(1);
@@ -719,7 +764,7 @@
 
   function preferredHistoryProviderOrder() {
     const historySource = String(getFieldValue("history_source_preference") || "").toLowerCase();
-    const providers = ["streamystats", "jellystat", "tautulli"];
+    const providers = ["tracearr", "streamystats", "jellystat", "tautulli"];
     let preferred = "";
     if (providers.includes(historySource)) {
       preferred = historySource;
@@ -886,27 +931,28 @@
   }
 
   function selectedMediaSourceIntent() {
-    return String(getFieldValue("media_source_preference") || "arr").toLowerCase();
+    return String(buildSetupProviderState().media.selected || "arr").toLowerCase();
   }
 
   function selectedHistorySourceIntent() {
-    return String(getFieldValue("history_source_preference") || "auto").toLowerCase();
+    return String(buildSetupProviderState().history.selected || "auto").toLowerCase();
   }
 
   function selectedInsightsProviderIntent() {
-    return String(getFieldValue("insights_provider_preference") || "auto").toLowerCase();
+    return String(buildSetupProviderState().enrichment.selected || "auto").toLowerCase();
   }
 
   function isReusingPlexHistoryFromMedia() {
-    const mediaSource = selectedMediaSourceIntent();
-    const historySource = selectedHistorySourceIntent();
-    return mediaSource === "plex" && (historySource === "auto" || historySource === "plex") && providerConfigured("plex");
+    const state = buildSetupProviderState();
+    return String(state.history.reason || "").trim().toLowerCase() === "reusing plex from media source"
+      || String(state.history.reason || "").trim().toLowerCase() === "auto selected, reusing plex from media source";
   }
 
   function preferredHistoryProvider() {
-    const mediaSource = selectedMediaSourceIntent();
-    const historySource = selectedHistorySourceIntent();
-    if (["plex", "jellystat", "streamystats", "tautulli"].includes(historySource)) {
+    const state = buildSetupProviderState();
+    const mediaSource = String(state.media.selected || "").toLowerCase();
+    const historySource = String(state.history.selected || "").toLowerCase();
+    if (["plex", "tracearr", "jellystat", "streamystats", "tautulli"].includes(historySource)) {
       return historySource;
     }
     if (historySource === "auto" && mediaSource === "plex") {
@@ -920,6 +966,7 @@
     const plexReuseNotice = document.getElementById("plexHistoryReuseNotice");
     const plexIntentNotice = document.getElementById("plexHistoryIntentNotice");
     const tautulliIntentNotice = document.getElementById("tautulliHistoryIntentNotice");
+    const tracearrIntentNotice = document.getElementById("tracearrHistoryIntentNotice");
     const jellystatIntentNotice = document.getElementById("jellystatHistoryIntentNotice");
     const streamystatsIntentNotice = document.getElementById("streamystatsHistoryIntentNotice");
     const usingPlexReuse = isReusingPlexHistoryFromMedia();
@@ -931,6 +978,9 @@
     }
     if (tautulliIntentNotice) {
       tautulliIntentNotice.classList.toggle("hidden", historySource !== "tautulli");
+    }
+    if (tracearrIntentNotice) {
+      tracearrIntentNotice.classList.toggle("hidden", historySource !== "tracearr");
     }
     if (jellystatIntentNotice) {
       jellystatIntentNotice.classList.toggle("hidden", historySource !== "jellystat");
@@ -955,7 +1005,7 @@
       if (!provider) return;
       const isConfigured = blockHasContent(block);
       const isRevealed = String(block.dataset.userRevealed || "0") === "1";
-      const preferSpecificProvider = ["streamystats", "jellystat", "tautulli"].includes(historySource);
+      const preferSpecificProvider = ["tracearr", "streamystats", "jellystat", "tautulli"].includes(historySource);
       const shouldShow =
         isRevealed ||
           provider === preferred ||
@@ -1037,19 +1087,24 @@
   }
 
   function updatePlaybackIntentGuidance() {
-    const mediaSource = selectedMediaSourceIntent();
+    const mediaEffective = String(buildSetupProviderState().media?.effective || "").toLowerCase();
     const plexReuseNotice = document.getElementById("plexPlaybackReuseNotice");
+    const embyReuseNotice = document.getElementById("embyPlaybackReuseNotice");
     const jellyfinReuseNotice = document.getElementById("jellyfinPlaybackReuseNotice");
     if (plexReuseNotice) {
-      plexReuseNotice.classList.toggle("hidden", mediaSource !== "plex");
+      plexReuseNotice.classList.toggle("hidden", mediaEffective !== "plex");
+    }
+    if (embyReuseNotice) {
+      embyReuseNotice.classList.toggle("hidden", mediaEffective !== "emby");
     }
     if (jellyfinReuseNotice) {
-      jellyfinReuseNotice.classList.toggle("hidden", mediaSource !== "jellyfin");
+      jellyfinReuseNotice.classList.toggle("hidden", mediaEffective !== "jellyfin");
     }
   }
 
   function updatePlaybackProviderVisibility() {
     updatePlexProviderPlacement();
+    updateEmbyProviderPlacement();
     updateJellyfinProviderPlacement();
     updatePlaybackIntentGuidance();
     const actions = document.getElementById("playbackProviderActions");
@@ -1058,6 +1113,7 @@
 
     const mediaSource = selectedMediaSourceIntent();
     const historySource = selectedHistorySourceIntent();
+    const insightsProvider = selectedInsightsProviderIntent();
     const visibleProviders = new Set();
 
     container.querySelectorAll("[data-playback-provider]").forEach((block) => {
@@ -1066,7 +1122,9 @@
       const isConfigured = blockHasContent(block);
       const isRevealed = String(block.dataset.userRevealed || "0") === "1";
       const neededForHistory = historySource === provider;
-      const shouldShow = isRevealed || isConfigured || neededForHistory;
+      const neededForMedia = mediaSource === provider;
+      const neededForInsights = insightsProvider === provider;
+      const shouldShow = isRevealed || isConfigured || neededForHistory || neededForMedia || neededForInsights;
       block.classList.toggle("hidden", !shouldShow);
       if (shouldShow) {
         visibleProviders.add(provider);
@@ -1179,11 +1237,130 @@
 
   function providerConfigured(provider) {
     if (provider === "plex") return instanceConfigured("plex_url", "plex_token");
+    if (provider === "emby") return instanceConfigured("emby_url", "emby_api_key");
     if (provider === "jellyfin") return instanceConfigured("jellyfin_url", "jellyfin_api_key");
     if (provider === "tautulli") return instanceConfigured("tautulli_url", "tautulli_api_key");
+    if (provider === "tracearr") return instanceConfigured("tracearr_url", "tracearr_api_key");
     if (provider === "jellystat") return instanceConfigured("jellystat_url", "jellystat_api_key");
     if (provider === "streamystats") return instanceConfigured("streamystats_url", "streamystats_api_key") && streamystatsCredentialsConfigured();
     return false;
+  }
+
+  function getInitialSetupProviderState() {
+    const script = document.getElementById("setup-provider-state-json");
+    if (!script) return {};
+    try {
+      return JSON.parse(script.textContent || "{}") || {};
+    } catch {
+      return {};
+    }
+  }
+
+  function buildSetupProviderState() {
+    const initial = getInitialSetupProviderState();
+    const mediaSelected = String(getFieldValue("media_source_preference") || initial?.media?.selected || "arr").toLowerCase();
+    const historySelected = String(getFieldValue("history_source_preference") || initial?.history?.selected || "auto").toLowerCase();
+    const enrichmentSelected = String(getFieldValue("insights_provider_preference") || initial?.enrichment?.selected || "auto").toLowerCase();
+
+    const mediaAvailable = [];
+    const hasArrMedia = instanceConfigured("sonarr_url", "sonarr_api_key") || instanceConfigured("radarr_url", "radarr_api_key");
+    if (hasArrMedia) mediaAvailable.push("arr");
+    if (providerConfigured("emby")) mediaAvailable.push("emby");
+    if (providerConfigured("jellyfin")) mediaAvailable.push("jellyfin");
+    if (providerConfigured("plex")) mediaAvailable.push("plex");
+
+    let mediaEffective = "";
+    if (mediaSelected === "arr") mediaEffective = hasArrMedia ? "arr" : "";
+    else if (mediaSelected === "emby") mediaEffective = providerConfigured("emby") ? "emby" : "";
+    else if (mediaSelected === "jellyfin") mediaEffective = providerConfigured("jellyfin") ? "jellyfin" : "";
+    else if (mediaSelected === "plex") mediaEffective = providerConfigured("plex") ? "plex" : "";
+    else if (mediaSelected === "auto") mediaEffective = mediaAvailable[0] || "";
+    let mediaReason = "";
+    if (mediaSelected === "auto") {
+      mediaReason = mediaEffective ? "auto selected, using first available provider" : "no media providers are configured";
+    } else if (!mediaEffective) {
+      mediaReason = "selected provider is not configured";
+    }
+
+    const historyAvailable = [];
+    if (providerConfigured("tautulli")) historyAvailable.push("tautulli");
+    if (providerConfigured("tracearr")) historyAvailable.push("tracearr");
+    if (providerConfigured("jellystat")) historyAvailable.push("jellystat");
+    if (providerConfigured("streamystats")) historyAvailable.push("streamystats");
+    if (providerConfigured("plex")) historyAvailable.push("plex");
+
+    let historyEffective = "";
+    if (historySelected !== "auto") {
+      historyEffective = historyAvailable.includes(historySelected) ? historySelected : "";
+    } else {
+      historyEffective = historyAvailable[0] || "";
+    }
+    let historyReason = "";
+    if (historySelected === "auto") {
+      if (historyEffective === "plex" && mediaEffective === "plex") {
+        historyReason = "auto selected, reusing Plex from media source";
+      } else if (historyEffective) {
+        historyReason = "auto selected, using first available provider";
+      } else {
+        historyReason = "no history providers are configured";
+      }
+    } else if (!historyEffective) {
+      historyReason = "selected provider is not configured";
+    } else if (historySelected === "plex" && mediaEffective === "plex") {
+      historyReason = "reusing Plex from media source";
+    }
+
+    const enrichmentAvailable = [];
+    if (providerConfigured("plex")) enrichmentAvailable.push("plex");
+    if (providerConfigured("emby")) enrichmentAvailable.push("emby");
+    if (providerConfigured("jellyfin")) enrichmentAvailable.push("jellyfin");
+
+    let enrichmentEffective = "";
+    if (enrichmentSelected === "plex") enrichmentEffective = providerConfigured("plex") ? "plex" : "";
+    else if (enrichmentSelected === "emby") enrichmentEffective = providerConfigured("emby") ? "emby" : "";
+    else if (enrichmentSelected === "jellyfin") enrichmentEffective = providerConfigured("jellyfin") ? "jellyfin" : "";
+    else {
+      if (["plex", "jellyfin", "emby"].includes(historyEffective)) enrichmentEffective = historyEffective;
+      else if (["plex", "jellyfin", "emby"].includes(mediaEffective)) enrichmentEffective = mediaEffective;
+      else enrichmentEffective = enrichmentAvailable[0] || "";
+    }
+    let enrichmentReason = "";
+    if (enrichmentSelected === "auto") {
+      if (enrichmentEffective) {
+        if (enrichmentEffective === historyEffective && ["plex", "jellyfin", "emby"].includes(historyEffective)) {
+          enrichmentReason = "auto selected, following history source";
+        } else if (enrichmentEffective === mediaEffective && ["plex", "jellyfin", "emby"].includes(mediaEffective)) {
+          enrichmentReason = "auto selected, following media source";
+        } else {
+          enrichmentReason = "auto selected, using first available provider";
+        }
+      } else {
+        enrichmentReason = "no enrichment providers are configured";
+      }
+    } else if (!enrichmentEffective) {
+      enrichmentReason = "selected provider is not configured";
+    }
+
+    return {
+      media: {
+        selected: mediaSelected,
+        available: mediaAvailable,
+        effective: mediaEffective,
+        reason: mediaReason,
+      },
+      history: {
+        selected: historySelected,
+        available: historyAvailable,
+        effective: historyEffective,
+        reason: historyReason,
+      },
+      enrichment: {
+        selected: enrichmentSelected,
+        available: enrichmentAvailable,
+        effective: enrichmentEffective,
+        reason: enrichmentReason,
+      },
+    };
   }
 
   function getFieldErrors() {
@@ -1205,8 +1382,10 @@
       radarr_2: "radarr_url_2",
       radarr_3: "radarr_url_3",
       plex: "plex_url",
+      emby: "emby_url",
       jellyfin: "jellyfin_url",
       tautulli: "tautulli_url",
+      tracearr: "tracearr_url",
       jellystat: "jellystat_url",
       streamystats: "streamystats_url",
     };
@@ -1217,6 +1396,13 @@
     const name = String(field || "").trim();
     const mediaSource = selectedMediaSourceIntent();
     const plexFields = ["plex_url", "plex_token", "plex_section_filters"];
+    const embyFields = [
+      "emby_url",
+      "emby_api_key",
+      "emby_user_id",
+      "emby_library_ids_sonarr",
+      "emby_library_ids_radarr",
+    ];
     const jellyfinFields = [
       "jellyfin_url",
       "jellyfin_api_key",
@@ -1227,10 +1413,12 @@
       "jellyfin_library_ids_radarr",
     ];
     if (name.startsWith("sonarr_") || name.startsWith("radarr_") || name === "media_source_preference") return 1;
-    if (name === "history_source_preference" || ["jellystat_url", "jellystat_api_key", "jellystat_library_ids_sonarr", "jellystat_library_ids_radarr", "streamystats_url", "streamystats_api_key", "streamystats_server_id", "streamystats_username", "streamystats_password", "tautulli_url", "tautulli_api_key"].includes(name)) return 2;
+    if (name === "history_source_preference" || ["tracearr_url", "tracearr_api_key", "jellystat_url", "jellystat_api_key", "jellystat_library_ids_sonarr", "jellystat_library_ids_radarr", "streamystats_url", "streamystats_api_key", "streamystats_server_id", "streamystats_username", "streamystats_password", "tautulli_url", "tautulli_api_key"].includes(name)) return 2;
+    if (name === "insights_provider_preference") return 3;
     if (plexFields.includes(name)) return mediaSource === "plex" ? 1 : 3;
+    if (embyFields.includes(name)) return mediaSource === "emby" ? 1 : 3;
     if (jellyfinFields.includes(name)) return mediaSource === "jellyfin" ? 1 : 3;
-    if (["sortarr_auth_method", "basic_auth_user", "basic_auth_pass", "sortarr_upstream_auth_header", "proxy_preset", "sortarr_secret_key", "clear_basic_auth_pass"].includes(name)) return 4;
+    if (["sortarr_auth_method", "basic_auth_user", "basic_auth_pass", "sortarr_local_auth_bypass", "sortarr_local_auth_bypass_cidrs", "sortarr_upstream_auth_header", "proxy_preset", "sortarr_secret_key", "clear_basic_auth_pass"].includes(name)) return 4;
     return 5;
   }
 
@@ -1310,119 +1498,139 @@
     el.textContent = label;
   }
 
-  function summarizeMediaStep() {
-    const labels = [];
-    const mediaPref = String(getFieldValue("media_source_preference") || "auto").toLowerCase();
-    const hasSonarr = instanceConfigured("sonarr_url", "sonarr_api_key");
-    const hasRadarr = instanceConfigured("radarr_url", "radarr_api_key");
-    const hasPlex = providerConfigured("plex");
-    const hasJellyfin = providerConfigured("jellyfin");
-    const arrConfigured = [];
-    if (hasSonarr) arrConfigured.push("Sonarr");
-    if (hasRadarr) arrConfigured.push("Radarr");
-    if (mediaPref === "plex") {
-      labels.push("Media info source: Plex");
-      if (hasPlex) {
-        labels.push("Plex connected");
-      } else {
-        labels.push("Plex connection needed");
-      }
-      if (arrConfigured.length) {
-        labels.push(`Extra connections: ${arrConfigured.join(", ")}`);
-      }
-    } else if (mediaPref === "jellyfin") {
-      labels.push("Media info source: Jellyfin");
-      if (hasJellyfin) {
-        labels.push("Jellyfin connected");
-      } else {
-        labels.push("Jellyfin connection needed");
-      }
-      if (arrConfigured.length) {
-        labels.push(`Extra connections: ${arrConfigured.join(", ")}`);
-      }
-    } else if (mediaPref === "arr") {
-      labels.push("Media info source: Sonarr/Radarr");
-      if (arrConfigured.length) {
-        labels.push(`Configured: ${arrConfigured.join(", ")}`);
-      } else {
-        labels.push("Arr connection needed");
-      }
-      if (hasPlex) {
-        labels.push("Plex available separately");
-      }
-      if (hasJellyfin) {
-        labels.push("Jellyfin available separately");
-      }
-    } else {
-      labels.push("Media info source: Auto");
-      const configured = [];
-      if (arrConfigured.length) configured.push(arrConfigured.join(", "));
-      if (hasJellyfin) configured.push("Jellyfin");
-      if (hasPlex) configured.push("Plex");
-      if (configured.length) {
-        labels.push(`Available: ${configured.join(" + ")}`);
-      } else {
-        labels.push("No media connections yet");
-      }
+  function roleLabel(role) {
+    if (role === "media") return "media";
+    if (role === "history") return "history";
+    return "enrichment";
+  }
+
+  function providerStateDisplayValue(state, key) {
+    if (key === "effective" && !state?.effective) {
+      return "none";
     }
-    return labels.join(" · ");
+    return sourceLabel(state?.[key]);
+  }
+
+  function formatRoleLine(prefix, roleStateKey, valueKey) {
+    const state = buildSetupProviderState()[roleStateKey] || {};
+    return `${prefix}: ${roleLabel(roleStateKey).replace(/^./, (ch) => ch.toUpperCase())}: ${providerStateDisplayValue(state, valueKey)}`;
+  }
+
+  function summarizeRoleStep(roleStateKey) {
+    const state = buildSetupProviderState()[roleStateKey];
+    const selectedLabel = sourceLabel(state.selected);
+    const available = Array.isArray(state.available) ? state.available : [];
+    const alternates = available
+      .filter((provider) => provider && provider !== state.selected && provider !== state.effective)
+      .map(sourceLabel);
+    const parts = [`Selected: ${selectedLabel}`];
+    if (!state.effective) {
+      parts.push("Using: none");
+    } else if (state.selected === "auto" || state.effective !== state.selected) {
+      parts.push(`Using: ${sourceLabel(state.effective)}`);
+    } else if (alternates.length) {
+      parts.push(`Also ready: ${alternates.join(", ")}`);
+    }
+    return parts.join(" · ");
+  }
+
+  function summarizeMediaStep() {
+    return summarizeRoleStep("media");
   }
 
   function summarizeHistoryStep() {
-    const historyPref = selectedHistorySourceIntent();
-    const prefLabel = historyPref === "auto" ? "Auto" : sourceLabel(historyPref);
-    const configured = [];
-    if (providerConfigured("tautulli")) configured.push("Tautulli");
-    if (providerConfigured("jellystat")) configured.push("Jellystat");
-    if (providerConfigured("streamystats")) configured.push("Streamystats");
-    if (isReusingPlexHistoryFromMedia()) {
-      return `History source: ${prefLabel} · Reusing Plex from Step 1`;
-    }
-    if (historyPref === "plex") {
-      return `History source: Plex · ${providerConfigured("plex") ? "Step 3 connection ready" : "Configure Plex in Step 3"}`;
-    }
-    if (historyPref === "tautulli") {
-      return `History source: Tautulli · ${providerConfigured("tautulli") ? "Tautulli configured" : "Tautulli connection needed"}`;
-    }
-    if (historyPref === "jellystat") {
-      return `History source: Jellystat · ${providerConfigured("jellystat") ? "Jellystat configured" : "Jellystat connection needed"}`;
-    }
-    if (historyPref === "streamystats") {
-      return `History source: Streamystats · ${providerConfigured("streamystats") ? "Streamystats configured" : "Streamystats connection needed"}`;
-    }
-    const effectiveHistory =
-      providerConfigured("tautulli") ? "Tautulli" :
-      providerConfigured("jellystat") ? "Jellystat" :
-      providerConfigured("streamystats") ? "Streamystats" :
-      providerConfigured("plex") ? "Plex" :
-      "";
-    if (!configured.length) {
-      return `History source: ${prefLabel} · No history providers configured`;
-    }
-    if (historyPref === "auto" && effectiveHistory) {
-      return `History source: Auto · Currently using ${effectiveHistory}`;
-    }
-    return `History source: ${prefLabel} · Configured: ${configured.join(", ")}`;
+    return summarizeRoleStep("history");
   }
 
   function summarizePlaybackStep() {
-    const labels = [];
-    const mediaSource = selectedMediaSourceIntent();
-    const historySource = selectedHistorySourceIntent();
-    const insightsProvider = selectedInsightsProviderIntent();
-    if (providerConfigured("plex")) {
-      labels.push(mediaSource === "plex" ? "Plex via Step 1" : "Plex connected");
-    } else if (historySource === "plex" && !isReusingPlexHistoryFromMedia()) {
-      labels.push("Plex connection needed");
+    return summarizeRoleStep("enrichment");
+  }
+
+  function summarizeRoleHelper(roleStateKey) {
+    const state = buildSetupProviderState()[roleStateKey] || {};
+    const roleName = roleLabel(roleStateKey);
+    const roleTitle = roleName.charAt(0).toUpperCase() + roleName.slice(1);
+    const selectedLabel = sourceLabel(state.selected);
+    const effectiveLabel = sourceLabel(state.effective);
+    const reason = String(state.reason || "").trim().toLowerCase();
+    if (state.selected === "auto") {
+      if (state.effective) {
+        if (reason === "auto selected, reusing plex from media source") {
+          return `${roleTitle} is set to Auto, so Sortarr is currently using Plex from Step 1.`;
+        }
+        if (reason === "auto selected, following history source") {
+          return `${roleTitle} is set to Auto, so Sortarr is currently following your history choice: ${effectiveLabel}.`;
+        }
+        if (reason === "auto selected, following media source") {
+          return `${roleTitle} is set to Auto, so Sortarr is currently following your media choice: ${effectiveLabel}.`;
+        }
+        return `${roleTitle} is set to Auto, so Sortarr is currently using ${effectiveLabel}.`;
+      }
+      return `${roleTitle} is set to Auto, but nothing is ready to use yet.`;
     }
-    if (providerConfigured("jellyfin")) {
-      labels.push(mediaSource === "jellyfin" ? "Jellyfin via Step 1" : "Jellyfin connected");
+    if (!state.effective) {
+      return `${selectedLabel} is selected for ${roleName}, but it is not configured yet, so ${roleName} is currently unavailable.`;
     }
-    if (!labels.length) {
-      return "No playback providers connected";
+    if (reason === "reusing plex from media source") {
+      return `${selectedLabel} is selected for ${roleName} and Sortarr is using the same Plex details from Step 1.`;
     }
-    const preferredLabel = insightsProvider === "auto" ? "Auto" : sourceLabel(insightsProvider);
-    return `Playback enrichment: ${labels.join(", ")} · Preferred insights: ${preferredLabel}`;
+    if (state.selected === state.effective) {
+      return `${selectedLabel} is selected for ${roleName} and is currently in use.`;
+    }
+    return `${selectedLabel} is selected for ${roleName}, but ${effectiveLabel} is currently active.`;
+  }
+
+  function buildProviderStateExplanation(state) {
+    const grouped = new Map();
+    ["media", "history", "enrichment"].forEach((roleKey) => {
+      const roleState = state[roleKey] || {};
+      if (!roleState || roleState.selected === roleState.effective) return;
+      if (roleState.selected === "auto") return;
+      const selectedLabel = sourceLabel(roleState.selected);
+      const effectiveLabel = sourceLabel(roleState.effective);
+      const roleName = roleLabel(roleKey);
+      const existing = grouped.get(selectedLabel) || [];
+      if (!roleState.effective) {
+        existing.push(roleName);
+        grouped.set(selectedLabel, existing);
+        return;
+      }
+      existing.push(`${roleName}:${effectiveLabel}`);
+      grouped.set(selectedLabel, existing);
+    });
+    return Array.from(grouped.entries()).map(([selectedLabel, items]) => {
+      const unavailableRoles = items.filter((item) => !item.includes(":"));
+      if (unavailableRoles.length) {
+        return `${selectedLabel} is selected for ${unavailableRoles.join(" and ")}, but it is not configured yet.`;
+      }
+      const mapped = items.map((item) => {
+        const [roleName, effectiveLabel] = String(item).split(":", 2);
+        return `${roleName} is using ${effectiveLabel}`;
+      });
+      return `${selectedLabel} is selected, but ${mapped.join(" and ")}.`;
+    }).join(" ");
+  }
+
+  function updateProviderStateChips(state) {
+    const chipMap = {
+      media: document.getElementById("setupProviderChipMedia"),
+      history: document.getElementById("setupProviderChipHistory"),
+      enrichment: document.getElementById("setupProviderChipEnrichment"),
+    };
+    Object.entries(chipMap).forEach(([roleKey, chip]) => {
+      if (!chip) return;
+      const roleState = state[roleKey] || {};
+      const selectedLabel = providerStateDisplayValue(roleState, "selected");
+      const effectiveLabel = providerStateDisplayValue(roleState, "effective");
+      const detail = chip.querySelector(".setup-provider-chip__detail");
+      if (detail) {
+        detail.textContent = `Selected: ${selectedLabel} · Effective: ${effectiveLabel}`;
+      }
+      chip.classList.toggle(
+        "setup-provider-chip--different",
+        String(roleState.selected || "") !== String(roleState.effective || ""),
+      );
+    });
   }
 
   function summarizeSecurityStep() {
@@ -1431,7 +1639,9 @@
     const hasSecretValue = fieldHasEffectiveSecret("sortarr_secret_key");
     const form = document.querySelector(".setup-form");
     const ephemeral = Boolean(form && String(form.dataset.ephemeralSecret || "0") === "1");
-    const authLabel = authMethod === "external" ? "External auth" : "Basic auth";
+    const authLabel = authMethod === "external"
+      ? "External auth"
+      : (authMethod === "basic_local_bypass" ? "Basic + local bypass" : "Basic auth");
     const proxyLabelMap = {
       direct: "Direct proxy mode",
       single: "Single proxy mode",
@@ -1455,70 +1665,70 @@
     const step1 = document.getElementById("setupStep1Summary");
     const step2 = document.getElementById("setupStep2Summary");
     const step3 = document.getElementById("setupStep3Summary");
+    const step1Helper = document.getElementById("setupStep1Helper");
+    const step2Helper = document.getElementById("setupStep2Helper");
+    const step3Helper = document.getElementById("setupStep3Helper");
     const step4 = document.getElementById("setupStep4Summary");
     const step5 = document.getElementById("setupStep5Summary");
     if (step1) step1.textContent = summarizeMediaStep();
     if (step2) step2.textContent = summarizeHistoryStep();
     if (step3) step3.textContent = summarizePlaybackStep();
+    if (step1Helper) step1Helper.textContent = summarizeRoleHelper("media");
+    if (step2Helper) step2Helper.textContent = summarizeRoleHelper("history");
+    if (step3Helper) step3Helper.textContent = summarizeRoleHelper("enrichment");
     if (step4) step4.textContent = summarizeSecurityStep();
     if (step5) step5.textContent = summarizeAdvancedStep();
     updateStepStatuses();
+    updateEffectiveSourcesHint();
   }
 
   function updateStepStatuses() {
-    const mediaPref = String(getFieldValue("media_source_preference") || "auto").toLowerCase();
-    const historyPref = String(getFieldValue("history_source_preference") || "auto").toLowerCase();
-    const hasArrMedia = instanceConfigured("sonarr_url", "sonarr_api_key") || instanceConfigured("radarr_url", "radarr_api_key");
-    const hasJellyfinMedia = providerConfigured("jellyfin");
-    const hasPlexMedia = providerConfigured("plex");
-    if (stepHasErrors(1) || (!hasArrMedia && !hasJellyfinMedia && !hasPlexMedia) || (mediaPref === "arr" && !hasArrMedia) || (mediaPref === "jellyfin" && !hasJellyfinMedia) || (mediaPref === "plex" && !hasPlexMedia)) {
-      setStepStatus("setupStep1Status", "needs-attention", !hasArrMedia && !hasJellyfinMedia && !hasPlexMedia ? "Action needed" : "Needs attention");
+    const state = buildSetupProviderState();
+    const media = state.media;
+    const history = state.history;
+    const enrichment = state.enrichment;
+    if (stepHasErrors(1) || (!media.available.length) || (media.selected !== "auto" && !media.effective)) {
+      setStepStatus("setupStep1Status", "needs-attention", "Needs setup");
     } else {
-      setStepStatus("setupStep1Status", "ready", "Ready");
+      setStepStatus("setupStep1Status", "ready", "In use");
     }
 
-    const anyHistory = providerConfigured("plex") || providerConfigured("jellystat") || providerConfigured("streamystats") || providerConfigured("tautulli");
-    const historyMissingPreferred =
-      (historyPref === "plex" && !providerConfigured("plex") && !isReusingPlexHistoryFromMedia()) ||
-      (["jellystat", "streamystats", "tautulli"].includes(historyPref) && !providerConfigured(historyPref));
-    if (stepHasErrors(2) || historyMissingPreferred) {
-      setStepStatus("setupStep2Status", "needs-attention", "Needs attention");
-    } else if (anyHistory) {
-      setStepStatus("setupStep2Status", "ready", "Ready");
+    if (stepHasErrors(2) || (history.selected !== "auto" && !history.effective)) {
+      setStepStatus("setupStep2Status", "needs-attention", "Needs setup");
+    } else if (history.available.length) {
+      setStepStatus("setupStep2Status", "ready", "In use");
     } else {
-      setStepStatus("setupStep2Status", "optional", "Optional");
+      setStepStatus("setupStep2Status", "optional", "Not set");
     }
 
-    const playbackNeedsPreferred =
-      historyPref === "plex" && !providerConfigured("plex") && !isReusingPlexHistoryFromMedia();
-    const anyPlayback = providerConfigured("plex") || providerConfigured("jellyfin");
-    if (stepHasErrors(3) || playbackNeedsPreferred) {
-      setStepStatus("setupStep3Status", "needs-attention", "Needs attention");
-    } else if (anyPlayback) {
-      setStepStatus("setupStep3Status", "configured", "Configured");
+    if (stepHasErrors(3) || (enrichment.selected !== "auto" && !enrichment.effective)) {
+      setStepStatus("setupStep3Status", "needs-attention", "Needs setup");
+    } else if (enrichment.available.length) {
+      setStepStatus("setupStep3Status", "configured", "Available");
     } else {
-      setStepStatus("setupStep3Status", "optional", "Optional");
+      setStepStatus("setupStep3Status", "optional", "Not set");
     }
 
     const authMethod = String(getFieldValue("sortarr_auth_method") || "basic").toLowerCase();
     const basicReady = Boolean(getFieldValue("basic_auth_user")) && fieldHasEffectiveSecret("basic_auth_pass");
     const externalReady = Boolean(getFieldValue("sortarr_upstream_auth_header"));
+    const localBypassReady = Boolean(getFieldValue("sortarr_local_auth_bypass")) && String(getFieldValue("proxy_preset") || "single").toLowerCase() === "direct";
     const secretReady = fieldHasEffectiveSecret("sortarr_secret_key") && !formFlag("ephemeralSecret");
-    if (stepHasErrors(4) || (authMethod === "basic" && !basicReady) || (authMethod === "external" && !externalReady) || !secretReady) {
-      const authReady = authMethod === "basic" ? basicReady : externalReady;
+    if (stepHasErrors(4) || (authMethod === "basic" && !basicReady) || (authMethod === "basic_local_bypass" && (!basicReady || !localBypassReady)) || (authMethod === "external" && !externalReady) || !secretReady) {
+      const authReady = authMethod === "external" ? externalReady : (authMethod === "basic_local_bypass" ? (basicReady && localBypassReady) : basicReady);
       const secretPendingOnly = !secretReady && authReady && !stepHasErrors(4);
-      setStepStatus("setupStep4Status", secretPendingOnly ? "configured" : "needs-attention", secretPendingOnly ? "Save required" : "Needs attention");
+      setStepStatus("setupStep4Status", secretPendingOnly ? "configured" : "needs-attention", secretPendingOnly ? "Save needed" : "Needs setup");
     } else {
       setStepStatus("setupStep4Status", "ready", "Ready");
     }
 
     const hasAdvancedOverrides = getAdvancedOverrideLabels().length > 0;
     if (stepHasErrors(5)) {
-      setStepStatus("setupStep5Status", "needs-attention", "Needs attention");
+      setStepStatus("setupStep5Status", "needs-attention", "Check settings");
     } else if (hasAdvancedOverrides) {
-      setStepStatus("setupStep5Status", "configured", "Configured");
+      setStepStatus("setupStep5Status", "configured", "Custom");
     } else {
-      setStepStatus("setupStep5Status", "optional", "Optional");
+      setStepStatus("setupStep5Status", "optional", "Default");
     }
   }
 
@@ -1592,15 +1802,22 @@
     const authMethod = document.querySelector('[name="sortarr_auth_method"]');
     const basicFields = document.getElementById("basicAuthFields");
     const externalFields = document.getElementById("externalAuthFields");
-    if (!authMethod || !basicFields || !externalFields) return;
-    const isExternal = String(authMethod.value || "").trim().toLowerCase() === "external";
+    const localBypassFields = document.getElementById("localAuthBypassFields");
+    if (!authMethod || !basicFields || !externalFields || !localBypassFields) return;
+    const mode = String(authMethod.value || "").trim().toLowerCase();
+    const isExternal = mode === "external";
+    const isLocalBypass = mode === "basic_local_bypass";
     basicFields.classList.toggle("hidden", isExternal);
     externalFields.classList.toggle("hidden", !isExternal);
+    localBypassFields.classList.toggle("hidden", !isLocalBypass);
     basicFields.querySelectorAll("input, select, textarea, button").forEach((field) => {
       toggleFieldDisabled(field, isExternal);
     });
     externalFields.querySelectorAll("input, select, textarea, button").forEach((field) => {
       toggleFieldDisabled(field, !isExternal);
+    });
+    localBypassFields.querySelectorAll("input, select, textarea, button").forEach((field) => {
+      toggleFieldDisabled(field, !isLocalBypass);
     });
   }
 
@@ -2208,33 +2425,60 @@
   function sourceLabel(value) {
     const key = String(value || "").trim().toLowerCase();
     if (key === "arr") return "Sonarr/Radarr";
+    if (key === "auto") return "Auto";
+    if (key === "emby") return "Emby";
     if (key === "jellyfin") return "Jellyfin";
     if (key === "plex") return "Plex";
     if (key === "tautulli") return "Tautulli";
+    if (key === "tracearr") return "Tracearr";
     if (key === "jellystat") return "Jellystat";
     if (key === "streamystats") return "Streamystats";
     if (key) return key;
     return "Auto";
   }
 
-  async function updateEffectiveSourcesHint() {
-    const el = document.getElementById("setupEffectiveSources");
-    if (!el) return;
-    if (formFlag("setupCompleted") || formFlag("securityLocked")) return;
-    try {
-      const res = await fetch(apiUrl("/api/config"), {
-        method: "GET",
-        credentials: "same-origin",
-      });
-      if (!res.ok) return;
-      const payload = await res.json();
-      const selected = (payload && payload.option_set && payload.option_set.selected) || {};
-      const media = sourceLabel(selected.media_source);
-      const history = sourceLabel(selected.history_source);
-      el.textContent = `Effective sources: Media ${media}, History ${history}`;
-    } catch {
-      // Keep server-rendered fallback when API is unavailable.
+  function currentEffectiveMediaSource() {
+    return String(buildSetupProviderState().media.effective || "").toLowerCase();
+  }
+
+  function currentEffectiveHistorySource() {
+    return String(buildSetupProviderState().history.effective || "").toLowerCase();
+  }
+
+  function currentEffectiveInsightsProvider() {
+    return String(buildSetupProviderState().enrichment.effective || "").toLowerCase();
+  }
+
+  function updateEffectiveSourcesHint() {
+    const selectedEl = document.getElementById("setupSelectedSources");
+    const effectiveEl = document.getElementById("setupEffectiveSources");
+    const noteEl = document.getElementById("setupSourceExplanation");
+    const state = buildSetupProviderState();
+    if (selectedEl) {
+      selectedEl.textContent = [
+        formatRoleLine("Selected", "media", "selected"),
+        `History: ${providerStateDisplayValue(state.history, "selected")}`,
+        `Enrichment: ${providerStateDisplayValue(state.enrichment, "selected")}`,
+      ].join(" | ");
     }
+    if (effectiveEl) {
+      effectiveEl.textContent = [
+        formatRoleLine("Effective", "media", "effective"),
+        `History: ${providerStateDisplayValue(state.history, "effective")}`,
+        `Enrichment: ${providerStateDisplayValue(state.enrichment, "effective")}`,
+      ].join(" | ");
+      const hasDifference = ["media", "history", "enrichment"].some((roleKey) => {
+        const roleState = state[roleKey] || {};
+        return String(roleState.selected || "") !== String(roleState.effective || "");
+      });
+      effectiveEl.hidden = !hasDifference;
+    }
+    if (noteEl) {
+      const note = buildProviderStateExplanation(state);
+      noteEl.textContent = note;
+      noteEl.hidden = !note;
+    }
+    updateProviderStateChips(state);
   }
 
   applyCategoryTranslations();

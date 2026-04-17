@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-04-16
+
+### Features
+- Added Emby direct media-source support for shows and movies, including setup/test wiring, cached background refresh, provider-aware drilldowns, image proxying, mismatch-center participation, and Emby-backed diagnostics and insights.
+- Added Emby as a selectable enrichment provider, including setup reuse when Emby is already chosen as the active media source.
+- Added Tracearr as a selectable history provider, including setup/test/save wiring, cache/refresh support, mismatch-center participation, and playback-match diagnostics support.
+- Tracearr support now uses its public API with automatic fallback from stable-ID matching to title/year matching when the newer public fields are unavailable.
+- Added an explicit `basic_local_bypass` authentication mode for trusted direct LAN installs. This mode requires configured Basic Auth credentials, a direct proxy mode, and an explicit local-bypass opt-in; only direct peer addresses in the configured local CIDRs can bypass the browser auth prompt, and forwarded headers are ignored for bypass decisions.
+- Auth modes are now explicitly split as:
+  - `basic`: Sortarr challenges every client with its own Basic Auth credentials.
+  - `basic_local_bypass`: Sortarr still requires Basic Auth credentials, but allowed direct local peers can bypass the browser auth prompt.
+  - `external`: Sortarr trusts a configured upstream auth header from a trusted reverse proxy and does not require Sortarr-managed Basic Auth for steady-state access.
+- Setup, `/api/config`, and setup bootstrap payloads now expose shared provider-state data for `media`, `history`, and `enrichment`, making selected, available, effective, and reason values explicit.
+
+### Fixes
+- Setup source selection is now authoritative: when a specific media, history, or enrichment provider is selected, Sortarr warns when that provider is not configured or not currently effective instead of silently falling back to another configured provider.
+- Split media-source, history-source, and enrichment-provider semantics more consistently across setup summaries, helper text, and provider-specific actions so history-only flows no longer imply that media-provider features are active.
+
 ## [0.8.9] - 2026-04-03
 
 ### Features

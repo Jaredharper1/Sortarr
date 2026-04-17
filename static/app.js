@@ -352,9 +352,12 @@ function sourceLabelFromKey(value) {
   const key = String(value || "").trim().toLowerCase();
   if (key === "arr") return t("sourceArr", "Sonarr/Radarr");
   if (key === "plex") return t("sourcePlex", "Plex");
+  if (key === "emby") return t("sourceEmby", "Emby");
   if (key === "jellyfin") return t("sourceJellyfin", "Jellyfin");
   if (key === "tautulli") return t("sourceTautulli", "Tautulli");
+  if (key === "tracearr") return t("sourceTracearr", "Tracearr");
   if (key === "jellystat") return t("sourceJellystat", "Jellystat");
+  if (key === "streamystats") return t("sourceStreamystats", "Streamystats");
   if (key === "auto") return t("sourceAuto", "Auto");
   return key || t("sourceNone", "None");
 }
@@ -533,9 +536,10 @@ function setElementVisible(el, visible) {
 function updateEffectiveSourcesLine() {
   if (!effectiveSourcesEl) return;
   const selected = (configState && configState.optionSelected) || {};
-  const media = sourceLabelFromKey(selected.media_source);
-  const history = sourceLabelFromKey(selected.history_source);
-  let text = `${t("effectiveSourcesLabel", "Effective sources")}: ${tp("effectiveSourcesValue", { media, history }, "Media: %(media)s | History: %(history)s")}`;
+  const media = sourceLabelFromKey(configState.mediaSource || selected.media_source);
+  const history = sourceLabelFromKey(configState.historyProvider || selected.history_source);
+  const enrichment = sourceLabelFromKey(configState.insightsProvider || selected.insights_provider);
+  let text = `${t("effectiveSourcesLabel", "Effective sources")}: ${tp("effectiveSourcesValue", { media, history, enrichment }, "Media: %(media)s | History: %(history)s | Enrichment: %(enrichment)s")}`;
   const scope = formatPlexScopeLabel(activeApp);
   if (scope) {
     text += ` | ${scope}`;
@@ -545,21 +549,27 @@ function updateEffectiveSourcesLine() {
 
 function updateMismatchCenterButtonVisibility() {
   if (!mismatchCenterBtn) return;
-  const available = Array.isArray(configState.historySourcesAvailable)
-    ? configState.historySourcesAvailable
-    : [];
-  const supported = available.filter(
-    provider => provider === "tautulli" || provider === "plex" || provider === "jellystat" || provider === "jellyfin"
-  );
-  mismatchCenterBtn.disabled = supported.length < 2;
+  const supportedKeys = new Set(["tautulli", "plex", "jellystat", "jellyfin", "emby", "tracearr", "streamystats"]);
+  const providers = new Set();
+  const available = Array.isArray(configState.historySourcesAvailable) ? configState.historySourcesAvailable : [];
+  available.forEach(provider => {
+    const key = String(provider || "").trim().toLowerCase();
+    if (supportedKeys.has(key)) providers.add(key);
+  });
+  [configState.historyProvider, configState.overlayProvider, configState.insightsProvider].forEach(provider => {
+    const key = String(provider || "").trim().toLowerCase();
+    if (supportedKeys.has(key)) providers.add(key);
+  });
+  mismatchCenterBtn.disabled = providers.size < 1;
 }
 
 function getInsightsProvider() {
   const explicit = String(configState.insightsProvider || "").trim().toLowerCase();
-  if (explicit === "plex" || explicit === "jellyfin") return explicit;
-  const playback = String(playbackProvider || configState.playbackProvider || "").trim().toLowerCase();
-  if (playback === "plex" || playback === "jellyfin") return playback;
+  if (explicit === "plex" || explicit === "jellyfin" || explicit === "emby") return explicit;
+  const overlay = String(configState.overlayProvider || "").trim().toLowerCase();
+  if (overlay === "plex" || overlay === "jellyfin" || overlay === "emby") return overlay;
   if (configState.plexConfigured) return "plex";
+  if (configState.embyConfigured) return "emby";
   if (configState.jellyfinConfigured) return "jellyfin";
   return "";
 }
@@ -575,8 +585,14 @@ function insightsProviderSupportsLive(provider = getInsightsProvider()) {
 function updateInsightsButton() {
   if (!plexInsightsBtn) return;
   const provider = getInsightsProvider();
-  const providerLabel = getInsightsProviderLabel(provider);
-  const available = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  const providerLabel = provider ? getInsightsProviderLabel(provider) : "";
+  const available = provider === "plex"
+    ? configState.plexConfigured
+    : provider === "emby"
+      ? configState.embyConfigured
+      : provider === "jellyfin"
+        ? configState.jellyfinConfigured
+        : false;
   plexInsightsBtn.disabled = !available;
   plexInsightsBtn.textContent = providerLabel
     ? tp("providerInsightsLabel", { label: providerLabel }, "%(label)s Insights")
@@ -596,6 +612,12 @@ function jellyfinOnlyMediaSource(app = activeApp) {
   if (!app || (app !== "sonarr" && app !== "radarr")) return false;
   const selected = (configState && configState.optionSelected) || {};
   return String(selected.media_source || "").trim().toLowerCase() === "jellyfin";
+}
+
+function embyOnlyMediaSource(app = activeApp) {
+  if (!app || (app !== "sonarr" && app !== "radarr")) return false;
+  const selected = (configState && configState.optionSelected) || {};
+  return String(selected.media_source || "").trim().toLowerCase() === "emby";
 }
 
 function columnSupportedForMode(col, app = activeApp) {
@@ -622,10 +644,10 @@ function applyOptionSetCapabilities() {
   setElementVisible(tabRadarr, arrTables && !!configState.radarrConfigured);
 
   if (!arrTables && tbody) {
-    const providerAvailable = configState.plexConfigured || configState.jellyfinConfigured;
+    const providerAvailable = configState.plexConfigured || configState.embyConfigured || configState.jellyfinConfigured;
     const message = providerAvailable
       ? t("noArrMediaSourceProviderAvailable", "No Sonarr/Radarr media source configured. Direct provider features are available.")
-      : t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin.");
+      : t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, Emby, or Jellyfin.");
     tbody.innerHTML = `<tr><td colspan="99">${escapeHtml(message)}</td></tr>`;
   }
   updatePlexLibraryScopeControl();
@@ -3388,13 +3410,10 @@ const cachedPlaybackProvider = (() => {
   }
 })();
 let playbackProvider = cachedPlaybackProvider;
-let playbackLabel = playbackProvider === "jellystat"
-  ? "Jellystat"
-  : (playbackProvider === "tautulli"
-    ? "Tautulli"
-    : (playbackProvider === "plex" ? "Plex" : (playbackProvider === "jellyfin" ? "Jellyfin" : "Playback")));
+let overlayProvider = "";
+let playbackLabel = sourceLabelFromKey(playbackProvider) || "Playback";
 let playbackSupportsItemRefresh = playbackProvider === "tautulli";
-let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex" || playbackProvider === "jellyfin";
+let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "tracearr" || playbackProvider === "streamystats" || playbackProvider === "plex" || playbackProvider === "jellyfin";
 let backgroundLoading = false;
 let chipsVisible = true;
 let filtersCollapsed = false;
@@ -3530,7 +3549,7 @@ const SKIPPED_REASON_SORT_ORDER = {
 };
 
 function getPlaybackLabel() {
-  return playbackLabel || "Playback";
+  return playbackLabel || "History";
 }
 
 function shouldShowDeepRefreshButton(enabled, provider = playbackProvider) {
@@ -3540,7 +3559,7 @@ function shouldShowDeepRefreshButton(enabled, provider = playbackProvider) {
 
 function getPlaybackMatchingNotice() {
   const label = getPlaybackLabel();
-  if (label && label !== "Playback") {
+  if (label && label !== "History") {
     return t("matchingInProgressLabel", "%(label)s matching in progress.", { label });
   }
   return PLAYBACK_MATCHING_NOTICE;
@@ -4402,8 +4421,11 @@ const configState = {
   sonarrConfigured: false,
   radarrConfigured: false,
   playbackProvider: "",
+  historyProvider: "",
+  overlayProvider: "",
   playbackConfigured: false,
   plexConfigured: false,
+  embyConfigured: false,
   jellyfinConfigured: false,
   insightsProvider: "",
   historySourcesAvailable: [],
@@ -5190,7 +5212,7 @@ function formatCacheStatus(label, ageSeconds) {
 function getActiveMediaCacheLabel(app = activeApp) {
   const selected = (configState && configState.optionSelected) || {};
   const mediaSource = String(selected.media_source || "").trim().toLowerCase();
-  if (mediaSource === "plex" || mediaSource === "jellyfin") {
+  if (mediaSource === "plex" || mediaSource === "emby" || mediaSource === "jellyfin") {
     return sourceLabelFromKey(mediaSource);
   }
   return t(app === "sonarr" ? "Sonarr" : "Radarr");
@@ -11190,7 +11212,7 @@ function parseAdvancedQuery(query) {
   const warnings = [];
   const playbackWarning = () => {
     const label = getPlaybackLabel();
-    if (label && label !== "Playback") {
+    if (label && label !== "History") {
       return `${label} ${t("filters are unavailable until configured.")}`;
     }
     return t("Playback filters are unavailable until configured.");
@@ -13030,8 +13052,8 @@ function buildSeriesExpanderButton(row) {
   const seriesId = row.SeriesId ?? row.seriesId ?? "";
   if (!seriesId) return "";
   const providerItemId =
-    row.JellyfinItemId ?? row.jellyfinItemId ?? row.PlexItemId ?? row.plexItemId ?? "";
-  if ((jellyfinOnlyMediaSource("sonarr") || plexOnlyMediaSource("sonarr")) && !providerItemId) return "";
+    row.EmbyItemId ?? row.embyItemId ?? row.JellyfinItemId ?? row.jellyfinItemId ?? row.PlexItemId ?? row.plexItemId ?? "";
+  if ((embyOnlyMediaSource("sonarr") || jellyfinOnlyMediaSource("sonarr") || plexOnlyMediaSource("sonarr")) && !providerItemId) return "";
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
   const seriesKey = getSonarrSeriesKey(seriesId, instanceId);
   const keyAttr = seriesKey ? ` data-series-key="${escapeHtml(seriesKey)}"` : "";
@@ -13042,6 +13064,10 @@ function buildSeriesExpanderButton(row) {
 }
 
 function getSeriesPosterUrl(row, seriesId, instanceId) {
+  if (embyOnlyMediaSource("sonarr")) {
+    const itemId = row?.EmbyItemId ?? row?.embyItemId ?? "";
+    return itemId ? `/api/emby/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
   if (jellyfinOnlyMediaSource("sonarr")) {
     const itemId = row?.JellyfinItemId ?? row?.jellyfinItemId ?? "";
     return itemId ? `/api/jellyfin/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
@@ -13058,6 +13084,10 @@ function getSeriesPosterUrl(row, seriesId, instanceId) {
 }
 
 function getMoviePosterUrl(row, movieId, instanceId) {
+  if (embyOnlyMediaSource("radarr")) {
+    const itemId = row?.EmbyItemId ?? row?.embyItemId ?? "";
+    return itemId ? `/api/emby/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
+  }
   if (jellyfinOnlyMediaSource("radarr")) {
     const itemId = row?.JellyfinItemId ?? row?.jellyfinItemId ?? "";
     return itemId ? `/api/jellyfin/asset/${encodeURIComponent(String(itemId))}/Primary?maxWidth=320` : "";
@@ -15078,6 +15108,8 @@ async function prefetch(app, refresh, options = {}) {
 
 function updatePlaybackLabels() {
   const label = getPlaybackLabel();
+  const historyProvider = String(configState?.optionSelected?.history_source || "").trim().toLowerCase();
+  const historyLabel = historyProvider ? sourceLabelFromKey(historyProvider) : label;
 
   playbackLabelEls.forEach(el => {
     el.textContent = label;
@@ -15096,15 +15128,15 @@ function updatePlaybackLabels() {
   });
 
   if (refreshTautulliBtn) {
-    refreshTautulliBtn.textContent = playbackProvider
-      ? t("refreshPlaybackProvider", "Re-match from %(label)s", { label })
+    refreshTautulliBtn.textContent = historyProvider
+      ? t("refreshPlaybackProvider", "Re-match from %(label)s", { label: historyLabel })
       : t("refreshPlayback", "Re-match from playback");
 
-    refreshTautulliBtn.title = playbackProvider
+    refreshTautulliBtn.title = historyProvider
       ? t(
         "refreshPlaybackProviderMatchTitle",
         "Re-match using current %(label)s data",
-        { label }
+        { label: historyLabel }
       )
       : t(
         "refreshPlaybackMatchTitle",
@@ -15113,15 +15145,15 @@ function updatePlaybackLabels() {
   }
 
   if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.textContent = playbackProvider
-      ? t("deepRefreshPlaybackProvider", "Rebuild %(label)s data", { label })
+    deepRefreshTautulliBtn.textContent = historyProvider
+      ? t("deepRefreshPlaybackProvider", "Rebuild %(label)s data", { label: historyLabel })
       : t("deepRefreshPlayback", "Rebuild playback data");
 
-    deepRefreshTautulliBtn.title = playbackProvider
+    deepRefreshTautulliBtn.title = historyProvider
       ? t(
         "refreshPlaybackProviderTitle",
         "Refresh %(label)s library data, then rebuild matches",
-        { label }
+        { label: historyLabel }
       )
       : t(
         "refreshPlaybackTitle",
@@ -15133,13 +15165,9 @@ function updatePlaybackLabels() {
 
 function setPlaybackProvider(provider) {
   playbackProvider = provider || "";
-  playbackLabel = playbackProvider === "jellystat"
-    ? "Jellystat"
-    : (playbackProvider === "tautulli"
-      ? "Tautulli"
-      : (playbackProvider === "plex" ? "Plex" : (playbackProvider === "jellyfin" ? "Jellyfin" : "Playback")));
+  playbackLabel = sourceLabelFromKey(playbackProvider) || "History";
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
-  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "plex" || playbackProvider === "jellyfin";
+  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "tracearr" || playbackProvider === "streamystats" || playbackProvider === "plex" || playbackProvider === "jellyfin";
   try {
     localStorage.setItem(PLAYBACK_PROVIDER_STORAGE_KEY, playbackProvider);
   } catch {
@@ -15667,8 +15695,11 @@ function buildFrontendConfigUiSignature(payload, normalizedState) {
     sonarrConfigured: Boolean(state.sonarrConfigured),
     radarrConfigured: Boolean(state.radarrConfigured),
     playbackProvider: state.playbackProvider || "",
+    historyProvider: state.historyProvider || "",
+    overlayProvider: state.overlayProvider || "",
     playbackConfigured: Boolean(state.playbackConfigured),
     plexConfigured: Boolean(state.plexConfigured),
+    embyConfigured: Boolean(state.embyConfigured),
     jellyfinConfigured: Boolean(state.jellyfinConfigured),
     insightsProvider: state.insightsProvider || "",
     historySourcesAvailable: Array.isArray(state.historySourcesAvailable) ? state.historySourcesAvailable : [],
@@ -15706,11 +15737,15 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
   configState.radarrConfigured = payload.radarr_configured == null
     ? radarrInstances.length > 0
     : Boolean(payload.radarr_configured);
-  configState.playbackProvider = payload.playback_provider || "";
+  configState.mediaSource = String(payload.media_source || payload.option_set?.selected?.media_source || "").trim().toLowerCase();
+  configState.historyProvider = String(payload.history_provider || payload.option_set?.selected?.history_source || "").trim().toLowerCase();
+  configState.overlayProvider = String(payload.overlay_provider || payload.playback_provider || "").trim().toLowerCase();
+  configState.playbackProvider = configState.historyProvider;
   configState.playbackConfigured = Boolean(
     payload.playback_configured ?? payload.tautulli_configured
   );
   configState.plexConfigured = Boolean(payload.plex_configured);
+  configState.embyConfigured = Boolean(payload.emby_configured);
   configState.jellyfinConfigured = Boolean(payload.jellyfin_configured);
   configState.insightsProvider = String(payload.insights_provider || "").trim().toLowerCase();
   configState.historySourcesAvailable = Array.isArray(payload.history_sources_available)
@@ -15736,8 +15771,11 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
     sonarrConfigured: configState.sonarrConfigured,
     radarrConfigured: configState.radarrConfigured,
     playbackProvider: configState.playbackProvider,
+    historyProvider: configState.historyProvider,
+    overlayProvider: configState.overlayProvider,
     playbackConfigured: configState.playbackConfigured,
     plexConfigured: configState.plexConfigured,
+    embyConfigured: configState.embyConfigured,
     jellyfinConfigured: configState.jellyfinConfigured,
     insightsProvider: configState.insightsProvider,
     historySourcesAvailable: configState.historySourcesAvailable,
@@ -16096,7 +16134,7 @@ let plexLiveRefreshTimer = null;
 
 function currentInsightsProvider() {
   const dataProvider = String(plexInsightsState?.data?.provider || "").trim().toLowerCase();
-  if (dataProvider === "plex" || dataProvider === "jellyfin") return dataProvider;
+  if (dataProvider === "plex" || dataProvider === "jellyfin" || dataProvider === "emby") return dataProvider;
   return getInsightsProvider();
 }
 
@@ -16107,6 +16145,9 @@ function currentInsightsProviderLabel() {
 function getInsightsIncludeValue(provider) {
   if (provider === "jellyfin") {
     return "sections,sessions,activities,match_health";
+  }
+  if (provider === "emby") {
+    return "sections,sessions,match_health";
   }
   return "hubs,activities,butler,sections,match_health";
 }
@@ -16197,7 +16238,7 @@ function updatePlexTitle() {
 
 function getPlexSectionLabel() {
   const provider = currentInsightsProvider();
-  if (provider === "jellyfin") {
+  if (provider === "jellyfin" || provider === "emby") {
     const sectionId = plexInsightsState.sectionId;
     if (!sectionId) return t("All Libraries");
     const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
@@ -16232,7 +16273,7 @@ function renderPlexSections(sections) {
     const id = String(section.id || "");
     if (!id) continue;
     const title = escapeHtml(
-      (provider === "jellyfin" ? section.name : section.title) || section.title || section.name || t("Untitled", "Untitled")
+      ((provider === "jellyfin" || provider === "emby") ? section.name : section.title) || section.title || section.name || t("Untitled", "Untitled")
     );
     const active = String(plexInsightsState.sectionId) === id ? " plex-chip--active" : "";
     chips.push(
@@ -16244,7 +16285,7 @@ function renderPlexSections(sections) {
 
 function renderPlexHubChips(hubs) {
   if (!plexHubChipsEl) return;
-  if (currentInsightsProvider() === "jellyfin") {
+  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
     plexHubChipsEl.innerHTML = "";
     return;
   }
@@ -16265,7 +16306,7 @@ function renderPlexHubChips(hubs) {
 
 function renderPlexHubItems(hubs) {
   if (!plexHubItemsEl) return;
-  if (currentInsightsProvider() === "jellyfin") {
+  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
     renderJellyfinSessions((plexInsightsState.data || {}).sessions || []);
     return;
   }
@@ -16348,7 +16389,7 @@ function renderJellyfinActivities(activities) {
 
 function renderPlexActivities(activities) {
   if (!plexActivitiesEl) return;
-  if (currentInsightsProvider() === "jellyfin") {
+  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
     renderJellyfinActivities(activities);
     return;
   }
@@ -16378,7 +16419,7 @@ function renderPlexActivities(activities) {
 
 function renderPlexButler(tasks) {
   if (!plexButlerEl) return;
-  if (currentInsightsProvider() === "jellyfin") {
+  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
     renderJellyfinLibraries((plexInsightsState.data || {}).sections || []);
     return;
   }
@@ -16430,8 +16471,19 @@ function renderJellyfinLibraries(libraries) {
 function formatMatchValue(value, total, withPercent = false) {
   const count = Number(value || 0);
   if (!withPercent || !total) return `${count}`;
-  const pct = total > 0 ? Math.round((count / total) * 100) : 0;
-  return `${count} (${pct}%)`;
+  const rawPct = total > 0 ? ((count / total) * 100) : 0;
+  let pctText = "0%";
+  if (Number.isFinite(rawPct) && rawPct > 0) {
+    const roundedWhole = Math.round(rawPct);
+    if (count < total && roundedWhole >= 100) {
+      pctText = `${Math.floor(rawPct * 10) / 10}%`;
+    } else if (Math.abs(rawPct - roundedWhole) < 0.05) {
+      pctText = `${roundedWhole}%`;
+    } else {
+      pctText = `${Math.round(rawPct * 10) / 10}%`;
+    }
+  }
+  return `${count} (${pctText})`;
 }
 
 function normalizeInsightsMatchHealth(appHealth, fallbackLabel) {
@@ -16456,7 +16508,7 @@ function renderPlexMatchHealth(matchHealth) {
   const provider = currentInsightsProvider();
   const apps = ["sonarr", "radarr"];
   const cards = apps.map(app => {
-    const fallbackLabel = (provider === "jellyfin" || provider === "plex")
+    const fallbackLabel = (provider === "jellyfin" || provider === "emby" || provider === "plex")
       ? (app === "sonarr" ? t("Series", "Series") : t("Movies", "Movies"))
       : (app === "sonarr" ? t("Sonarr") : t("Radarr"));
     const appHealth = matchHealth.apps?.[app] || {};
@@ -16504,10 +16556,10 @@ function renderPlexInsights() {
   const provider = currentInsightsProvider();
   updatePlexTitle();
   if (plexPrimaryTitleEl) {
-    plexPrimaryTitleEl.textContent = provider === "jellyfin" ? t("Sessions") : t("Hubs");
+    plexPrimaryTitleEl.textContent = (provider === "jellyfin" || provider === "emby") ? t("Sessions") : t("Hubs");
   }
   if (plexSecondaryTitleEl) {
-    plexSecondaryTitleEl.textContent = provider === "jellyfin" ? t("Libraries") : t("Butler");
+    plexSecondaryTitleEl.textContent = (provider === "jellyfin" || provider === "emby") ? t("Libraries") : t("Butler");
   }
   if (plexLiveBtn) {
     setElementVisible(plexLiveBtn, insightsProviderSupportsLive(provider));
@@ -16589,7 +16641,13 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
   const provider = getInsightsProvider();
   const providerLabel = getInsightsProviderLabel(provider);
   const includeValue = getInsightsIncludeValue(provider);
-  const configured = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  const configured = provider === "plex"
+    ? configState.plexConfigured
+    : provider === "emby"
+      ? configState.embyConfigured
+      : provider === "jellyfin"
+        ? configState.jellyfinConfigured
+        : false;
   if (!configured) return;
   ensurePlexOverlay();
   updatePlexTitle();
@@ -16654,7 +16712,13 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
 
 function openPlexInsights() {
   const provider = getInsightsProvider();
-  const configured = provider === "plex" ? configState.plexConfigured : provider === "jellyfin" ? configState.jellyfinConfigured : false;
+  const configured = provider === "plex"
+    ? configState.plexConfigured
+    : provider === "emby"
+      ? configState.embyConfigured
+      : provider === "jellyfin"
+        ? configState.jellyfinConfigured
+        : false;
   if (!configured) return;
   ensurePlexOverlay();
   updatePlexTitle();
@@ -16788,11 +16852,7 @@ function ensureMismatchCenterOverlay() {
 }
 
 function mismatchProviderLabel(provider) {
-  if (provider === "tautulli") return "Tautulli";
-  if (provider === "plex") return "Plex";
-  if (provider === "jellyfin") return "Jellyfin";
-  if (provider === "jellystat") return "Jellystat";
-  return String(provider || "");
+  return sourceLabelFromKey(provider) || String(provider || "");
 }
 
 function mismatchCategoryLabel(category) {
@@ -17387,11 +17447,11 @@ function scheduleDeferredUiBindings() {
     } else {
       updateLastUpdatedDisplay();
     }
-  } else if (configState.plexConfigured || configState.jellyfinConfigured) {
+  } else if (configState.plexConfigured || configState.embyConfigured || configState.jellyfinConfigured) {
     setStatus(t("noArrMediaSourceProviderAvailable", "No Sonarr/Radarr media source configured. Direct provider features are available."));
     setLoading(false);
   } else {
-    setStatus(t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, or Jellyfin."));
+    setStatus(t("noMediaSourceConfigured", "No media source configured. Open Setup to configure Sonarr, Radarr, Plex, Emby, or Jellyfin."));
     setLoading(false);
   }
 
