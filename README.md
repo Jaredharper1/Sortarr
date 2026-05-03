@@ -86,8 +86,21 @@ Project wiki:
 ## Authentication modes
 
 * `basic`: Sortarr challenges every client with its own Basic Auth credentials
-* `basic_local_bypass`: Sortarr still requires Basic Auth credentials, but allowed direct local peers can bypass the browser auth prompt
-* `external`: a trusted reverse proxy handles login and passes the configured upstream auth header; Sortarr does not require its own Basic Auth prompt in steady-state access
+* `basic_local_bypass`: Sortarr still requires Basic Auth credentials, but allowed direct local peers can bypass the browser auth prompt. This mode is only supported with direct access and is intentionally invalid behind reverse proxies.
+* `external`: a trusted reverse proxy handles login and passes the configured upstream auth header; Sortarr does not require its own Basic Auth prompt in steady-state access. This mode is only supported behind a trusted reverse proxy and is not intended for direct exposure.
+
+## 0.9.0 deployment/auth support boundary
+
+Supported for `0.9.0`:
+* `basic` with direct access
+* `basic` behind supported reverse-proxy paths
+* `basic_local_bypass` only with direct access
+* `external` only behind a trusted reverse proxy with an explicit non-wildcard trusted proxy setting
+
+Not supported for `0.9.0`:
+* `basic_local_bypass` behind reverse proxies
+* `external` in direct mode
+* `external` with wildcard-only trusted proxy configuration
 
 
 ## What Sortarr does NOT do

@@ -1,6 +1,25 @@
 # Changelog
 
-## [Unreleased]
+## [0.9.0] - 2026-05-02
+
+### Highlights
+- Unified media, history, and enrichment provider selection across Setup, `/api/config`, and the main UI so selected, available, effective, and degraded states are visible instead of silently falling back.
+- Promoted Mismatch Center and provider diagnostics into first-class troubleshooting tools, with provider-aware mismatch reasons across supported history and enrichment providers.
+- Finalized the `basic`, `basic_local_bypass`, and `external` auth/deployment model with setup validation, recovery guidance, and documented support boundaries for direct, reverse-proxy, Docker, Unraid, and Windows installs.
+- Expanded the modern UI pass across the toolbar, filters, status blocks, setup flow, tables, provider chips, mobile controls, and reduced-motion-safe animations.
+- Expanded German UI coverage and refreshed the translation catalog for the 0.9.0 interface.
+
+### Fixes
+- Setup provider-state summaries now treat stored-secret-backed providers and Arr instances as configured during live setup preview, so the Setup page no longer marks active Tautulli/Plex/Arr selections as unavailable when the main app is already using them.
+- Mismatch Center now distinguishes between loaded rows and total mismatch counts when the response is capped, avoiding contradictory summaries such as showing 3000 loaded rows while reporting a larger provider-conflict total.
+- Provider Insights and Mismatch Center now render explicit loading states on first open instead of presenting mostly empty shells while their API requests are still in flight.
+- Mobile filter/header layout keeps the advanced-help control aligned with the filter bar and gives the footer controls a more stable stack on narrow coarse-pointer screens.
+- Status blocks now surface provider-specific activity more clearly: media and enrichment blocks show active loading/refresh text, and each block’s top gradient animates while its provider is doing work.
+- Main UI polish now refines ambient surfaces, toolbar/filter hierarchy, filter focus states, table depth, and reduced-motion-safe animation behavior.
+- Mismatch Center now compares effective history/enrichment providers by default so inactive configured providers do not create pending/conflict rows; pass `include_configured=1` to audit every configured provider.
+
+### Follow-up
+- Table row-alignment scroll snapping is intentionally disabled for 0.9.0; revisit the implementation for 0.9.1 as a configurable or lower-cost behavior.
 
 ## [0.8.10] - 2026-04-16
 
@@ -59,7 +78,7 @@
 - Fixed Jellyfin mismatch-center inclusion, insights provider selection, and cache/refresh edge cases that could leave stale partial Jellyfin state in use.
 - Fixed provider-aware match-health reporting so Plex and Jellyfin insights reflect the active playback/history provider instead of misleading provider self-match totals, and now label match summaries as `Series` / `Movies`.
 - Fixed direct-media season and episode drilldowns plus poster proxying for Jellyfin and Plex-backed views.
-- Removed the hardcoded sample `SORTARR_FRAME_ANCESTORS` value from the Docker Compose example, refreshed the Unraid template product description, and expanded Docker entrypoint ownership prep to cover Plex, Jellyfin, Jellystat, and Streamystats cache path overrides.
+- Refreshed the Unraid template product description and expanded Docker entrypoint ownership prep to cover Plex, Jellyfin, Jellystat, and Streamystats cache path overrides.
 
 ## [0.8.7] - 2026-03-19
 

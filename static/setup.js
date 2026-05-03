@@ -1,4 +1,15 @@
 (function () {
+  function i18n(key, fallback, vars) {
+    const dict = window.SORTARR_I18N || {};
+    let value = (dict[key] !== undefined && dict[key] !== null)
+      ? dict[key]
+      : (fallback !== undefined ? fallback : key);
+    if (!vars) return value;
+    return String(value).replace(/%\(([^)]+)\)s/g, (_, name) => (
+      Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : `%(${name})s`
+    ));
+  }
+
   function getFieldValue(name) {
     const el = document.querySelector(`[name="${CSS.escape(name)}"]`);
     return el ? String(el.value || "").trim() : "";
@@ -330,7 +341,7 @@
     if (placeholder) {
       input.placeholder = placeholder;
     }
-    input.setAttribute("aria-label", "Path map");
+      input.setAttribute("aria-label", i18n("path_map", "Path map"));
     return input;
   }
 
@@ -582,7 +593,6 @@
     const plexMount = document.getElementById("plexMediaSourceMount");
     const embyMount = document.getElementById("embyMediaSourceMount");
     const jellyfinMount = document.getElementById("jellyfinMediaSourceMount");
-    const plexReuseNotice = document.getElementById("plexHistoryReuseNotice");
     if (!mediaSource || !plexNotice || !embyNotice || !jellyfinNotice) return;
     const mediaValue = String(mediaSource.value || "").trim().toLowerCase();
     const isPlex = mediaValue === "plex";
@@ -599,9 +609,6 @@
     }
     if (jellyfinMount) {
       jellyfinMount.classList.toggle("hidden", !isJellyfin);
-    }
-    if (plexReuseNotice) {
-      plexReuseNotice.classList.toggle("hidden", !isPlex);
     }
     if (!arrBlock || !arrActions) return;
     const keepArrVisible = String(arrBlock.dataset.userRevealed || "0") === "1";
@@ -659,13 +666,8 @@
     const mediaSource = document.querySelector('[name="media_source_preference"]');
     const showArrMediaSourceBtn = document.getElementById("showArrMediaSourceBtn");
     const arrBlock = document.getElementById("arrMediaSourceBlock");
-    const reviewPlexMediaBtn = document.getElementById("reviewPlexMediaBtn");
     const reviewJellyfinMediaBtn = document.getElementById("reviewJellyfinMediaBtn");
-    const reviewPlexPlaybackBtn = document.getElementById("reviewPlexPlaybackBtn");
     const reviewJellyfinPlaybackBtn = document.getElementById("reviewJellyfinPlaybackBtn");
-    const reviewPlexPlaybackMediaBtn = document.getElementById("reviewPlexPlaybackMediaBtn");
-    const reviewEmbyPlaybackMediaBtn = document.getElementById("reviewEmbyPlaybackMediaBtn");
-    const reviewJellyfinPlaybackMediaBtn = document.getElementById("reviewJellyfinPlaybackMediaBtn");
     if (mediaSource) {
       mediaSource.addEventListener("change", () => {
         updatePlexProviderPlacement();
@@ -697,15 +699,6 @@
         }
       });
     }
-    if (reviewPlexMediaBtn) {
-      reviewPlexMediaBtn.addEventListener("click", async () => {
-        await openGuideStep(1);
-        const plexUrlField = document.querySelector('[name="plex_url"]');
-        if (plexUrlField) {
-          plexUrlField.focus();
-        }
-      });
-    }
     if (reviewJellyfinMediaBtn) {
       reviewJellyfinMediaBtn.addEventListener("click", async () => {
         await openGuideStep(1);
@@ -715,45 +708,9 @@
         }
       });
     }
-    if (reviewPlexPlaybackBtn) {
-      reviewPlexPlaybackBtn.addEventListener("click", async () => {
-        await openGuideStep(3);
-        const plexUrlField = document.querySelector('[name="plex_url"]');
-        if (plexUrlField) {
-          plexUrlField.focus();
-        }
-      });
-    }
     if (reviewJellyfinPlaybackBtn) {
       reviewJellyfinPlaybackBtn.addEventListener("click", async () => {
         await openGuideStep(3);
-        const jellyfinUrlField = document.querySelector('[name="jellyfin_url"]');
-        if (jellyfinUrlField) {
-          jellyfinUrlField.focus();
-        }
-      });
-    }
-    if (reviewPlexPlaybackMediaBtn) {
-      reviewPlexPlaybackMediaBtn.addEventListener("click", async () => {
-        await openGuideStep(1);
-        const plexUrlField = document.querySelector('[name="plex_url"]');
-        if (plexUrlField) {
-          plexUrlField.focus();
-        }
-      });
-    }
-    if (reviewEmbyPlaybackMediaBtn) {
-      reviewEmbyPlaybackMediaBtn.addEventListener("click", async () => {
-        await openGuideStep(1);
-        const embyUrlField = document.querySelector('[name="emby_url"]');
-        if (embyUrlField) {
-          embyUrlField.focus();
-        }
-      });
-    }
-    if (reviewJellyfinPlaybackMediaBtn) {
-      reviewJellyfinPlaybackMediaBtn.addEventListener("click", async () => {
-        await openGuideStep(1);
         const jellyfinUrlField = document.querySelector('[name="jellyfin_url"]');
         if (jellyfinUrlField) {
           jellyfinUrlField.focus();
@@ -961,33 +918,93 @@
     return "";
   }
 
+  function focusProviderField(stepNumber, selector) {
+    openGuideStep(stepNumber).then(() => {
+      const field = selector ? document.querySelector(selector) : null;
+      if (field) {
+        field.focus();
+      }
+    });
+  }
+
+  function setSetupNotice(noticeId, textId, actionId, config) {
+    const noticeEl = document.getElementById(noticeId);
+    const textEl = document.getElementById(textId);
+    const actionEl = document.getElementById(actionId);
+    if (!noticeEl || !textEl || !actionEl) return;
+    const text = String(config?.text || "").trim();
+    textEl.textContent = text;
+    noticeEl.classList.toggle("hidden", !text);
+    const action = (config && typeof config.action === "object") ? config.action : null;
+    if (!text || !action || !action.label) {
+      actionEl.textContent = "";
+      actionEl.classList.add("hidden");
+      actionEl.onclick = null;
+      return;
+    }
+    actionEl.textContent = action.label;
+    actionEl.classList.remove("hidden");
+    actionEl.onclick = () => {
+      if (action.type === "step") {
+        focusProviderField(action.step || 1, action.selector || "");
+        return;
+      }
+      if (action.type === "reveal") {
+        const provider = String(action.provider || "").trim().toLowerCase();
+        if (!provider) return;
+        const button = document.querySelector(`[data-provider-reveal="${CSS.escape(provider)}"]`);
+        if (button) {
+          button.click();
+        }
+      }
+    };
+  }
+
   function updateHistoryIntentGuidance() {
     const historySource = selectedHistorySourceIntent();
-    const plexReuseNotice = document.getElementById("plexHistoryReuseNotice");
-    const plexIntentNotice = document.getElementById("plexHistoryIntentNotice");
-    const tautulliIntentNotice = document.getElementById("tautulliHistoryIntentNotice");
-    const tracearrIntentNotice = document.getElementById("tracearrHistoryIntentNotice");
-    const jellystatIntentNotice = document.getElementById("jellystatHistoryIntentNotice");
-    const streamystatsIntentNotice = document.getElementById("streamystatsHistoryIntentNotice");
+    const historyState = buildSetupProviderState().history || {};
+    const selectedLabel = sourceLabel(historyState.selected);
     const usingPlexReuse = isReusingPlexHistoryFromMedia();
-    if (plexReuseNotice) {
-      plexReuseNotice.classList.toggle("hidden", !usingPlexReuse);
+    let config = null;
+    if (usingPlexReuse) {
+      config = {
+      text: i18n("plex_reuse_history_hint", "Plex is already set up in Step 1, so Sortarr can use it here for history too."),
+        action: {
+          type: "step",
+          step: 1,
+          selector: '[name="plex_url"]',
+      label: i18n("review_plex_step_1", "Review Plex in Step 1"),
+        },
+      };
+    } else if (historySource === "plex") {
+      config = {
+      text: i18n("plex_history_step_3_hint", "Plex is selected for history. Add your Plex details in Step 3 below."),
+        action: {
+          type: "step",
+          step: 3,
+          selector: '[name="plex_url"]',
+      label: i18n("open_step_3", "Open Step 3"),
+        },
+      };
+    } else if (["tautulli", "tracearr", "jellystat", "streamystats"].includes(historySource)) {
+      const block = document.querySelector(`[data-history-provider="${CSS.escape(historySource)}"]`);
+      const blockHidden = Boolean(block && block.classList.contains("hidden"));
+      let text = summarizeRoleHelper("history");
+      if (historySource === "streamystats") {
+    text += i18n("streamystats_history_hint_suffix", " Add your Streamystats details below to use Jellyfin-backed watch history and detail stats.");
+      } else {
+        text += ` Add your ${selectedLabel} details below.`;
+      }
+      config = {
+        text,
+        action: blockHidden ? {
+          type: "reveal",
+          provider: historySource,
+          label: `Add ${selectedLabel}`,
+        } : null,
+      };
     }
-    if (plexIntentNotice) {
-      plexIntentNotice.classList.toggle("hidden", historySource !== "plex" || usingPlexReuse);
-    }
-    if (tautulliIntentNotice) {
-      tautulliIntentNotice.classList.toggle("hidden", historySource !== "tautulli");
-    }
-    if (tracearrIntentNotice) {
-      tracearrIntentNotice.classList.toggle("hidden", historySource !== "tracearr");
-    }
-    if (jellystatIntentNotice) {
-      jellystatIntentNotice.classList.toggle("hidden", historySource !== "jellystat");
-    }
-    if (streamystatsIntentNotice) {
-      streamystatsIntentNotice.classList.toggle("hidden", historySource !== "streamystats");
-    }
+    setSetupNotice("historyProviderNotice", "historyProviderNoticeText", "historyProviderNoticeAction", config);
   }
 
   function updateHistoryProviderVisibility() {
@@ -1088,18 +1105,24 @@
 
   function updatePlaybackIntentGuidance() {
     const mediaEffective = String(buildSetupProviderState().media?.effective || "").toLowerCase();
-    const plexReuseNotice = document.getElementById("plexPlaybackReuseNotice");
-    const embyReuseNotice = document.getElementById("embyPlaybackReuseNotice");
-    const jellyfinReuseNotice = document.getElementById("jellyfinPlaybackReuseNotice");
-    if (plexReuseNotice) {
-      plexReuseNotice.classList.toggle("hidden", mediaEffective !== "plex");
-    }
-    if (embyReuseNotice) {
-      embyReuseNotice.classList.toggle("hidden", mediaEffective !== "emby");
-    }
-    if (jellyfinReuseNotice) {
-      jellyfinReuseNotice.classList.toggle("hidden", mediaEffective !== "jellyfin");
-    }
+    const mediaLabel = sourceLabel(mediaEffective);
+    const selectorMap = {
+      plex: '[name="plex_url"]',
+      emby: '[name="emby_url"]',
+      jellyfin: '[name="jellyfin_url"]',
+    };
+    const config = ["plex", "emby", "jellyfin"].includes(mediaEffective)
+      ? {
+        text: i18n("provider_reuse_enrichment_hint", "%(provider)s is already set up in Step 1, so Sortarr can use it here for enrichment too.", { provider: mediaLabel }),
+        action: {
+          type: "step",
+          step: 1,
+          selector: selectorMap[mediaEffective] || "",
+          label: i18n("review_provider_step_1", "Review %(provider)s in Step 1", { provider: mediaLabel }),
+        },
+      }
+      : null;
+    setSetupNotice("playbackProviderNotice", "playbackProviderNoticeText", "playbackProviderNoticeAction", config);
   }
 
   function updatePlaybackProviderVisibility() {
@@ -1224,28 +1247,6 @@
     return Boolean(getFieldValue(name));
   }
 
-  function instanceConfigured(urlName, keyName) {
-    return fieldHasEffectiveUrl(urlName) && fieldHasEffectiveSecret(keyName);
-  }
-
-  function streamystatsCredentialsConfigured() {
-    const username = getFieldValue("streamystats_username") || getFieldValue("jellyfin_username");
-    const passwordReady =
-      fieldHasEffectiveSecret("streamystats_password") || fieldHasEffectiveSecret("jellyfin_password");
-    return Boolean(String(username || "").trim() && passwordReady);
-  }
-
-  function providerConfigured(provider) {
-    if (provider === "plex") return instanceConfigured("plex_url", "plex_token");
-    if (provider === "emby") return instanceConfigured("emby_url", "emby_api_key");
-    if (provider === "jellyfin") return instanceConfigured("jellyfin_url", "jellyfin_api_key");
-    if (provider === "tautulli") return instanceConfigured("tautulli_url", "tautulli_api_key");
-    if (provider === "tracearr") return instanceConfigured("tracearr_url", "tracearr_api_key");
-    if (provider === "jellystat") return instanceConfigured("jellystat_url", "jellystat_api_key");
-    if (provider === "streamystats") return instanceConfigured("streamystats_url", "streamystats_api_key") && streamystatsCredentialsConfigured();
-    return false;
-  }
-
   function getInitialSetupProviderState() {
     const script = document.getElementById("setup-provider-state-json");
     if (!script) return {};
@@ -1256,111 +1257,91 @@
     }
   }
 
+  function getInitialSetupProviderSelectionNotice() {
+    const script = document.getElementById("setup-provider-selection-notice-json");
+    if (!script) return "";
+    try {
+      return String(JSON.parse(script.textContent || "\"\"") || "").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  const initialSetupProviderState = getInitialSetupProviderState();
+  let setupProviderState = initialSetupProviderState;
+  let setupProviderSelectionNotice = getInitialSetupProviderSelectionNotice();
+  let setupProviderPreviewSeq = 0;
+  let setupProviderPreviewTimer = null;
+  const SETUP_PROVIDER_PREVIEW_SECRET_FIELDS = new Set([
+    "sonarr_api_key",
+    "sonarr_api_key_2",
+    "sonarr_api_key_3",
+    "radarr_api_key",
+    "radarr_api_key_2",
+    "radarr_api_key_3",
+    "plex_token",
+    "emby_api_key",
+    "jellyfin_api_key",
+    "jellyfin_password",
+    "tautulli_api_key",
+    "tracearr_api_key",
+    "jellystat_api_key",
+    "streamystats_api_key",
+    "streamystats_password",
+    "basic_auth_pass",
+    "sortarr_secret_key",
+  ]);
+
   function buildSetupProviderState() {
-    const initial = getInitialSetupProviderState();
-    const mediaSelected = String(getFieldValue("media_source_preference") || initial?.media?.selected || "arr").toLowerCase();
-    const historySelected = String(getFieldValue("history_source_preference") || initial?.history?.selected || "auto").toLowerCase();
-    const enrichmentSelected = String(getFieldValue("insights_provider_preference") || initial?.enrichment?.selected || "auto").toLowerCase();
+    return setupProviderState || initialSetupProviderState || {};
+  }
 
-    const mediaAvailable = [];
-    const hasArrMedia = instanceConfigured("sonarr_url", "sonarr_api_key") || instanceConfigured("radarr_url", "radarr_api_key");
-    if (hasArrMedia) mediaAvailable.push("arr");
-    if (providerConfigured("emby")) mediaAvailable.push("emby");
-    if (providerConfigured("jellyfin")) mediaAvailable.push("jellyfin");
-    if (providerConfigured("plex")) mediaAvailable.push("plex");
-
-    let mediaEffective = "";
-    if (mediaSelected === "arr") mediaEffective = hasArrMedia ? "arr" : "";
-    else if (mediaSelected === "emby") mediaEffective = providerConfigured("emby") ? "emby" : "";
-    else if (mediaSelected === "jellyfin") mediaEffective = providerConfigured("jellyfin") ? "jellyfin" : "";
-    else if (mediaSelected === "plex") mediaEffective = providerConfigured("plex") ? "plex" : "";
-    else if (mediaSelected === "auto") mediaEffective = mediaAvailable[0] || "";
-    let mediaReason = "";
-    if (mediaSelected === "auto") {
-      mediaReason = mediaEffective ? "auto selected, using first available provider" : "no media providers are configured";
-    } else if (!mediaEffective) {
-      mediaReason = "selected provider is not configured";
-    }
-
-    const historyAvailable = [];
-    if (providerConfigured("tautulli")) historyAvailable.push("tautulli");
-    if (providerConfigured("tracearr")) historyAvailable.push("tracearr");
-    if (providerConfigured("jellystat")) historyAvailable.push("jellystat");
-    if (providerConfigured("streamystats")) historyAvailable.push("streamystats");
-    if (providerConfigured("plex")) historyAvailable.push("plex");
-
-    let historyEffective = "";
-    if (historySelected !== "auto") {
-      historyEffective = historyAvailable.includes(historySelected) ? historySelected : "";
-    } else {
-      historyEffective = historyAvailable[0] || "";
-    }
-    let historyReason = "";
-    if (historySelected === "auto") {
-      if (historyEffective === "plex" && mediaEffective === "plex") {
-        historyReason = "auto selected, reusing Plex from media source";
-      } else if (historyEffective) {
-        historyReason = "auto selected, using first available provider";
-      } else {
-        historyReason = "no history providers are configured";
+  function buildProviderStatePreviewPayload() {
+    const payload = new FormData();
+    const rawFormData = new FormData(setupForm);
+    rawFormData.forEach((value, key) => {
+      if (SETUP_PROVIDER_PREVIEW_SECRET_FIELDS.has(key)) return;
+      payload.append(key, value);
+    });
+    SETUP_PROVIDER_PREVIEW_SECRET_FIELDS.forEach((key) => {
+      if (fieldHasEffectiveSecret(key)) {
+        payload.append(`${key}_configured`, "1");
       }
-    } else if (!historyEffective) {
-      historyReason = "selected provider is not configured";
-    } else if (historySelected === "plex" && mediaEffective === "plex") {
-      historyReason = "reusing Plex from media source";
-    }
+    });
+    return payload;
+  }
 
-    const enrichmentAvailable = [];
-    if (providerConfigured("plex")) enrichmentAvailable.push("plex");
-    if (providerConfigured("emby")) enrichmentAvailable.push("emby");
-    if (providerConfigured("jellyfin")) enrichmentAvailable.push("jellyfin");
-
-    let enrichmentEffective = "";
-    if (enrichmentSelected === "plex") enrichmentEffective = providerConfigured("plex") ? "plex" : "";
-    else if (enrichmentSelected === "emby") enrichmentEffective = providerConfigured("emby") ? "emby" : "";
-    else if (enrichmentSelected === "jellyfin") enrichmentEffective = providerConfigured("jellyfin") ? "jellyfin" : "";
-    else {
-      if (["plex", "jellyfin", "emby"].includes(historyEffective)) enrichmentEffective = historyEffective;
-      else if (["plex", "jellyfin", "emby"].includes(mediaEffective)) enrichmentEffective = mediaEffective;
-      else enrichmentEffective = enrichmentAvailable[0] || "";
-    }
-    let enrichmentReason = "";
-    if (enrichmentSelected === "auto") {
-      if (enrichmentEffective) {
-        if (enrichmentEffective === historyEffective && ["plex", "jellyfin", "emby"].includes(historyEffective)) {
-          enrichmentReason = "auto selected, following history source";
-        } else if (enrichmentEffective === mediaEffective && ["plex", "jellyfin", "emby"].includes(mediaEffective)) {
-          enrichmentReason = "auto selected, following media source";
-        } else {
-          enrichmentReason = "auto selected, using first available provider";
-        }
-      } else {
-        enrichmentReason = "no enrichment providers are configured";
+  async function refreshSetupProviderStatePreview() {
+    if (!setupForm) return;
+    const requestSeq = ++setupProviderPreviewSeq;
+    const formData = buildProviderStatePreviewPayload();
+    try {
+      const res = await fetch(apiUrl("/api/setup/provider_state"), {
+        method: "POST",
+        headers: withCsrfHeaders({}),
+        body: formData,
+      });
+      if (!res.ok) return;
+      const payload = await res.json();
+      if (requestSeq !== setupProviderPreviewSeq) return;
+      if (payload && typeof payload.provider_state === "object") {
+        setupProviderState = payload.provider_state || {};
       }
-    } else if (!enrichmentEffective) {
-      enrichmentReason = "selected provider is not configured";
+      setupProviderSelectionNotice = String(payload?.provider_selection_notice || "").trim();
+      updateStepSummaries();
+    } catch {
     }
+  }
 
-    return {
-      media: {
-        selected: mediaSelected,
-        available: mediaAvailable,
-        effective: mediaEffective,
-        reason: mediaReason,
-      },
-      history: {
-        selected: historySelected,
-        available: historyAvailable,
-        effective: historyEffective,
-        reason: historyReason,
-      },
-      enrichment: {
-        selected: enrichmentSelected,
-        available: enrichmentAvailable,
-        effective: enrichmentEffective,
-        reason: enrichmentReason,
-      },
-    };
+  function scheduleSetupProviderStatePreview() {
+    if (!setupForm) return;
+    if (setupProviderPreviewTimer) {
+      clearTimeout(setupProviderPreviewTimer);
+    }
+    setupProviderPreviewTimer = setTimeout(() => {
+      setupProviderPreviewTimer = null;
+      refreshSetupProviderStatePreview();
+    }, 120);
   }
 
   function getFieldErrors() {
@@ -1440,53 +1421,53 @@
   function getAdvancedOverrideLabels() {
     const enabled = [];
     if (String(getFieldValue("proxy_preset") || "").toLowerCase() === "custom") {
-      enabled.push("Custom proxy hops");
+      enabled.push(i18n("custom_proxy_hops", "Custom proxy hops"));
     }
     if (getFieldValue("sortarr_csrf_trusted_origins")) {
-      enabled.push("Trusted origins");
+      enabled.push(i18n("trusted_origins", "Trusted origins"));
     }
     if (getFieldValue("sortarr_waitress_trusted_proxy")) {
-      enabled.push("Trusted proxy");
+      enabled.push(i18n("trusted_proxy", "Trusted proxy"));
     }
     const recovery = document.querySelector('[name="sortarr_allow_unsafe_ephemeral_recovery"]');
     if (recovery && recovery.checked) {
-      enabled.push("Recovery mode");
+      enabled.push(i18n("recovery_mode", "Recovery mode"));
     }
     if (hasNonDefaultNumericField("sonarr_timeout_seconds", 90)) {
-      enabled.push("Sonarr timeout");
+      enabled.push(i18n("sonarr_timeout", "Sonarr timeout"));
     }
     if (hasNonDefaultNumericField("radarr_timeout_seconds", 90)) {
-      enabled.push("Radarr timeout");
+      enabled.push(i18n("radarr_timeout", "Radarr timeout"));
     }
     if (hasNonDefaultNumericField("sonarr_episodefile_workers", 8)) {
-      enabled.push("Episode file workers");
+      enabled.push(i18n("episode_file_workers", "Episode file workers"));
     }
     if (hasNonDefaultNumericField("radarr_wanted_workers", 2)) {
-      enabled.push("Radarr wanted workers");
+      enabled.push(i18n("radarr_wanted_workers", "Radarr wanted workers"));
     }
     if (hasNonDefaultNumericField("radarr_instance_workers", 1)) {
-      enabled.push("Radarr instance workers");
+      enabled.push(i18n("radarr_instance_workers", "Radarr instance workers"));
     }
     if (hasNonDefaultNumericField("tautulli_timeout_seconds", 60)) {
-      enabled.push("Tautulli timeout");
+      enabled.push(i18n("tautulli_timeout", "Tautulli timeout"));
     }
     if (hasNonDefaultNumericField("tautulli_fetch_seconds", 0)) {
-      enabled.push("Tautulli fetch interval");
+      enabled.push(i18n("tautulli_fetch_interval", "Tautulli fetch interval"));
     }
     if (hasNonDefaultNumericField("tautulli_metadata_workers", 4)) {
-      enabled.push("Tautulli metadata workers");
+      enabled.push(i18n("tautulli_metadata_workers", "Tautulli metadata workers"));
     }
     if (hasNonDefaultNumericField("streamystats_timeout_seconds", 45)) {
-      enabled.push("Streamystats timeout");
+      enabled.push(i18n("streamystats_timeout", "Streamystats timeout"));
     }
     if (hasNonDefaultNumericField("streamystats_search_limit", 8)) {
-      enabled.push("Streamystats search limit");
+      enabled.push(i18n("streamystats_search_limit", "Streamystats search limit"));
     }
     if (hasNonDefaultNumericField("streamystats_workers", 4)) {
-      enabled.push("Streamystats workers");
+      enabled.push(i18n("streamystats_workers", "Streamystats workers"));
     }
     if (hasNonDefaultNumericField("plex_history_page_size", 200)) {
-      enabled.push("Plex history page size");
+      enabled.push(i18n("plex_history_page_size", "Plex history page size"));
     }
     return Array.from(new Set(enabled));
   }
@@ -1499,9 +1480,15 @@
   }
 
   function roleLabel(role) {
-    if (role === "media") return "media";
-    if (role === "history") return "history";
-    return "enrichment";
+    if (role === "media") return i18n("role_media", "media");
+    if (role === "history") return i18n("role_history", "history");
+    return i18n("role_enrichment", "enrichment");
+  }
+
+  function roleTitle(role) {
+    if (role === "media") return i18n("role_title_media", "Media");
+    if (role === "history") return i18n("role_title_history", "History");
+    return i18n("role_title_enrichment", "Enrichment");
   }
 
   function providerStateDisplayValue(state, key) {
@@ -1511,11 +1498,6 @@
     return sourceLabel(state?.[key]);
   }
 
-  function formatRoleLine(prefix, roleStateKey, valueKey) {
-    const state = buildSetupProviderState()[roleStateKey] || {};
-    return `${prefix}: ${roleLabel(roleStateKey).replace(/^./, (ch) => ch.toUpperCase())}: ${providerStateDisplayValue(state, valueKey)}`;
-  }
-
   function summarizeRoleStep(roleStateKey) {
     const state = buildSetupProviderState()[roleStateKey];
     const selectedLabel = sourceLabel(state.selected);
@@ -1523,13 +1505,13 @@
     const alternates = available
       .filter((provider) => provider && provider !== state.selected && provider !== state.effective)
       .map(sourceLabel);
-    const parts = [`Selected: ${selectedLabel}`];
+    const parts = [i18n("selected_provider_summary", "Selected: %(provider)s", { provider: selectedLabel })];
     if (!state.effective) {
-      parts.push("Using: none");
+      parts.push(i18n("using_none", "Using: none"));
     } else if (state.selected === "auto" || state.effective !== state.selected) {
-      parts.push(`Using: ${sourceLabel(state.effective)}`);
+      parts.push(i18n("using_provider_summary", "Using: %(provider)s", { provider: sourceLabel(state.effective) }));
     } else if (alternates.length) {
-      parts.push(`Also ready: ${alternates.join(", ")}`);
+      parts.push(i18n("also_ready_summary", "Also ready: %(providers)s", { providers: alternates.join(", ") }));
     }
     return parts.join(" · ");
   }
@@ -1549,66 +1531,35 @@
   function summarizeRoleHelper(roleStateKey) {
     const state = buildSetupProviderState()[roleStateKey] || {};
     const roleName = roleLabel(roleStateKey);
-    const roleTitle = roleName.charAt(0).toUpperCase() + roleName.slice(1);
+    const title = roleTitle(roleStateKey);
     const selectedLabel = sourceLabel(state.selected);
     const effectiveLabel = sourceLabel(state.effective);
     const reason = String(state.reason || "").trim().toLowerCase();
     if (state.selected === "auto") {
       if (state.effective) {
         if (reason === "auto selected, reusing plex from media source") {
-          return `${roleTitle} is set to Auto, so Sortarr is currently using Plex from Step 1.`;
+          return i18n("role_auto_reusing_plex", "%(role)s is set to Auto, so Sortarr is currently using Plex from Step 1.", { role: title });
         }
         if (reason === "auto selected, following history source") {
-          return `${roleTitle} is set to Auto, so Sortarr is currently following your history choice: ${effectiveLabel}.`;
+          return i18n("role_auto_following_history", "%(role)s is set to Auto, so Sortarr is currently following your history choice: %(provider)s.", { role: title, provider: effectiveLabel });
         }
         if (reason === "auto selected, following media source") {
-          return `${roleTitle} is set to Auto, so Sortarr is currently following your media choice: ${effectiveLabel}.`;
+          return i18n("role_auto_following_media", "%(role)s is set to Auto, so Sortarr is currently following your media choice: %(provider)s.", { role: title, provider: effectiveLabel });
         }
-        return `${roleTitle} is set to Auto, so Sortarr is currently using ${effectiveLabel}.`;
+        return i18n("role_auto_using_provider", "%(role)s is set to Auto, so Sortarr is currently using %(provider)s.", { role: title, provider: effectiveLabel });
       }
-      return `${roleTitle} is set to Auto, but nothing is ready to use yet.`;
+      return i18n("role_auto_none_ready", "%(role)s is set to Auto, but nothing is ready to use yet.", { role: title });
     }
     if (!state.effective) {
-      return `${selectedLabel} is selected for ${roleName}, but it is not configured yet, so ${roleName} is currently unavailable.`;
+      return i18n("role_selected_not_configured", "%(provider)s is selected for %(role)s, but it is not configured yet, so %(role)s is currently unavailable.", { provider: selectedLabel, role: roleName });
     }
     if (reason === "reusing plex from media source") {
-      return `${selectedLabel} is selected for ${roleName} and Sortarr is using the same Plex details from Step 1.`;
+      return i18n("role_selected_reusing_plex", "%(provider)s is selected for %(role)s and Sortarr is using the same Plex details from Step 1.", { provider: selectedLabel, role: roleName });
     }
     if (state.selected === state.effective) {
-      return `${selectedLabel} is selected for ${roleName} and is currently in use.`;
+      return i18n("role_selected_in_use", "%(provider)s is selected for %(role)s and is currently in use.", { provider: selectedLabel, role: roleName });
     }
-    return `${selectedLabel} is selected for ${roleName}, but ${effectiveLabel} is currently active.`;
-  }
-
-  function buildProviderStateExplanation(state) {
-    const grouped = new Map();
-    ["media", "history", "enrichment"].forEach((roleKey) => {
-      const roleState = state[roleKey] || {};
-      if (!roleState || roleState.selected === roleState.effective) return;
-      if (roleState.selected === "auto") return;
-      const selectedLabel = sourceLabel(roleState.selected);
-      const effectiveLabel = sourceLabel(roleState.effective);
-      const roleName = roleLabel(roleKey);
-      const existing = grouped.get(selectedLabel) || [];
-      if (!roleState.effective) {
-        existing.push(roleName);
-        grouped.set(selectedLabel, existing);
-        return;
-      }
-      existing.push(`${roleName}:${effectiveLabel}`);
-      grouped.set(selectedLabel, existing);
-    });
-    return Array.from(grouped.entries()).map(([selectedLabel, items]) => {
-      const unavailableRoles = items.filter((item) => !item.includes(":"));
-      if (unavailableRoles.length) {
-        return `${selectedLabel} is selected for ${unavailableRoles.join(" and ")}, but it is not configured yet.`;
-      }
-      const mapped = items.map((item) => {
-        const [roleName, effectiveLabel] = String(item).split(":", 2);
-        return `${roleName} is using ${effectiveLabel}`;
-      });
-      return `${selectedLabel} is selected, but ${mapped.join(" and ")}.`;
-    }).join(" ");
+    return i18n("role_selected_effective_different", "%(selected)s is selected for %(role)s, but %(effective)s is currently active.", { selected: selectedLabel, role: roleName, effective: effectiveLabel });
   }
 
   function updateProviderStateChips(state) {
@@ -1624,7 +1575,10 @@
       const effectiveLabel = providerStateDisplayValue(roleState, "effective");
       const detail = chip.querySelector(".setup-provider-chip__detail");
       if (detail) {
-        detail.textContent = `Selected: ${selectedLabel} · Effective: ${effectiveLabel}`;
+        detail.textContent = i18n("selected_effective_summary", "Selected: %(selected)s · Effective: %(effective)s", {
+          selected: selectedLabel,
+          effective: effectiveLabel,
+        });
       }
       chip.classList.toggle(
         "setup-provider-chip--different",
@@ -1640,25 +1594,25 @@
     const form = document.querySelector(".setup-form");
     const ephemeral = Boolean(form && String(form.dataset.ephemeralSecret || "0") === "1");
     const authLabel = authMethod === "external"
-      ? "External auth"
-      : (authMethod === "basic_local_bypass" ? "Basic + local bypass" : "Basic auth");
+      ? i18n("external_auth", "External auth")
+      : (authMethod === "basic_local_bypass" ? i18n("basic_local_bypass_auth", "Basic + local bypass") : i18n("basic_auth", "Basic auth"));
     const proxyLabelMap = {
-      direct: "Direct proxy mode",
-      single: "Single proxy mode",
-      double: "Double proxy mode",
-      custom: "Custom proxy mode",
+      direct: i18n("direct_proxy_mode", "Direct proxy mode"),
+      single: i18n("single_proxy_mode", "Single proxy mode"),
+      double: i18n("double_proxy_mode", "Double proxy mode"),
+      custom: i18n("custom_proxy_mode", "Custom proxy mode"),
     };
-    const proxyLabel = proxyLabelMap[proxyMode] || "Proxy mode set";
-    const secretLabel = hasSecretValue || !ephemeral ? "Secret ready" : "Secret will be generated on save";
+    const proxyLabel = proxyLabelMap[proxyMode] || i18n("proxy_mode_set", "Proxy mode set");
+    const secretLabel = hasSecretValue || !ephemeral ? i18n("secret_ready", "Secret ready") : i18n("secret_generated_on_save", "Secret will be generated on save");
     return `${authLabel} · ${proxyLabel} · ${secretLabel}`;
   }
 
   function summarizeAdvancedStep() {
     const enabled = getAdvancedOverrideLabels();
     if (!enabled.length) {
-      return "No advanced overrides";
+      return i18n("no_advanced_overrides", "No advanced overrides");
     }
-    return `Advanced settings in use: ${enabled.join(", ")}`;
+    return i18n("advanced_settings_in_use", "Advanced settings in use: %(settings)s", { settings: enabled.join(", ") });
   }
 
   function updateStepSummaries() {
@@ -1688,25 +1642,25 @@
     const history = state.history;
     const enrichment = state.enrichment;
     if (stepHasErrors(1) || (!media.available.length) || (media.selected !== "auto" && !media.effective)) {
-      setStepStatus("setupStep1Status", "needs-attention", "Needs setup");
+      setStepStatus("setupStep1Status", "needs-attention", i18n("needs_setup", "Needs setup"));
     } else {
-      setStepStatus("setupStep1Status", "ready", "In use");
+      setStepStatus("setupStep1Status", "ready", i18n("in_use", "In use"));
     }
 
     if (stepHasErrors(2) || (history.selected !== "auto" && !history.effective)) {
-      setStepStatus("setupStep2Status", "needs-attention", "Needs setup");
+      setStepStatus("setupStep2Status", "needs-attention", i18n("needs_setup", "Needs setup"));
     } else if (history.available.length) {
-      setStepStatus("setupStep2Status", "ready", "In use");
+      setStepStatus("setupStep2Status", "ready", i18n("in_use", "In use"));
     } else {
-      setStepStatus("setupStep2Status", "optional", "Not set");
+      setStepStatus("setupStep2Status", "optional", i18n("not_set", "Not set"));
     }
 
     if (stepHasErrors(3) || (enrichment.selected !== "auto" && !enrichment.effective)) {
-      setStepStatus("setupStep3Status", "needs-attention", "Needs setup");
+      setStepStatus("setupStep3Status", "needs-attention", i18n("needs_setup", "Needs setup"));
     } else if (enrichment.available.length) {
-      setStepStatus("setupStep3Status", "configured", "Available");
+      setStepStatus("setupStep3Status", "configured", i18n("available", "Available"));
     } else {
-      setStepStatus("setupStep3Status", "optional", "Not set");
+      setStepStatus("setupStep3Status", "optional", i18n("not_set", "Not set"));
     }
 
     const authMethod = String(getFieldValue("sortarr_auth_method") || "basic").toLowerCase();
@@ -1717,27 +1671,34 @@
     if (stepHasErrors(4) || (authMethod === "basic" && !basicReady) || (authMethod === "basic_local_bypass" && (!basicReady || !localBypassReady)) || (authMethod === "external" && !externalReady) || !secretReady) {
       const authReady = authMethod === "external" ? externalReady : (authMethod === "basic_local_bypass" ? (basicReady && localBypassReady) : basicReady);
       const secretPendingOnly = !secretReady && authReady && !stepHasErrors(4);
-      setStepStatus("setupStep4Status", secretPendingOnly ? "configured" : "needs-attention", secretPendingOnly ? "Save needed" : "Needs setup");
+      setStepStatus("setupStep4Status", secretPendingOnly ? "configured" : "needs-attention", secretPendingOnly ? i18n("save_needed", "Save needed") : i18n("needs_setup", "Needs setup"));
     } else {
-      setStepStatus("setupStep4Status", "ready", "Ready");
+      setStepStatus("setupStep4Status", "ready", i18n("ready", "Ready"));
     }
 
     const hasAdvancedOverrides = getAdvancedOverrideLabels().length > 0;
     if (stepHasErrors(5)) {
-      setStepStatus("setupStep5Status", "needs-attention", "Check settings");
+      setStepStatus("setupStep5Status", "needs-attention", i18n("check_settings", "Check settings"));
     } else if (hasAdvancedOverrides) {
-      setStepStatus("setupStep5Status", "configured", "Custom");
+      setStepStatus("setupStep5Status", "configured", i18n("custom", "Custom"));
     } else {
-      setStepStatus("setupStep5Status", "optional", "Default");
+      setStepStatus("setupStep5Status", "optional", i18n("default", "Default"));
     }
   }
 
   function initStepSummaries() {
     document.querySelectorAll(".setup-form input, .setup-form select, .setup-form textarea").forEach((field) => {
-      field.addEventListener("input", updateStepSummaries);
-      field.addEventListener("change", updateStepSummaries);
+      field.addEventListener("input", () => {
+        updateStepSummaries();
+        scheduleSetupProviderStatePreview();
+      });
+      field.addEventListener("change", () => {
+        updateStepSummaries();
+        scheduleSetupProviderStatePreview();
+      });
     });
     updateStepSummaries();
+    scheduleSetupProviderStatePreview();
   }
 
   function initSetupFieldErrors() {
@@ -2287,19 +2248,24 @@
       const stepNumber = steps[currentStepIndex] || steps[steps.length - 1];
       const message = guideMessage(stepNumber);
       guideText.textContent = guidedMode
-        ? "Guided setup is active. Use the floating controls to move between steps."
-        : "Use guided setup if you want Sortarr to walk you through the setup one step at a time.";
+        ? i18n("guided_setup_active", "Guided setup is active. Use the floating controls to move between steps.")
+        : i18n("guided_setup_intro", "Use guided setup if you want Sortarr to walk you through the setup one step at a time.");
       if (modeLabel) {
         modeLabel.classList.toggle("hidden", !guidedMode);
       }
       guidedDock.classList.toggle("hidden", !guidedMode);
-      guidedDockProgress.textContent = `Step ${currentStepIndex + 1} of ${steps.length}`;
-      guidedDockTitle.textContent = message || `Step ${stepNumber}`;
+      guidedDockProgress.textContent = i18n("guided_step_progress", "Step %(current)s of %(total)s", {
+        current: currentStepIndex + 1,
+        total: steps.length,
+      });
+      guidedDockTitle.textContent = message || i18n("guided_step_title", "Step %(step)s", { step: stepNumber });
       startBtn.classList.toggle("hidden", guidedMode);
       dismissBtn.classList.toggle("hidden", guidedMode);
       hideBtn.classList.toggle("hidden", guidedMode);
       guidedDockBackBtn.disabled = !guidedMode || currentStepIndex === 0;
-      guidedDockNextBtn.textContent = currentStepIndex >= steps.length - 1 ? "Save and continue" : "Next step";
+      guidedDockNextBtn.textContent = currentStepIndex >= steps.length - 1
+        ? i18n("save_and_continue", "Save and continue")
+        : i18n("next_step", "Next step");
     }
 
     async function goToStepIndex(nextIndex) {
@@ -2450,34 +2416,7 @@
   }
 
   function updateEffectiveSourcesHint() {
-    const selectedEl = document.getElementById("setupSelectedSources");
-    const effectiveEl = document.getElementById("setupEffectiveSources");
-    const noteEl = document.getElementById("setupSourceExplanation");
     const state = buildSetupProviderState();
-    if (selectedEl) {
-      selectedEl.textContent = [
-        formatRoleLine("Selected", "media", "selected"),
-        `History: ${providerStateDisplayValue(state.history, "selected")}`,
-        `Enrichment: ${providerStateDisplayValue(state.enrichment, "selected")}`,
-      ].join(" | ");
-    }
-    if (effectiveEl) {
-      effectiveEl.textContent = [
-        formatRoleLine("Effective", "media", "effective"),
-        `History: ${providerStateDisplayValue(state.history, "effective")}`,
-        `Enrichment: ${providerStateDisplayValue(state.enrichment, "effective")}`,
-      ].join(" | ");
-      const hasDifference = ["media", "history", "enrichment"].some((roleKey) => {
-        const roleState = state[roleKey] || {};
-        return String(roleState.selected || "") !== String(roleState.effective || "");
-      });
-      effectiveEl.hidden = !hasDifference;
-    }
-    if (noteEl) {
-      const note = buildProviderStateExplanation(state);
-      noteEl.textContent = note;
-      noteEl.hidden = !note;
-    }
     updateProviderStateChips(state);
   }
 

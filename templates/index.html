@@ -10,8 +10,8 @@
   <meta name="csrf-token" content="{{ csrf_token }}" />
   <title>{{ app_name }}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <script src="/static/index_startup.js?v={{ app_version }}-startupfix6"></script>
-  <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}-startupfix6" />
+  <script src="/static/index_startup.js?v={{ app_version }}-startupfix9"></script>
+  <link rel="stylesheet" href="/static/styles.css?v={{ app_version }}-startupfix8" />
 </head>
 
 <body class="sortarr-loading">
@@ -20,258 +20,76 @@
       <div class="brand">
         <img id="brandLogo" src="/static/logo.svg" alt="{{ app_name }}" />
         <div class="brandText">
-          <div class="brandName">{{ app_name }}</div>
-          <div class="brandSub">{{ _('Media library insights') }}</div>
+          <div class="brandName">
+            <span>{{ app_name }}</span>
+            <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
+          </div>
+          <div class="brandSub">{{ app_name }} v{{ app_version }}<span class="brandSubTagline"> · {{ _('Media library insights') }}</span></div>
         </div>
       </div>
 
-      <button id="resetUiBtn" title="{{ _('Clear UI settings and reload cached data') }}">{{ _('Reset UI') }}</button>
-      <button id="settingsBtn" title="{{ _('Open setup') }}">{{ _('Settings') }}</button>
+      <div class="toolbar-status-group">
+        <span class="status" id="status" role="status" aria-live="polite"></span>
+      </div>
+
+      <div class="toolbar-actions">
+        <button id="resetUiBtn" title="{{ _('Clear UI settings and reload cached data') }}">{{ _('Reset UI') }}</button>
+        <button id="clearCachesBtn"
+          title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear caches & rebuild') }}</button>
+        <button id="settingsBtn" title="{{ _('Open setup') }}">{{ _('Settings') }}</button>
+      </div>
+
+      <div class="toolbar-tools">
+        <button id="toolbarCollapseBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide toolbar details') }}"
+          aria-label="{{ _('Hide toolbar details') }}" aria-expanded="true"></button>
+        <button id="themeBtn" title="{{ _('Toggle theme') }}">☀️</button>
+        <button id="tableFullscreenBtn" type="button" title="{{ _('Fullscreen Data Table') }}"
+          aria-label="{{ _('Fullscreen Data Table') }}">⛶</button>
+      </div>
       {% if setup_warning %}
       <div class="status-banner status-banner--warn" id="setupSaveWarning">{{ setup_warning }}</div>
       {% endif %}
-      <div class="column-menu">
-        <button id="columnsBtn" type="button" title="{{ _('Adjust visible columns') }}" aria-expanded="false"
-          aria-controls="columnsPanel">{{ _('Columns') }}</button>
-        <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="{{ _('Columns') }}"
-          aria-modal="false" aria-hidden="true">
-          <div class="column-panel-header">
-            <input id="columnSearch" class="column-search" type="search" placeholder="{{ _('Search columns') }}" />
-            <div class="column-actions">
-              <button id="columnsShowAll" type="button">{{ _('Show all') }}</button>
-              <button id="columnsHideAll" type="button">{{ _('Hide all') }}</button>
-              <button id="columnsReset" type="button">{{ _('Reset') }}</button>
-            </div>
-            <label class="column-toggle">
-              <input type="checkbox" id="csvColumnsToggle" />
-              <span>{{ _('Enable CSV columns') }}</span>
-            </label>
+      {% set initial_overlay_provider = ((bootstrap_config.provider_state or {}).get('enrichment', {}).get('effective', '') or '')|lower %}
+      {% set initial_media_provider = ((bootstrap_config.provider_state or {}).get('media', {}).get('effective', '') or '')|lower %}
+      {% set initial_history_provider = ((bootstrap_config.provider_state or {}).get('history', {}).get('effective', '') or '')|lower %}
+      {% set initial_playback_enabled = bootstrap_config.playback_configured %}
+      {% set initial_media_label = 'Sonarr/Radarr' if initial_media_provider == 'arr' else ('Plex' if initial_media_provider == 'plex' else ('Emby' if initial_media_provider == 'emby' else ('Jellyfin' if initial_media_provider == 'jellyfin' else _('Media'))) ) %}
+      {% set initial_overlay_label = 'Plex' if initial_overlay_provider == 'plex' else ('Emby' if initial_overlay_provider == 'emby' else ('Jellyfin' if initial_overlay_provider == 'jellyfin' else 'Enrichment')) %}
+      {% set initial_history_label = 'Tracearr' if initial_history_provider == 'tracearr' else ('Streamystats' if initial_history_provider == 'streamystats' else ('Jellystat' if initial_history_provider == 'jellystat' else ('Tautulli' if initial_history_provider == 'tautulli' else ('Plex' if initial_history_provider == 'plex' else initial_overlay_label)))) %}
+      {% set initial_show_deep_refresh = initial_playback_enabled and initial_history_provider != 'jellystat' %}
+      <div class="status-row" id="statusRow">
+          <div class="status-block" id="mediaStatusBlock">
+            <div class="status-label">{{ _('Media') }}</div>
+            <div class="status-value status-value--skeleton" id="mediaStatus">--</div>
+            <div class="status-meta" id="mediaStatusMeta" aria-live="polite">{{ initial_media_label }}</div>
           </div>
-          <div class="column-group">
-            <div class="column-group-title">{{ _('Core') }}</div>
-            <label class="column-row"><input type="checkbox" data-col="Title" /> {{ _('Title') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Year" /> {{ _('Year') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="DateAdded" /> {{ _('Date Added') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Instance" /> {{ _('Instance') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="RootFolder" /> {{ _('Root Folder') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Path" /> {{ _('Path') }}</label>
-          </div>
-
-
-
-          <div class="column-group" data-app="sonarr">
-            <div class="column-group-title">{{ _('Sonarr') }}</div>
-
-            <label class="column-row column-row--group">
-              <input type="checkbox" data-col-group="sonarr" /> {{ _('Sonarr columns') }}
-            </label>
-            <label class="column-row"><input type="checkbox" data-col="SeriesType" /> {{ _('Series Type') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="LastAired" /> {{ _('Last Aired') }}</label>
-            <label class="column-row" title="{{ _('Episodes missing on disk.') }}"><input type="checkbox"
-                data-col="MissingCount" /> {{ _('Missing') }}</label>
-            <label class="column-row" title="{{ _('Episodes where the quality cutoff is unmet.') }}"><input
-                type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
-            <label class="column-row" title="{{ _('Total content hours based on non-special episodes.') }}"><input
-                type="checkbox" data-col="ContentHours" /> {{ _('Runtime (hh:mm)') }}</label>
-            <label class="column-row" title="{{ _('Episode count excludes specials.') }}"><input type="checkbox"
-                data-col="EpisodesCounted" /> {{ _('Episodes') }}</label>
-            <label class="column-row"
-              title="{{ _('Season count excludes specials and only counts seasons with files.') }}"><input
-                type="checkbox" data-col="SeasonCount" /> {{ _('Seasons') }}</label>
-            <label class="column-row"
-              title="{{ _('Minimum episode custom format score across episodes with files (specials excluded).') }}"><input
-                type="checkbox" data-col="LowestCustomFormatScore" /> {{ _('Lowest Ep CF Score') }}</label>
-            <label class="column-row"
-              title="{{ _('Maximum episode custom format score across episodes with files (specials excluded).') }}"><input
-                type="checkbox" data-col="HighestCustomFormatScore" /> {{ _('Highest Ep CF Score') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> {{ _('Avg / Ep (GiB)')
-              }}</label>
-            <label class="column-row" title="{{ _('Total size includes specials.') }}"><input type="checkbox"
-                data-col="TotalSizeGB" /> {{ _('Total (GiB)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
-            <label class="column-row" title="{{ _('Estimated series bitrate from total size and runtime.') }}"><input
-                type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
-              }}</label>
-          </div>
-
-
-
-
-
-
-          <div class="column-group" data-app="radarr">
-            <div class="column-group-title">{{ _('Radarr') }}</div>
-
-            <label class="column-row column-row--group">
-              <input type="checkbox" data-col-group="radarr" /> {{ _('Radarr columns') }}
-            </label>
-
-            <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> {{ _('Runtime (hh:mm)')
-              }}</label>
-            <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> {{ _('Size (GiB)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="FrameRateFps" /> {{ _('Frame Rate (FPS)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="BitsPerPixelPerFrame" /> {{ _('BPPF') }}</label>
-
-            <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
-              }}</label>
-
-            <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
-
-            <label class="column-row" title="{{ _('Movies missing on disk.') }}"><input type="checkbox"
-                data-col="MissingCount" />
-              {{ _('Missing') }}</label>
-            <label class="column-row" title="{{ _('Movies where the quality cutoff is unmet.') }}"><input
-                type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
-
-            <label class="column-row"><input type="checkbox" data-col="HasFile" /> {{ _('Has File') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="IsAvailable" /> {{ _('Available') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="InCinemas" /> {{ _('In Cinemas') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="LastSearchTime" /> {{ _('Last Search') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Edition" /> {{ _('Edition') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> {{ _('Custom Formats')
-              }}</label>
-            <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> {{ _('Custom Format Score')
-              }}</label>
-            <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> {{ _('Cutoff Not Met')
-              }}</label>
-          </div>
-
-
-
-
-
-          <div class="column-group">
-            <div class="column-group-title">{{ _('Video') }}</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="video" /> {{ _('Video
-              columns') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> {{ _('Video Quality') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Resolution" /> {{ _('Resolution') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> {{ _('Video Codec') }}</label>
-            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
-              }}</label>
-            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
-              }}</label>
-          </div>
-
-
-          <div class="column-group">
-            <div class="column-group-title">{{ _('Language') }}</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> {{
-              _('Language
-              columns') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> {{ _('Original Language')
-              }}</label>
-            <label class="column-row" data-app="radarr"><input type="checkbox" data-col="Languages" /> {{ _('Audio
-              Languages') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> {{ _('Audio Codec') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> {{ _('Audio Channels')
-              }}</label>
-            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="AudioLanguages" /> {{ _('Audio
-              Languages') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> {{ _('Subtitle Languages')
-              }}</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> {{ _('Audio Languages
-              Mixed') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> {{ _('Subtitle
-              Languages
-              Mixed') }}</label>
-          </div>
-
-
-          <div class="column-group">
-            <div class="column-group-title" data-playback-title>{{ _('Playback') }}</div>
-            <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> {{
-              _('Playback
-              columns') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> {{ _('Diagnostics') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="PlayCount" /> {{ _('Times Watched') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="LastWatched" /> {{ _('Last Watched') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> {{ _('Days Since Watched')
-              }}</label>
-            <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> {{ _('Watch Time
-              (hh:mm)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> {{ _('Watch / Runtime
-              (hh:mm)') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> {{ _('Users Watched') }}</label>
-          </div>
-          <div class="column-group">
-            <div class="column-group-title">{{ _('Advanced') }}</div>
-            <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> {{ _('Title
-              Slug') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="TmdbId" /> {{ _('TMDB ID') }}</label>
-            <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> {{ _('Audio Codec Mixed')
-              }}</label>
-          </div>
-          <div class="column-scroll-hint" aria-hidden="true"></div>
-        </div>
-      </div>
-      <button id="themeBtn" title="{{ _('Toggle theme') }}">☀️</button>
-      <button id="tableFullscreenBtn" type="button" title="{{ _('Fullscreen Data Table') }}"
-        aria-label="{{ _('Fullscreen Data Table') }}">⛶</button>
-      <span class="status" id="status" role="status" aria-live="polite"></span>
-      <span class="status" id="effectiveSources" aria-live="polite"></span>
-      <span class="loading-indicator hidden" id="loadingIndicator" aria-hidden="true"></span>
-      <span class="version-badge">{{ app_name }} v{{ app_version }} - {{ _('Sonarr & Radarr efficiency view') }}</span>
-    </div>
-
-
-
-
-    <div class="filters" id="filtersPanel">
-      <div class="filters-body">
-        {% set initial_overlay_provider = (bootstrap_config.overlay_provider or bootstrap_config.playback_provider or '')|lower %}
-        {% set initial_history_provider = ((bootstrap_config.option_set or {}).get('selected', {}).get('history_source', '') or '')|lower %}
-        {% set initial_playback_enabled = bootstrap_config.playback_configured or bootstrap_config.tautulli_configured %}
-        {% set initial_overlay_label = 'Plex' if initial_overlay_provider == 'plex' else ('Emby' if initial_overlay_provider == 'emby' else ('Jellyfin' if initial_overlay_provider == 'jellyfin' else 'Enrichment')) %}
-        {% set initial_history_label = 'Tracearr' if initial_history_provider == 'tracearr' else ('Streamystats' if initial_history_provider == 'streamystats' else ('Jellystat' if initial_history_provider == 'jellystat' else ('Tautulli' if initial_history_provider == 'tautulli' else ('Plex' if initial_history_provider == 'plex' else initial_overlay_label)))) %}
-        {% set initial_show_deep_refresh = initial_playback_enabled and initial_history_provider != 'jellystat' %}
-        <div class="status-row" id="statusRow">
-          <div class="status-block">
-            <div class="status-label">{{ _('Progress') }}</div>
+          <div class="status-block" id="historyStatusBlock">
+            <div class="status-label">{{ _('History') }}</div>
             <div class="status-value status-value--skeleton" id="progressStatus">--</div>
+            <div class="status-meta" id="historyStatusMeta" aria-live="polite">{{ initial_history_label if initial_playback_enabled else _('History') }}</div>
           </div>
-          <div class="status-block">
-            <div class="status-label" data-playback-label>{{ initial_history_label if initial_playback_enabled else _('History') }}</div>
-            <div class="status-value status-value--skeleton" id="tautulliStatus">--</div>
-          </div>
-          <div class="status-block">
-            <div class="status-label">{{ _('Cache') }}</div>
-            <div class="status-value status-value--skeleton" id="cacheStatus">--</div>
+          <div class="status-block" id="enrichmentStatusBlock">
+            <div class="status-label">{{ _('Enrichment') }}</div>
+            <div class="status-value status-value--skeleton" id="enrichmentStatus">--</div>
+            <div class="status-meta" id="enrichmentStatusMeta" aria-live="polite">{{ initial_overlay_label }}</div>
           </div>
           <div class="status-actions">
             <div class="status-actions-group">
               <button id="refreshTabBtn"
-                title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh
-                Shows data') }}</button>
+                title="{{ _('Refresh the active app metadata, reload its data, and update the cache') }}">{{ _('Refresh Shows data') }}</button>
               <button id="refreshTautulliBtn"{% if not initial_playback_enabled %} class="hidden"{% endif %} disabled
-                title="Re-match using current {{ initial_history_label }} data">Re-match from {{ initial_history_label }}</button>
-              <button id="deepRefreshTautulliBtn"{% if not initial_show_deep_refresh %} class="hidden"{% endif %} disabled
-                title="Refresh {{ initial_history_label }} library data, then rebuild matches">Rebuild {{ initial_history_label }} data</button>
+                title="Refresh {{ initial_history_label }} library data, then rebuild matches">Refresh {{ initial_history_label }} data</button>
               <button id="plexInsightsBtn" disabled title="{{ _('Open provider insights') }}">{{ _('Provider Insights')
                 }}</button>
               <button id="mismatchCenterBtn" disabled title="{{ _('Open mismatch center') }}">{{ _('Mismatch Center')
                 }}</button>
-              <button id="clearCachesBtn"
-                title="{{ _('Clear all Sortarr cache files and rebuild everything from scratch') }}">{{ _('Clear
-                caches & rebuild') }}</button>
             </div>
           </div>
           <div class="status-complete hidden" id="statusCompleteNote">{{ _('All data is up to date.') }}</div>
-        </div>
+      </div>
+    </div>
+    <div class="filters" id="filtersPanel">
+      <div class="filters-body" id="filtersBody">
         <div class="filter-row">
           <div class="filter-inputs advanced-on" id="filterInputs">
             <input id="advancedFilter" class="advanced-filter"
@@ -344,14 +162,10 @@
                 <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:matched">{{ _('Matched')
                   }}</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unmatched">{{
-                  _('Potential
-                  Mismatch') }}</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:future">{{ _('Future
-                  Release') }}</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:nodisk">{{ _('Not On
-                  Disk') }}</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:notchecked">{{ _('Not
-                  Checked') }}</button>
+                  _('Potential Mismatch') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:future">{{ _('Future Release') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:nodisk">{{ _('Not On Disk') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:notchecked">{{ _('Not Checked') }}</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="matchstatus:unavailable">{{
                   _('Unavailable') }}</button>
               </div>
@@ -359,16 +173,13 @@
             <div class="chip-group" data-tautulli="true">
               <div class="chip-group-title" data-playback-title>{{ _('Playback') }}</div>
               <div class="chip-row">
-                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">{{ _('Never
-                  Watched') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="neverwatched:true">{{ _('Never Watched') }}</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="playcount>=1">{{ _('Watched')
                   }}</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="playcount>=2">{{ _('Rewatched')
                   }}</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">{{ _('Recent
-                  (30d)') }}</button>
-                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">{{ _('Heavy (10+
-                  hrs)') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="dayssincewatched<=30">{{ _('Recent (30d)') }}</button>
+                <button class="chip" type="button" data-tautulli="true" data-query="watchtime>=10">{{ _('Heavy (10+ hrs)') }}</button>
                 <button class="chip" type="button" data-tautulli="true" data-query="users>=2">{{ _('Multi-user')
                   }}</button>
               </div>
@@ -438,7 +249,7 @@
       </div>
       <div class="filters-footer">
         <button id="filtersToggleBtn" type="button" class="filters-toggle-btn" title="{{ _('Hide filters and chips') }}"
-          aria-label="{{ _('Hide filters and chips') }}" aria-expanded="true" aria-controls="filtersPanel">▾</button>
+          aria-label="{{ _('Hide filters and chips') }}" aria-expanded="true" aria-controls="filtersBody">▴</button>
         <div class="plex-library-scope hidden" id="plexLibraryScope" data-app="sonarr">
           <label for="plexLibrarySelect">{{ _('Plex Libraries') }}</label>
           <select id="plexLibrarySelect" class="plex-library-select" multiple size="4"
@@ -448,6 +259,163 @@
         <div class="tabs">
           <button class="tab active" id="tabSonarr">{{ _('Shows') }}</button>
           <button class="tab" id="tabRadarr">{{ _('Movies') }}</button>
+          <div class="column-menu">
+            <button id="columnsBtn" type="button" title="{{ _('Adjust visible columns') }}" aria-expanded="false"
+              aria-controls="columnsPanel">{{ _('Columns') }}</button>
+            <div id="columnsPanel" class="column-panel hidden" role="dialog" aria-label="{{ _('Columns') }}"
+              aria-modal="false" aria-hidden="true">
+              <div class="column-panel-header">
+                <input id="columnSearch" class="column-search" type="search" placeholder="{{ _('Search columns') }}" />
+                <div class="column-actions">
+                  <button id="columnsShowAll" type="button">{{ _('Show all') }}</button>
+                  <button id="columnsHideAll" type="button">{{ _('Hide all') }}</button>
+                  <button id="columnsReset" type="button">{{ _('Reset') }}</button>
+                </div>
+                <label class="column-toggle">
+                  <input type="checkbox" id="csvColumnsToggle" />
+                  <span>{{ _('Enable CSV columns') }}</span>
+                </label>
+              </div>
+              <div class="column-group">
+                <div class="column-group-title">{{ _('Core') }}</div>
+                <label class="column-row"><input type="checkbox" data-col="Title" /> {{ _('Title') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Year" /> {{ _('Year') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="DateAdded" /> {{ _('Date Added') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Instance" /> {{ _('Instance') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="RootFolder" /> {{ _('Root Folder') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Path" /> {{ _('Path') }}</label>
+              </div>
+
+              <div class="column-group" data-app="sonarr">
+                <div class="column-group-title">{{ _('Sonarr') }}</div>
+                <label class="column-row column-row--group">
+                  <input type="checkbox" data-col-group="sonarr" /> {{ _('Sonarr columns') }}
+                </label>
+                <label class="column-row"><input type="checkbox" data-col="SeriesType" /> {{ _('Series Type') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="LastAired" /> {{ _('Last Aired') }}</label>
+                <label class="column-row" title="{{ _('Episodes missing on disk.') }}"><input type="checkbox"
+                    data-col="MissingCount" /> {{ _('Missing') }}</label>
+                <label class="column-row" title="{{ _('Episodes where the quality cutoff is unmet.') }}"><input
+                    type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
+                <label class="column-row" title="{{ _('Total content hours based on non-special episodes.') }}"><input
+                    type="checkbox" data-col="ContentHours" /> {{ _('Runtime (hh:mm)') }}</label>
+                <label class="column-row" title="{{ _('Episode count excludes specials.') }}"><input type="checkbox"
+                    data-col="EpisodesCounted" /> {{ _('Episodes') }}</label>
+                <label class="column-row"
+                  title="{{ _('Season count excludes specials and only counts seasons with files.') }}"><input
+                    type="checkbox" data-col="SeasonCount" /> {{ _('Seasons') }}</label>
+                <label class="column-row"
+                  title="{{ _('Minimum episode custom format score across episodes with files (specials excluded).') }}"><input
+                    type="checkbox" data-col="LowestCustomFormatScore" /> {{ _('Lowest Ep CF Score') }}</label>
+                <label class="column-row"
+                  title="{{ _('Maximum episode custom format score across episodes with files (specials excluded).') }}"><input
+                    type="checkbox" data-col="HighestCustomFormatScore" /> {{ _('Highest Ep CF Score') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="AvgEpisodeSizeGB" /> {{ _('Avg / Ep (GiB)')
+                  }}</label>
+                <label class="column-row" title="{{ _('Total size includes specials.') }}"><input type="checkbox"
+                    data-col="TotalSizeGB" /> {{ _('Total (GiB)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
+                <label class="column-row" title="{{ _('Estimated series bitrate from total size and runtime.') }}"><input
+                    type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
+                  }}</label>
+              </div>
+
+              <div class="column-group" data-app="radarr">
+                <div class="column-group-title">{{ _('Radarr') }}</div>
+                <label class="column-row column-row--group">
+                  <input type="checkbox" data-col-group="radarr" /> {{ _('Radarr columns') }}
+                </label>
+                <label class="column-row"><input type="checkbox" data-col="RuntimeMins" /> {{ _('Runtime (hh:mm)')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="FileSizeGB" /> {{ _('Size (GiB)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="GBPerHour" /> {{ _('GiB / Hour') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="BitrateMbps" /> {{ _('Bitrate (Mbps)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="FrameRateFps" /> {{ _('Frame Rate (FPS)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="BitsPerPixelPerFrame" /> {{ _('BPPF') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Status" /> {{ _('Status') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Monitored" /> {{ _('Monitored') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Tags" /> {{ _('Tags') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="ReleaseGroup" /> {{ _('Release Group') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="QualityProfile" /> {{ _('Quality Profile')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Studio" /> {{ _('Studio') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Genres" /> {{ _('Genres') }}</label>
+                <label class="column-row" title="{{ _('Movies missing on disk.') }}"><input type="checkbox"
+                    data-col="MissingCount" /> {{ _('Missing') }}</label>
+                <label class="column-row" title="{{ _('Movies where the quality cutoff is unmet.') }}"><input
+                    type="checkbox" data-col="CutoffUnmetCount" /> {{ _('Cutoff Unmet') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="HasFile" /> {{ _('Has File') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="IsAvailable" /> {{ _('Available') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="InCinemas" /> {{ _('In Cinemas') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="LastSearchTime" /> {{ _('Last Search') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Edition" /> {{ _('Edition') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="CustomFormats" /> {{ _('Custom Formats')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="CustomFormatScore" /> {{ _('Custom Format Score')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="QualityCutoffNotMet" /> {{ _('Cutoff Not Met')
+                  }}</label>
+              </div>
+
+              <div class="column-group">
+                <div class="column-group-title">{{ _('Video') }}</div>
+                <label class="column-row column-row--group"><input type="checkbox" data-col-group="video" /> {{ _('Video columns') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="VideoQuality" /> {{ _('Video Quality') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Resolution" /> {{ _('Resolution') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="VideoCodec" /> {{ _('Video Codec') }}</label>
+                <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
+                  }}</label>
+                <label class="column-row" data-app="radarr"><input type="checkbox" data-col="VideoHDR" /> {{ _('Video HDR')
+                  }}</label>
+              </div>
+
+              <div class="column-group">
+                <div class="column-group-title">{{ _('Language') }}</div>
+                <label class="column-row column-row--group"><input type="checkbox" data-col-group="language" /> {{
+                  _('Language columns') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="OriginalLanguage" /> {{ _('Original Language')
+                  }}</label>
+                <label class="column-row" data-app="radarr"><input type="checkbox" data-col="Languages" /> {{ _('Audio Languages') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="AudioCodec" /> {{ _('Audio Codec') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="AudioChannels" /> {{ _('Audio Channels')
+                  }}</label>
+                <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="AudioLanguages" /> {{ _('Audio Languages') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="SubtitleLanguages" /> {{ _('Subtitle Languages')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="AudioLanguagesMixed" /> {{ _('Audio Languages Mixed') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="SubtitleLanguagesMixed" /> {{ _('Subtitle Languages Mixed') }}</label>
+              </div>
+
+              <div class="column-group">
+                <div class="column-group-title" data-playback-title>{{ _('Playback') }}</div>
+                <label class="column-row column-row--group"><input type="checkbox" data-col-group="tautulli" /> {{
+                  _('Playback columns') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="Diagnostics" /> {{ _('Diagnostics') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="PlayCount" /> {{ _('Times Watched') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="LastWatched" /> {{ _('Last Watched') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="DaysSinceWatched" /> {{ _('Days Since Watched')
+                  }}</label>
+                <label class="column-row"><input type="checkbox" data-col="TotalWatchTimeHours" /> {{ _('Watch Time (hh:mm)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="WatchContentRatio" /> {{ _('Watch / Runtime (hh:mm)') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="UsersWatched" /> {{ _('Users Watched') }}</label>
+              </div>
+              <div class="column-group">
+                <div class="column-group-title">{{ _('Advanced') }}</div>
+                <label class="column-row" data-app="sonarr"><input type="checkbox" data-col="TitleSlug" /> {{ _('Title Slug') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="TmdbId" /> {{ _('TMDB ID') }}</label>
+                <label class="column-row"><input type="checkbox" data-col="AudioCodecMixed" /> {{ _('Audio Codec Mixed')
+                  }}</label>
+              </div>
+              <div class="column-scroll-hint" aria-hidden="true"></div>
+            </div>
+          </div>
           <span class="spacer"></span>
           <button id="exportCsvBtn">{{ _('Export CSV') }}</button>
         </div>
@@ -516,9 +484,7 @@
                   title="{{ _('Maximum episode custom format score across episodes with files (specials excluded).') }}">{{ _('Highest Ep CF Score') }}
                   <span class="sort-indicator"></span>
                 </th>
-                <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg /
-                  Ep
-                  (GiB)') }}
+                <th class="right" data-sort="AvgEpisodeSizeGB" data-app="sonarr" data-col="AvgEpisodeSizeGB">{{ _('Avg / Ep (GiB)') }}
                   <span class="sort-indicator"></span>
                 </th>
                 <th data-sort="TotalSizeGB" data-app="sonarr" data-col="TotalSizeGB"
@@ -532,8 +498,7 @@
                   <span class="sort-indicator"></span>
                 </th>
 
-                <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime
-                  (hh:mm)')
+                <th class="right" data-sort="RuntimeMins" data-app="radarr" data-col="RuntimeMins">{{ _('Runtime (hh:mm)')
                   }} <span class="sort-indicator"></span></th>
                 <th class="right" data-sort="FileSizeGB" data-app="radarr" data-col="FileSizeGB">{{ _('Size (GiB)') }}
                   <span class="sort-indicator"></span>
@@ -541,12 +506,10 @@
                 <th class="right" data-sort="GBPerHour" data-app="radarr" data-col="GBPerHour">{{ _('GiB / Hour') }}
                   <span class="sort-indicator"></span>
                 </th>
-                <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate
-                  (Mbps)') }}
+                <th class="right" data-sort="BitrateMbps" data-app="radarr" data-col="BitrateMbps">{{ _('Bitrate (Mbps)') }}
                   <span class="sort-indicator"></span>
                 </th>
-                <th class="right" data-sort="FrameRateFps" data-app="radarr" data-col="FrameRateFps">{{ _('Frame Rate
-                  (FPS)') }}
+                <th class="right" data-sort="FrameRateFps" data-app="radarr" data-col="FrameRateFps">{{ _('Frame Rate (FPS)') }}
                   <span class="sort-indicator"></span>
                 </th>
                 <th class="right" data-sort="BitsPerPixelPerFrame" data-app="radarr" data-col="BitsPerPixelPerFrame">{{
@@ -591,10 +554,8 @@
                 <th data-sort="CustomFormats" data-app="radarr" data-col="CustomFormats">{{ _('Custom Formats') }} <span
                     class="sort-indicator"></span></th>
                 <th class="right" data-sort="CustomFormatScore" data-app="radarr" data-col="CustomFormatScore">{{
-                  _('Custom
-                  Format Score') }} <span class="sort-indicator"></span></th>
-                <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not
-                  Met')
+                  _('Custom Format Score') }} <span class="sort-indicator"></span></th>
+                <th data-sort="QualityCutoffNotMet" data-app="radarr" data-col="QualityCutoffNotMet">{{ _('Cutoff Not Met')
                   }} <span class="sort-indicator"></span></th>
                 <th data-sort="Languages" data-app="radarr" data-col="Languages">{{ _('Audio Languages') }} <span
                     class="sort-indicator"></span></th>
@@ -627,11 +588,9 @@
                     class="sort-indicator"></span></th>
                 <th class="right" data-sort="DaysSinceWatched" data-col="DaysSinceWatched">{{ _('Days Since') }} <span
                     class="sort-indicator"></span></th>
-                <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time
-                  (hh:mm)')
+                <th class="right" data-sort="TotalWatchTimeHours" data-col="TotalWatchTimeHours">{{ _('Watch Time (hh:mm)')
                   }} <span class="sort-indicator"></span></th>
-                <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime
-                  (hh:mm)')
+                <th class="right" data-sort="WatchContentRatio" data-col="WatchContentRatio">{{ _('Watch / Runtime (hh:mm)')
                   }} <span class="sort-indicator"></span></th>
                 <th class="right" data-sort="UsersWatched" data-col="UsersWatched">{{ _('Users Watched') }} <span
                     class="sort-indicator"></span></th>
@@ -643,8 +602,7 @@
                 <th data-sort="AudioLanguagesMixed" data-col="AudioLanguagesMixed">{{ _('Audio Languages Mixed') }}
                   <span class="sort-indicator"></span>
                 </th>
-                <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages
-                  Mixed') }}
+                <th data-sort="SubtitleLanguagesMixed" data-col="SubtitleLanguagesMixed">{{ _('Subtitle Languages Mixed') }}
                   <span class="sort-indicator"></span>
                 </th>
 
@@ -771,6 +729,8 @@
     "askArrRefreshMetadata": _("Ask %(app)s to refresh metadata?", app="%(app)s"),
     "refreshingAppData": _("Refreshing %(app)s data...", app="%(app)s"),
     "appRefreshQueued": _("%(app)s refresh queued.", app="%(app)s"),
+    "refreshFailedItemIdMissing": _("Refresh failed: item ID missing."),
+    "refreshingRowItemStatus": _("Refreshing %(title)s - %(details)s", title="%(title)s", details="%(details)s"),
 
     "errorPrefix": _("Error: "),
 
@@ -817,6 +777,19 @@
 
     "cacheAwaitingData": _("%(label)s: Awaiting data", label="%(label)s"),
     "cacheAgeAgo": _("%(label)s: %(age)s ago", label="%(label)s", age="%(age)s"),
+    "providerReady": _("%(label)s is ready.", label="%(label)s"),
+    "readyWithAge": _("Ready (%(age)s ago)", age="%(age)s"),
+    "providerReadyWithAge": _("%(label)s ready (%(age)s ago).", label="%(label)s", age="%(age)s"),
+    "refreshingProviderInsights": _("Refreshing %(label)s insights...", label="%(label)s"),
+    "buildingProviderInsightsCache": _("Building %(label)s cache...", label="%(label)s"),
+    "awaitingProviderInsightsData": _("Awaiting %(label)s data...", label="%(label)s"),
+    "awaitingMatchData": _("Awaiting match data"),
+    "awaitingMatchDataProgress": _("Awaiting match data %(processed)s/%(total)s", processed="%(processed)s", total="%(total)s"),
+    "awaitingProviderMatchData": _("%(enrichment)s is waiting for %(history)s match data.", enrichment="%(enrichment)s", history="%(history)s"),
+    "awaitingProviderMatchDataProgress": _("%(enrichment)s is waiting for %(history)s match data (%(processed)s/%(total)s processed).", enrichment="%(enrichment)s", history="%(history)s", processed="%(processed)s", total="%(total)s"),
+    "refreshingMediaCache": _("Refreshing %(label)s cache...", label="%(label)s"),
+    "loadingMediaLibrary": _("Loading %(label)s library...", label="%(label)s"),
+    "mediaCacheAge": _("%(label)s cache status", label="%(label)s"),
 
     "progressBase": _("%(matched)s/%(total)s %(label)s", matched="%(matched)s", total="%(total)s", label="%(label)s"),
     "progressAgeUnknown": _("--"),
@@ -824,11 +797,15 @@
     "progressUpdatedSuffix": _(" | updated %(ageLabel)s", ageLabel="%(ageLabel)s"),
     "progressPendingSuffix": _(" - %(pending)s pending", pending="%(pending)s"),
     "progressNotMatchedSuffix": _(" - %(notMatched)s not matched", notMatched="%(notMatched)s"),
+    "progressNotMatchedLabel": _("%(notMatched)s not matched", notMatched="%(notMatched)s"),
+    "matchingInProgressProcessed": _("%(label)s matching in progress (%(processed)s/%(total)s processed).", label="%(label)s", processed="%(processed)s", total="%(total)s"),
 
     "processedLower": _("processed"),
     "matchedLower": _("matched"),
     "coldCacheNotice": _("First load can take a while for large libraries; later loads are cached and faster."),
     "playbackMatchingNotice": _("Playback matching in progress."),
+    "First load can take a while for large libraries; later loads are cached and faster.": _("First load can take a while for large libraries; later loads are cached and faster."),
+    "Playback matching in progress.": _("Playback matching in progress."),
     "matchingInProgressLabel": _("%(label)s matching in progress.", label="%(label)s"),
     "noArrMediaSourcePlexAvailable": _("No Sonarr/Radarr media source configured. Plex features are available."),
     "noArrMediaSourceProviderAvailable": _("No Sonarr/Radarr media source configured. Direct provider features are available."),
@@ -958,6 +935,160 @@
     "loadingMoviesData": _("Loading Movies data..."),
     "tabShows": _("Shows"),
     "tabMovies": _("Movies"),
+    "Shows": _("Shows"),
+    "Movies": _("Movies"),
+    "Instance": _("Instance"),
+    "Year": _("Year"),
+    "Quality": _("Quality"),
+    "Bitrate": _("Bitrate"),
+    "FPS": _("FPS"),
+    "BPPF": _("BPPF"),
+    "Times Watched": _("Times Watched"),
+    "Watch Time": _("Watch Time"),
+    "Days Since": _("Days Since"),
+    "Cutoff Not Met": _("Cutoff Not Met"),
+    "Total Size": _("Total Size"),
+    "GB / Hour": _("GiB / Hour"),
+    "Avg Episode Size": _("Avg Episode Size"),
+    "Lowest Episode Custom Format Score": _("Lowest Episode Custom Format Score"),
+    "Highest Episode Custom Format Score": _("Highest Episode Custom Format Score"),
+    "Custom Format Score": _("Custom Format Score"),
+    "sourceEmby": _("Emby"),
+    "sourceTracearr": _("Tracearr"),
+    "sourceStreamystats": _("Streamystats"),
+    "sourceRoleMedia": _("Media"),
+    "sourceRoleHistory": _("History"),
+    "sourceRoleEnrichment": _("Enrichment"),
+    "sourceAutoUnavailableExplanation": _("%(role)s: %(auto)s selected, but nothing is available.", role="%(role)s", auto="%(auto)s"),
+    "sourceAutoUsingExplanation": _("%(role)s: %(auto)s selected, using %(provider)s.", role="%(role)s", auto="%(auto)s", provider="%(provider)s"),
+    "sourceSelectedUnavailableExplanation": _("%(role)s: %(provider)s selected, but it is unavailable.", role="%(role)s", provider="%(provider)s"),
+    "sourceSelectedUsingExplanation": _("%(role)s: %(selected)s selected, using %(effective)s.", role="%(role)s", selected="%(selected)s", effective="%(effective)s"),
+    "sourceAutoShortUsing": _("%(auto)s -> %(provider)s", auto="%(auto)s", provider="%(provider)s"),
+    "sourceAutoShortUnavailable": _("%(auto)s unavailable", auto="%(auto)s"),
+    "sourceShortUnavailable": _("%(provider)s unavailable", provider="%(provider)s"),
+    "sourceShortUsing": _("%(selected)s -> %(effective)s", selected="%(selected)s", effective="%(effective)s"),
+    "mismatchCenterUnavailable": _("Mismatch Center unavailable."),
+    "mismatchCenterTitle": _("Mismatch Center"),
+    "Exit fullscreen": _("Exit fullscreen"),
+    "Perf": _("Perf"),
+    "Long tasks": _("Long tasks"),
+    "Render": _("Render"),
+    "Rows": _("Rows"),
+    "DOM": _("DOM"),
+    "Toggle": _("Toggle"),
+    "Search categories…": _("Search categories…"),
+    "Search categories": _("Search categories"),
+    "No HDR": _("No HDR"),
+    "No File": _("No File"),
+    "Available": _("Available"),
+    "Not In Cinemas": _("Not In Cinemas"),
+    "Cutoff Met": _("Cutoff Met"),
+    "Mixed": _("Mixed"),
+    "Uniform": _("Uniform"),
+    "Custom": _("Custom"),
+    "is not any of": _("is not any of"),
+    "is any of": _("is any of"),
+    "notCondition": _("not %(condition)s", condition="%(condition)s"),
+    "Values": _("Values"),
+    "Advanced": _("Advanced"),
+    "Search": _("Search"),
+    "Select all": _("Select all"),
+    "activeForLabel": _("Active for %(label)s", label="%(label)s"),
+    "filterByLabel": _("Filter by %(label)s", label="%(label)s"),
+    "headerFilterShowingFirst": _("Showing first %(shown)s of %(total)s values. Keep typing to narrow results.", shown="%(shown)s", total="%(total)s"),
+    "sortByLabel": _("Sort by %(label)s", label="%(label)s"),
+    "Condition": _("Condition"),
+    "Apply": _("Apply"),
+    "Clear column": _("Clear column"),
+    "No values": _("No values"),
+    "Last Search Time": _("Last Search Time"),
+    "Bitrate (Mbps)": _("Bitrate (Mbps)"),
+    "Frame Rate (FPS)": _("Frame Rate (FPS)"),
+    "Duplicate Across Instances": _("Duplicate Across Instances"),
+    "sourceReady": _("Ready"),
+    "refreshingInsights": _("Refreshing insights..."),
+    "buildingInsightsCache": _("Building cache..."),
+    "refreshingCache": _("Refreshing cache..."),
+    "loadingLibrary": _("Loading library..."),
+    "refreshArrMetadata": _("Refresh %(appLabel)s metadata", appLabel="%(appLabel)s"),
+    "refreshArrMetadataWithSuffix": _("%(base)s (%(suffix)s)", base="%(base)s", suffix="%(suffix)s"),
+    "details": _("details"),
+    "Expand all seasons": _("Expand all seasons"),
+    "Merged": _("Merged"),
+    "Episode sort field": _("Episode sort field"),
+    "Order": _("Order"),
+    "Collapse all seasons": _("Collapse all seasons"),
+    "All Episodes": _("All Episodes"),
+    "mergedSeasonsCount": _("%(count)s seasons", count="%(count)s"),
+    "mergedEpisodesCount": _("%(count)s episodes", count="%(count)s"),
+    "Potential mismatch": _("Potential mismatch"),
+    "Future release": _("Future release"),
+    "Not on disk": _("Not on disk"),
+    "Not checked": _("Not checked"),
+    "Video": _("Video"),
+    "Audio": _("Audio"),
+    "est": _("est"),
+    "filters are unavailable until configured.": _("filters are unavailable until configured."),
+    "Playback filters are unavailable until configured.": _("Playback filters are unavailable until configured."),
+    "Copy playback match diagnostics": _("Copy playback match diagnostics"),
+    "chips": _("chips"),
+    "activeFiltersApplied": _("Active filters applied"),
+    "noResultsCurrentFilters": _("No rows match the current filters"),
+    "clearActiveFiltersAction": _("Clear active filters"),
+    "refreshingPlaybackData": _("Refreshing %(label)s data...", label="%(label)s"),
+    "playbackDeepRefreshStarted": _("%(label)s refresh started. This can take a while.", label="%(label)s"),
+    "playbackLabel": _("playback"),
+    "confirmClearCaches": _("Clear all Sortarr caches and rebuild from Sonarr/Radarr (and %(playback)s if configured)?", playback="%(playback)s"),
+    "clearingCaches": _("Clearing caches..."),
+    "cachesClearedReloading": _("Caches cleared. Reloading..."),
+    "refreshPlaybackProviderData": _("Refresh %(label)s data", label="%(label)s"),
+    "refreshPlaybackData": _("Refresh playback data"),
+    "refreshFailedRowNotFound": _("Refresh failed: row not found."),
+    "Show toolbar details": _("Show toolbar details"),
+    "Hide toolbar details": _("Hide toolbar details"),
+    "Series": _("Series"),
+    "Loading libraries...": _("Loading libraries..."),
+    "Loading provider insights...": _("Loading provider insights..."),
+    "Fetching library hubs, match health, and current activity.": _("Fetching library hubs, match health, and current activity."),
+    "Match health will populate once provider data is ready.": _("Match health will populate once provider data is ready."),
+    "Checking recent provider activity...": _("Checking recent provider activity..."),
+    "Loading secondary provider details...": _("Loading secondary provider details..."),
+    "Fetching provider insights...": _("Fetching provider insights..."),
+    "Provider insights unavailable.": _("Provider insights unavailable."),
+    "Refresh mismatch data": _("Refresh mismatch data"),
+    "Export mismatch CSV": _("Export mismatch CSV"),
+    "Provider": _("Provider"),
+    "All": _("All"),
+    "Category": _("Category"),
+    "Provider conflict": _("Provider conflict"),
+    "Unmatched all": _("Unmatched all"),
+    "Skipped all": _("Skipped all"),
+    "Unavailable all": _("Unavailable all"),
+    "Group": _("Group"),
+    "None": _("None"),
+    "Reason": _("Reason"),
+    "Search mismatches": _("Search mismatches"),
+    "Unknown": _("Unknown"),
+    "Ready": _("Ready"),
+    "Diagnostics ready": _("Diagnostics ready"),
+    "Diagnostics unavailable for this provider.": _("Diagnostics unavailable for this provider."),
+    "Refresh mismatch data after %(provider)s finishes refreshing.": _("Refresh mismatch data after %(provider)s finishes refreshing.", provider="%(provider)s"),
+    "Use row diagnostics for more detail.": _("Use row diagnostics for more detail."),
+    "Mismatch data is still warming up for %(providers)s. Refresh again shortly.": _("Mismatch data is still warming up for %(providers)s. Refresh again shortly.", providers="%(providers)s"),
+    "No mismatch rows found.": _("No mismatch rows found."),
+    "Other": _("Other"),
+    "Providers": _("Providers"),
+    "Loading mismatch data...": _("Loading mismatch data..."),
+    "Comparing provider indexes and preparing mismatch rows.": _("Comparing provider indexes and preparing mismatch rows."),
+    "No mismatch data yet.": _("No mismatch data yet."),
+    "showingLoadedMismatchRows": _("Showing %(filtered)s of %(loaded)s loaded mismatches", filtered="%(filtered)s", loaded="%(loaded)s"),
+    "showingMismatchRows": _("Showing %(filtered)s of %(total)s mismatches", filtered="%(filtered)s", total="%(total)s"),
+    "Total mismatches": _("Total mismatches"),
+    "Results capped to the first %(count)s rows": _("Results capped to the first %(count)s rows", count="%(count)s"),
+    "Reload mismatch-center rows using the current provider indexes.": _("Reload mismatch-center rows using the current provider indexes."),
+    "Pending providers: %(providers)s.": _("Pending providers: %(providers)s.", providers="%(providers)s"),
+    "Export the currently filtered mismatch rows to CSV.": _("Export the currently filtered mismatch rows to CSV."),
+    "Diagnostics unavailable for %(providers)s.": _("Diagnostics unavailable for %(providers)s.", providers="%(providers)s"),
 
     "advancedPlaceholderBase": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | year:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | duplicate:true | missing:true | cutoff:true | airing:true | isavailable:true | customformatscore>=100 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | any:aac | instance:sonarr-2"),
     "advancedPlaceholderTautulli": _("Advanced filtering examples: path:C:\\ | rootfolder:/data | dateadded:2024 | year:2024 | status:continuing | monitored:true | qualityprofile:HD-1080p | tags:kids | releasegroup:ntb | studio:pixar | seriestype:anime | audiolang:eng | sublang:eng | nosubs:true | duplicate:true | missing:true | cutoff:true | airing:true | isavailable:true | playcount>=5 | neverwatched:true | mismatch:true | dayssincewatched>=365 | watchtime>=10 | contenthours>=10 | gbperhour:1 | totalsize:10 | videocodec:x265 | videohdr:hdr | resolution:2160p | any:aac | instance:sonarr-2"),
@@ -1054,7 +1185,7 @@
   <script src="/static/index_bootstrap.js?v={{ app_version }}-startupfix6"></script>
 
   <script src="/static/column_widths.js?v={{ app_version }}-startupfix6"></script>
-  <script src="/static/app.min.js?v={{ app_version }}-startupfix6"></script>
+  <script src="/static/app.min.js?v={{ app_version }}-statusfix1"></script>
 </body>
 
 </html>

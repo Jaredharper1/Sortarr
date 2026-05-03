@@ -957,3 +957,474 @@ html[data-theme="dark"] .setup-inline-message.is-ok {
 html[data-theme="dark"] .setup-diagnostics {
   background: rgba(255, 255, 255, 0.04);
 }
+
+/* 0.9.0 setup uplift */
+:root {
+  --setup-bg:
+    radial-gradient(circle at 8% 10%, rgba(56, 189, 248, 0.18), transparent 52%),
+    radial-gradient(circle at 92% 14%, rgba(129, 140, 248, 0.16), transparent 48%),
+    linear-gradient(145deg, #edf4fb 0%, #f4f7fb 42%, #eaf1f8 100%);
+  --setup-card-bg: rgba(255, 255, 255, 0.9);
+  --setup-card-glass-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(244, 248, 253, 0.5));
+  --setup-glass-blur: 20px;
+  --setup-submit-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 246, 252, 0.78));
+  --setup-submit-border: rgba(136, 156, 179, 0.22);
+  --setup-submit-text: var(--text);
+}
+
+html[data-theme="dark"] {
+  --setup-bg:
+    radial-gradient(circle at 8% 10%, rgba(56, 189, 248, 0.16), transparent 50%),
+    radial-gradient(circle at 92% 14%, rgba(129, 140, 248, 0.14), transparent 48%),
+    linear-gradient(145deg, #09111b 0%, #0d1522 44%, #0a121d 100%);
+  --setup-card-bg: rgba(10, 18, 30, 0.88);
+  --setup-card-glass-bg: linear-gradient(180deg, rgba(19, 28, 44, 0.82), rgba(10, 18, 30, 0.7));
+  --setup-submit-bg: linear-gradient(180deg, rgba(20, 29, 46, 0.92), rgba(10, 18, 30, 0.86));
+  --setup-submit-border: rgba(148, 163, 184, 0.18);
+  --setup-submit-text: #eef4ff;
+}
+
+body {
+  background: var(--setup-bg);
+  background-attachment: fixed;
+}
+
+.lang-switch {
+  top: 16px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.32);
+  border: 1px solid rgba(136, 156, 179, 0.16);
+  box-shadow: 0 12px 30px rgba(18, 32, 51, 0.08);
+}
+
+html[data-theme="dark"] .lang-switch {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.lang-switch form {
+  margin-left: 0;
+}
+
+.lang-switch button {
+  color: var(--muted);
+  font-weight: 640;
+  letter-spacing: 0.02em;
+}
+
+.setup-wrap {
+  padding: 34px 18px;
+  align-items: flex-start;
+}
+
+.setup-card {
+  width: min(1040px, 100%);
+  margin: 46px auto 24px;
+  border-radius: 28px;
+  padding: 24px;
+  border-color: rgba(136, 156, 179, 0.18);
+  box-shadow: 0 28px 80px rgba(18, 32, 51, 0.16);
+}
+
+.setup-header {
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.setup-logo {
+  width: 64px;
+  height: 64px;
+  padding: 10px;
+  border-radius: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(240, 246, 252, 0.52));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.84), 0 14px 34px rgba(18, 32, 51, 0.12);
+}
+
+html[data-theme="dark"] .setup-logo {
+  background: linear-gradient(180deg, rgba(20, 29, 46, 0.92), rgba(10, 18, 30, 0.84));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 16px 36px rgba(0, 0, 0, 0.34);
+}
+
+.setup-title {
+  font-size: 1.42rem;
+  letter-spacing: -0.03em;
+}
+
+.setup-sub {
+  max-width: 78ch;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.setup-source-summary {
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.setup-source-summary > .setup-hint {
+  display: none !important;
+}
+
+.setup-card .setup-hint,
+.setup-card .setup-hint--subtle {
+  line-height: 1.5;
+}
+
+.setup-guide,
+.setup-success,
+.setup-guided-dock {
+  border-radius: 22px;
+  box-shadow: 0 22px 52px rgba(18, 32, 51, 0.12);
+}
+
+.setup-task-section {
+  gap: 14px;
+  margin-top: 10px;
+  padding: 20px;
+  border-radius: 24px;
+  border-color: rgba(136, 156, 179, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.38), rgba(244, 248, 253, 0.16));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+html[data-theme="dark"] .setup-task-section {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(10, 18, 30, 0.12));
+}
+
+.setup-task-section--security {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.1), rgba(255, 255, 255, 0.2));
+}
+
+html[data-theme="dark"] .setup-task-section--security {
+  background: linear-gradient(180deg, rgba(245, 158, 11, 0.12), rgba(10, 18, 30, 0.12));
+}
+
+.setup-task-title {
+  font-size: 1.12rem;
+  letter-spacing: -0.02em;
+}
+
+.setup-task-summary,
+.setup-task-meta,
+.setup-task-config-summary {
+  line-height: 1.55;
+}
+
+.setup-provider-chip {
+  min-width: 210px;
+  padding: 11px 14px;
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(244, 248, 253, 0.22));
+  border-color: rgba(136, 156, 179, 0.16);
+  position: relative;
+  overflow: hidden;
+}
+
+html[data-theme="dark"] .setup-provider-chip {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(10, 18, 30, 0.12));
+}
+
+.setup-provider-chip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% + 140px);
+  height: 3px;
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+#setupProviderChipMedia {
+  background:
+    linear-gradient(135deg, rgba(56, 189, 248, 0.13), rgba(129, 140, 248, 0.08)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(244, 248, 253, 0.22));
+}
+
+#setupProviderChipMedia::after {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.88), rgba(129, 140, 248, 0.72));
+}
+
+#setupProviderChipHistory {
+  background:
+    linear-gradient(135deg, rgba(34, 197, 94, 0.13), rgba(56, 189, 248, 0.08)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(244, 248, 253, 0.22));
+}
+
+#setupProviderChipHistory::after {
+  background: linear-gradient(90deg, rgba(34, 197, 94, 0.86), rgba(56, 189, 248, 0.7));
+}
+
+#setupProviderChipEnrichment {
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.13), rgba(56, 189, 248, 0.08)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.46), rgba(244, 248, 253, 0.22));
+}
+
+#setupProviderChipEnrichment::after {
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.88), rgba(56, 189, 248, 0.7));
+}
+
+html[data-theme="dark"] #setupProviderChipMedia {
+  background:
+    linear-gradient(135deg, rgba(56, 189, 248, 0.16), rgba(129, 140, 248, 0.1)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(10, 18, 30, 0.12));
+}
+
+html[data-theme="dark"] #setupProviderChipHistory {
+  background:
+    linear-gradient(135deg, rgba(34, 197, 94, 0.16), rgba(56, 189, 248, 0.1)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(10, 18, 30, 0.12));
+}
+
+html[data-theme="dark"] #setupProviderChipEnrichment {
+  background:
+    linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(56, 189, 248, 0.1)),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(10, 18, 30, 0.12));
+}
+
+.setup-task-helper,
+.setup-optional-block-body,
+.setup-provider-block,
+.setup-diagnostics {
+  border-radius: 18px;
+}
+
+.setup-optional-block-body,
+.setup-provider-block {
+  padding: 16px;
+  border-style: solid;
+  border-color: rgba(136, 156, 179, 0.16);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.44), rgba(244, 248, 253, 0.14));
+}
+
+html[data-theme="dark"] .setup-optional-block-body,
+html[data-theme="dark"] .setup-provider-block {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(10, 18, 30, 0.14));
+}
+
+.setup-inline {
+  gap: 12px;
+}
+
+.setup-submit,
+.setup-test,
+.setup-action-btn {
+  min-height: 42px;
+  padding: 9px 14px;
+  border-radius: 14px;
+  border-color: var(--setup-submit-border);
+  background: var(--setup-submit-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34), 0 12px 24px rgba(18, 32, 51, 0.08);
+  font-weight: 650;
+}
+
+html[data-theme="dark"] .setup-submit,
+html[data-theme="dark"] .setup-test,
+html[data-theme="dark"] .setup-action-btn {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 14px 28px rgba(0, 0, 0, 0.3);
+}
+
+.setup-action-btn--ghost {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+html[data-theme="dark"] .setup-action-btn--ghost {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.setup-submit:hover,
+.setup-test:hover,
+.setup-action-btn:hover {
+  transform: translateY(-1px);
+}
+
+.setup-inline-message {
+  line-height: 1.45;
+}
+
+@media (max-width: 860px) {
+  .setup-card {
+    margin-top: 56px;
+    padding: 18px;
+    border-radius: 22px;
+  }
+
+  .setup-task-section,
+  .setup-guide,
+  .setup-success,
+  .setup-guided-dock,
+  .setup-provider-block,
+  .setup-optional-block-body {
+    border-radius: 18px;
+  }
+}
+
+/* 0.9.0 setup uplift polish */
+.setup-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.setup-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 5px;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.9), rgba(129, 140, 248, 0.82), rgba(34, 197, 94, 0.72));
+}
+
+.setup-header {
+  position: relative;
+  padding: 2px 0 10px;
+}
+
+.setup-source-summary {
+  padding: 12px 14px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.24), rgba(244, 248, 253, 0.08));
+  border: 1px solid rgba(136, 156, 179, 0.14);
+}
+
+html[data-theme="dark"] .setup-source-summary {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(10, 18, 30, 0.1));
+}
+
+.setup-task-section {
+  position: relative;
+  overflow: hidden;
+}
+
+.setup-task-section::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  height: calc(100% + 520px);
+  border-radius: 24px 0 0 24px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.88), rgba(99, 102, 241, 0.72));
+  background-size: 100% 520px;
+  background-position: 0 0;
+  opacity: 0.95;
+  transform: translate3d(0, 0, 0);
+}
+
+#setupStep2::before {
+  background: linear-gradient(180deg, rgba(34, 197, 94, 0.86), rgba(20, 184, 166, 0.7));
+}
+
+#setupStep3::before {
+  background: linear-gradient(180deg, rgba(217, 119, 6, 0.9), rgba(253, 186, 116, 0.84));
+}
+
+.setup-task-section--security::before {
+  background: linear-gradient(180deg, rgba(100, 116, 139, 0.88), rgba(203, 213, 225, 0.72));
+}
+
+#setupStep5::before {
+  background: linear-gradient(180deg, rgba(168, 85, 247, 0.86), rgba(236, 72, 153, 0.72));
+}
+
+.setup-task-details[open]::before {
+  animation: setup-task-section-provider-sheen 2.8s linear infinite;
+  will-change: transform;
+}
+
+.setup-task-details[open]#setupStep1::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(56, 189, 248, 0.88) 0px,
+    rgba(99, 102, 241, 0.74) 260px,
+    rgba(56, 189, 248, 0.88) 520px
+  );
+}
+
+.setup-task-details[open]#setupStep2::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(34, 197, 94, 0.86) 0px,
+    rgba(20, 184, 166, 0.7) 260px,
+    rgba(34, 197, 94, 0.86) 520px
+  );
+}
+
+.setup-task-details[open]#setupStep3::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(217, 119, 6, 0.9) 0px,
+    rgba(253, 186, 116, 0.86) 260px,
+    rgba(217, 119, 6, 0.9) 520px
+  );
+}
+
+.setup-task-details[open].setup-task-section--security::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(100, 116, 139, 0.88) 0px,
+    rgba(203, 213, 225, 0.74) 260px,
+    rgba(100, 116, 139, 0.88) 520px
+  );
+}
+
+.setup-task-details[open]#setupStep5::before {
+  background-image: repeating-linear-gradient(
+    180deg,
+    rgba(168, 85, 247, 0.86) 0px,
+    rgba(236, 72, 153, 0.72) 260px,
+    rgba(168, 85, 247, 0.86) 520px
+  );
+}
+
+@keyframes setup-task-section-provider-sheen {
+  0% {
+    transform: translate3d(0, 0, 0);
+  }
+  100% {
+    transform: translate3d(0, -520px, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-task-details[open]::before {
+    animation: none;
+  }
+}
+
+.setup-step-summary {
+  border-radius: 14px;
+  padding: 8px 10px;
+  background: rgba(15, 23, 42, 0.14);
+}
+
+html[data-theme="dark"] .setup-step-summary {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.setup-provider-chip {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.24);
+}
+
+.setup-provider-chip.is-selected {
+  border-color: rgba(56, 189, 248, 0.34);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.26), 0 16px 30px rgba(56, 189, 248, 0.12);
+}
+
+.setup-task-helper {
+  padding: 12px 14px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(244, 248, 253, 0.08));
+  border: 1px solid rgba(136, 156, 179, 0.12);
+}
+
+html[data-theme="dark"] .setup-task-helper {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(10, 18, 30, 0.08));
+}
+
+.setup-provider-block,
+.setup-optional-block-body,
+.setup-diagnostics {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}

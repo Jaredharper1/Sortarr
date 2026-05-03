@@ -7,6 +7,9 @@
     if (localStorage.getItem("Sortarr-chips-enabled") === "1") {
       root.setAttribute("data-chips-enabled", "1");
     }
+    if (localStorage.getItem("Sortarr-toolbar-collapsed") === "1") {
+      root.setAttribute("data-toolbar-collapsed", "1");
+    }
   } catch {
     // Ignore storage access failures (private mode / restricted browsers).
   }

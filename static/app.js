@@ -33,11 +33,14 @@ const loadingIndicator = document.getElementById("loadingIndicator");
 const lastUpdatedEl = document.getElementById("lastUpdated");
 const loadBtn = document.getElementById("loadBtn");
 const refreshTabBtn = document.getElementById("refreshTabBtn");
+const mediaStatusEl = document.getElementById("mediaStatus");
+const mediaStatusMetaEl = document.getElementById("mediaStatusMeta");
 const progressStatusEl = document.getElementById("progressStatus");
-const tautulliStatusEl = document.getElementById("tautulliStatus");
-const cacheStatusEl = document.getElementById("cacheStatus");
+const historyStatusMetaEl = document.getElementById("historyStatusMeta");
+const enrichmentStatusEl = document.getElementById("enrichmentStatus");
+const enrichmentStatusMetaEl = document.getElementById("enrichmentStatusMeta");
 const healthBadgesEl = document.getElementById("healthBadges");
-const STATUS_VALUE_ELS = [progressStatusEl, tautulliStatusEl, cacheStatusEl].filter(Boolean);
+const STATUS_VALUE_ELS = [mediaStatusEl, progressStatusEl, enrichmentStatusEl].filter(Boolean);
 const healthStatusRowEl = document.getElementById("healthStatusRow");
 const statusRowEl = document.getElementById("statusRow");
 const statusPillEl = document.getElementById("statusPill");
@@ -48,15 +51,15 @@ const playbackLabelEls = document.querySelectorAll("[data-playback-label]");
 const playbackTitleEls = document.querySelectorAll("[data-playback-title]");
 const playbackMatchTitleEls = document.querySelectorAll("[data-playback-match-title]");
 const refreshTautulliBtn = document.getElementById("refreshTautulliBtn");
-const deepRefreshTautulliBtn = document.getElementById("deepRefreshTautulliBtn");
 const refreshSonarrBtn = document.getElementById("refreshSonarrBtn");
 const refreshRadarrBtn = document.getElementById("refreshRadarrBtn");
 const arrRefreshButtonsEl = document.getElementById("arrRefreshButtons");
-const plexInsightsBtn = document.getElementById("plexInsightsBtn");
+const providerInsightsBtn = document.getElementById("plexInsightsBtn");
 const mismatchCenterBtn = document.getElementById("mismatchCenterBtn");
 const clearCachesBtn = document.getElementById("clearCachesBtn");
 const resetUiBtn = document.getElementById("resetUiBtn");
 const settingsBtn = document.getElementById("settingsBtn");
+const toolbarCollapseBtn = document.getElementById("toolbarCollapseBtn");
 const titleFilter = document.getElementById("titleFilter");
 const pathFilter = document.getElementById("pathFilter");
 const filterInputs = document.getElementById("filterInputs");
@@ -98,6 +101,14 @@ function closeColumnsPanelIfOpen() {
   if (!columnsPanel || columnsPanel.classList.contains("hidden")) return;
   setColumnsPanelHiddenState(true);
 }
+
+function ensureColumnsPanelPortal() {
+  if (!columnsPanel || !document.body) return;
+  if (columnsPanel.parentNode !== document.body) {
+    document.body.appendChild(columnsPanel);
+  }
+}
+
 const columnSearch = document.getElementById("columnSearch");
 const columnsShowAll = document.getElementById("columnsShowAll");
 const columnsHideAll = document.getElementById("columnsHideAll");
@@ -141,6 +152,8 @@ const TABLE_SCROLL_SNAP_MIN_MS = 140;
 const TABLE_SCROLL_SNAP_MAX_MS = 260;
 const TABLE_SCROLL_SNAP_BOTTOM_EPSILON = 6;
 const TABLE_SCROLL_ANCHOR_LOCK_MS = 420;
+// Temporary perf test: row-align scroll snapping is suspected of hurting table scroll performance.
+const TABLE_SCROLL_SNAP_DISABLED = true;
 const I18N = window.I18N || {};
 window.I18N = I18N;
 
@@ -362,6 +375,134 @@ function sourceLabelFromKey(value) {
   return key || t("sourceNone", "None");
 }
 
+function providerRoleState(roleKey) {
+  const state = (configState && configState.providerState && typeof configState.providerState === "object")
+    ? configState.providerState[roleKey]
+    : null;
+  return (state && typeof state === "object") ? state : {};
+}
+
+function providerRoleExplanation(roleKey) {
+  const state = providerRoleState(roleKey);
+  const selected = String(state.selected || "").trim().toLowerCase();
+  const effective = String(state.effective || "").trim().toLowerCase();
+  if (!selected || selected === effective) return "";
+  const selectedLabel = sourceLabelFromKey(selected);
+  const effectiveLabel = sourceLabelFromKey(effective);
+  const roleLabel = roleKey === "media"
+    ? t("sourceRoleMedia", "Media")
+    : roleKey === "history"
+      ? t("sourceRoleHistory", "History")
+      : t("sourceRoleEnrichment", "Enrichment");
+  if (selected === "auto") {
+    if (!effective) {
+      return t("sourceAutoUnavailableExplanation", "%(role)s: %(auto)s selected, but nothing is available.", {
+        role: roleLabel,
+        auto: t("sourceAuto", "Auto"),
+      });
+    }
+    return t("sourceAutoUsingExplanation", "%(role)s: %(auto)s selected, using %(provider)s.", {
+      role: roleLabel,
+      auto: t("sourceAuto", "Auto"),
+      provider: effectiveLabel,
+    });
+  }
+  if (!effective) {
+    return t("sourceSelectedUnavailableExplanation", "%(role)s: %(provider)s selected, but it is unavailable.", {
+      role: roleLabel,
+      provider: selectedLabel,
+    });
+  }
+  return t("sourceSelectedUsingExplanation", "%(role)s: %(selected)s selected, using %(effective)s.", {
+    role: roleLabel,
+    selected: selectedLabel,
+    effective: effectiveLabel,
+  });
+}
+
+function providerRoleShortNote(roleKey) {
+  const state = providerRoleState(roleKey);
+  const selected = String(state.selected || "").trim().toLowerCase();
+  const effective = String(state.effective || "").trim().toLowerCase();
+  if (!selected || selected === effective) return "";
+  if (selected === "auto") {
+    return effective
+      ? t("sourceAutoShortUsing", "%(auto)s -> %(provider)s", { auto: t("sourceAuto", "Auto"), provider: sourceLabelFromKey(effective) })
+      : t("sourceAutoShortUnavailable", "%(auto)s unavailable", { auto: t("sourceAuto", "Auto") });
+  }
+  if (!effective) {
+    return t("sourceShortUnavailable", "%(provider)s unavailable", { provider: sourceLabelFromKey(selected) });
+  }
+  return t("sourceShortUsing", "%(selected)s -> %(effective)s", {
+    selected: sourceLabelFromKey(selected),
+    effective: sourceLabelFromKey(effective),
+  });
+}
+
+function providerRoleMetaLabel(roleKey) {
+  const state = providerRoleState(roleKey);
+  const effective = String(state.effective || "").trim().toLowerCase();
+  if (!effective) return "";
+  const explanation = providerRoleExplanation(roleKey);
+  if (!explanation) return sourceLabelFromKey(effective);
+  const roleLabel = roleKey === "media"
+    ? t("sourceRoleMedia", "Media")
+    : roleKey === "history"
+      ? t("sourceRoleHistory", "History")
+      : t("sourceRoleEnrichment", "Enrichment");
+  const prefix = `${roleLabel}: `;
+  return explanation.startsWith(prefix) ? explanation.slice(prefix.length) : explanation;
+}
+
+function appendProviderExplanation(baseText, roleKey) {
+  const text = String(baseText || "");
+  const explanation = providerRoleExplanation(roleKey);
+  if (!explanation) return text;
+  return text ? `${text} ${explanation}` : explanation;
+}
+
+function insightsViewProfile(provider = currentInsightsProvider()) {
+  const sessionBased = isSessionBasedInsightsProvider(provider);
+  return {
+    sessionBased,
+    include: sessionBased
+      ? (provider === "jellyfin"
+        ? "sections,sessions,activities,match_health"
+        : "sections,sessions,match_health")
+      : "hubs,activities,butler,sections,match_health",
+    primaryTitle: sessionBased ? t("Sessions") : t("Hubs"),
+    secondaryTitle: sessionBased ? t("Libraries") : t("Butler"),
+    primaryEmptyText: sessionBased ? t("No sessions available") : t("No hub items"),
+    secondaryEmptyText: sessionBased ? t("No libraries available") : t("No butler tasks"),
+    secondaryItemsKey: sessionBased ? "sections" : "butler",
+  };
+}
+
+function buildLocalOptionSet(providerState, providerCapabilities) {
+  const state = (providerState && typeof providerState === "object") ? providerState : {};
+  const capabilities = (providerCapabilities && typeof providerCapabilities === "object") ? providerCapabilities : {};
+  const media = (state.media && typeof state.media === "object") ? state.media : {};
+  const history = (state.history && typeof state.history === "object") ? state.history : {};
+  const enrichment = (state.enrichment && typeof state.enrichment === "object") ? state.enrichment : {};
+  return {
+    selected: {
+      media_source: String(media.selected || "").trim().toLowerCase(),
+      history_source: String(history.selected || "").trim().toLowerCase(),
+      insights_provider: String(enrichment.selected || "").trim().toLowerCase(),
+    },
+    effective: {
+      media_source: String(media.effective || "").trim().toLowerCase(),
+      history_source: String(history.effective || "").trim().toLowerCase(),
+      insights_provider: String(enrichment.effective || "").trim().toLowerCase(),
+    },
+    configured: {
+      media_sources: Array.isArray(media.available) ? media.available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean) : [],
+      history_sources: Array.isArray(history.available) ? history.available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean) : [],
+    },
+    capabilities,
+  };
+}
+
 function normalizeIdList(values) {
   const out = [];
   const seen = new Set();
@@ -457,8 +598,8 @@ function getPlexScopeParams(app, key = "plex_library_ids") {
 
 function plexScopeEnabledForApp(app) {
   if (!configState.plexConfigured) return false;
-  const selected = (configState.optionSelected || {}).media_source;
-  if (String(selected || "").toLowerCase() !== "plex") return false;
+  const mediaSource = String(configState.mediaSource || configState.optionEffective?.media_source || "").toLowerCase();
+  if (mediaSource !== "plex") return false;
   return app === "sonarr" ? configState.sonarrConfigured : configState.radarrConfigured;
 }
 
@@ -527,6 +668,17 @@ function capabilityEnabled(name, fallback = true) {
   return !!value;
 }
 
+function providerCapabilityEnabled(name, provider, fallback = false) {
+  const caps = (configState && configState.optionCapabilities) || {};
+  const key = String(provider || "").trim().toLowerCase();
+  if (!key) return !!fallback;
+  const map = caps[name];
+  if (!map || typeof map !== "object") return !!fallback;
+  const value = map[key];
+  if (value === undefined || value === null) return !!fallback;
+  return !!value;
+}
+
 function setElementVisible(el, visible) {
   if (!el) return;
   el.classList.toggle("hidden", !visible);
@@ -535,11 +687,17 @@ function setElementVisible(el, visible) {
 
 function updateEffectiveSourcesLine() {
   if (!effectiveSourcesEl) return;
-  const selected = (configState && configState.optionSelected) || {};
-  const media = sourceLabelFromKey(configState.mediaSource || selected.media_source);
-  const history = sourceLabelFromKey(configState.historyProvider || selected.history_source);
-  const enrichment = sourceLabelFromKey(configState.insightsProvider || selected.insights_provider);
+  const effective = (configState && configState.optionEffective) || {};
+  const media = sourceLabelFromKey(configState.mediaSource || effective.media_source);
+  const history = sourceLabelFromKey(configState.historyProvider || effective.history_source);
+  const enrichment = sourceLabelFromKey(configState.insightsProvider || effective.insights_provider);
   let text = `${t("effectiveSourcesLabel", "Effective sources")}: ${tp("effectiveSourcesValue", { media, history, enrichment }, "Media: %(media)s | History: %(history)s | Enrichment: %(enrichment)s")}`;
+  const providerNotes = ["media", "history"]
+    .map((roleKey) => providerRoleExplanation(roleKey))
+    .filter(Boolean);
+  if (providerNotes.length) {
+    text += ` | ${providerNotes.join(" | ")}`;
+  }
   const scope = formatPlexScopeLabel(activeApp);
   if (scope) {
     text += ` | ${scope}`;
@@ -561,6 +719,12 @@ function updateMismatchCenterButtonVisibility() {
     if (supportedKeys.has(key)) providers.add(key);
   });
   mismatchCenterBtn.disabled = providers.size < 1;
+  mismatchCenterBtn.title = appendProviderExplanation(
+    mismatchCenterBtn.disabled
+      ? t("mismatchCenterUnavailable", "Mismatch Center unavailable.")
+      : t("mismatchCenterTitle", "Mismatch Center"),
+    "history"
+  );
 }
 
 function getInsightsProvider() {
@@ -578,46 +742,44 @@ function getInsightsProviderLabel(provider = getInsightsProvider()) {
   return sourceLabelFromKey(provider) || t("providerInsightsFallback", "Provider");
 }
 
+function isSessionBasedInsightsProvider(provider = currentInsightsProvider()) {
+  return provider === "jellyfin" || provider === "emby";
+}
+
 function insightsProviderSupportsLive(provider = getInsightsProvider()) {
-  return provider === "plex";
+  return providerCapabilityEnabled("insights_live_by_provider", provider, capabilityEnabled("insights_live_events", provider === "plex"));
 }
 
 function updateInsightsButton() {
-  if (!plexInsightsBtn) return;
+  if (!providerInsightsBtn) return;
   const provider = getInsightsProvider();
   const providerLabel = provider ? getInsightsProviderLabel(provider) : "";
-  const available = provider === "plex"
-    ? configState.plexConfigured
-    : provider === "emby"
-      ? configState.embyConfigured
-      : provider === "jellyfin"
-        ? configState.jellyfinConfigured
-        : false;
-  plexInsightsBtn.disabled = !available;
-  plexInsightsBtn.textContent = providerLabel
+  const available = providerCapabilityEnabled("insights_by_provider", provider, false);
+  providerInsightsBtn.disabled = !available;
+  providerInsightsBtn.textContent = providerLabel
     ? tp("providerInsightsLabel", { label: providerLabel }, "%(label)s Insights")
     : t("providerInsightsFallback", "Provider Insights");
-  plexInsightsBtn.title = providerLabel
-    ? tp("openProviderInsights", { label: providerLabel }, "Open %(label)s insights")
-    : t("providerInsightsUnavailable", "Provider insights unavailable.");
+  providerInsightsBtn.title = appendProviderExplanation(
+    providerLabel
+      ? tp("openProviderInsights", { label: providerLabel }, "Open %(label)s insights")
+      : t("providerInsightsUnavailable", "Provider insights unavailable."),
+    "enrichment"
+  );
 }
 
 function plexOnlyMediaSource(app = activeApp) {
   if (!app || (app !== "sonarr" && app !== "radarr")) return false;
-  const selected = (configState && configState.optionSelected) || {};
-  return String(selected.media_source || "").trim().toLowerCase() === "plex";
+  return String(configState.mediaSource || configState.optionEffective?.media_source || "").trim().toLowerCase() === "plex";
 }
 
 function jellyfinOnlyMediaSource(app = activeApp) {
   if (!app || (app !== "sonarr" && app !== "radarr")) return false;
-  const selected = (configState && configState.optionSelected) || {};
-  return String(selected.media_source || "").trim().toLowerCase() === "jellyfin";
+  return String(configState.mediaSource || configState.optionEffective?.media_source || "").trim().toLowerCase() === "jellyfin";
 }
 
 function embyOnlyMediaSource(app = activeApp) {
   if (!app || (app !== "sonarr" && app !== "radarr")) return false;
-  const selected = (configState && configState.optionSelected) || {};
-  return String(selected.media_source || "").trim().toLowerCase() === "emby";
+  return String(configState.mediaSource || configState.optionEffective?.media_source || "").trim().toLowerCase() === "emby";
 }
 
 function columnSupportedForMode(col, app = activeApp) {
@@ -774,7 +936,6 @@ if (progressStatusEl) {
     if (!link) return;
 
     const tok = link.getAttribute("data-progress-token") || "";
-    console.log("[progressStatus click]", tok);
 
     e.preventDefault();
     applyProgressStatusFilter(tok);
@@ -1151,6 +1312,7 @@ function shouldUseNativeSelects() {
 
 let activeCustomSelectState = null;
 let customSelectPositionPending = false;
+let customSelectGlobalHandlersReady = false;
 
 function ensureCustomSelectPortal(state) {
   if (!state?.menu || !document.body) return;
@@ -1401,11 +1563,9 @@ function initCustomSelect(selectEl) {
   updateCustomSelect(selectEl);
 }
 
-function initFilterCustomSelects() {
-  if (customSelectsEnabled || shouldUseNativeSelects()) return;
-  customSelectsEnabled = true;
-  root.classList.add("custom-selects");
-  [filterCategory, filterCondition, filterValueSelect].forEach(initCustomSelect);
+function ensureCustomSelectGlobalHandlers() {
+  if (customSelectGlobalHandlersReady) return;
+  customSelectGlobalHandlersReady = true;
   document.addEventListener("click", e => {
     const target = e.target;
     let inside = false;
@@ -1421,6 +1581,14 @@ function initFilterCustomSelects() {
   });
   window.addEventListener("resize", scheduleCustomSelectPosition);
   window.addEventListener("scroll", scheduleCustomSelectPosition, true);
+}
+
+function initFilterCustomSelects() {
+  if (customSelectsEnabled) return;
+  customSelectsEnabled = true;
+  root.classList.add("custom-selects");
+  [filterCategory, filterCondition, filterValueSelect].forEach(initCustomSelect);
+  ensureCustomSelectGlobalHandlers();
 }
 
 function getFilterFieldMeta(fieldId) {
@@ -1634,8 +1802,8 @@ function getHeaderChecklistExtractor(fieldId) {
         return [getBooleanChecklistOption(false, t("HDR"), t("No HDR"))];
       }
       const lowered = raw.toLowerCase();
-      if (lowered.includes("dolby")) return [{ value: "dolby", label: "Dolby Vision" }];
-      if (lowered.includes("hdr")) return [{ value: "hdr", label: "HDR" }];
+      if (lowered.includes("dolby")) return [{ value: "dolby", label: t("Dolby Vision") }];
+      if (lowered.includes("hdr")) return [{ value: "hdr", label: t("HDR") }];
       return [{ value: raw, label: raw }];
     },
     audiocodec: (row) => splitDistinctListValues(row?.AudioCodecAll ?? row?.AudioCodec ?? "").map(item => ({ value: item, label: item })),
@@ -1874,8 +2042,8 @@ function formatFilterTokenLabel(token) {
     }).filter(Boolean);
     const cleanValue = cleanParts.join(", ");
     const condition = outerWildcard
-      ? (negated ? "does not contain" : "contains")
-      : (negated ? "is not" : "is");
+      ? (negated ? t("does not contain") : t("contains"))
+      : (negated ? t("is not") : t("is"));
     if (!outerWildcard && cleanParts.length > 1) {
       return `${fieldLabel} ${negated ? t("is not any of") : t("is any of")} ${cleanValue}`;
     }
@@ -1891,7 +2059,7 @@ function formatFilterTokenLabel(token) {
     "<=": t("at most"),
   };
   const opLabel = opLabels[op] || op;
-  const condition = negated ? `not ${opLabel}` : opLabel;
+  const condition = negated ? t("notCondition", "not %(condition)s", { condition: opLabel }) : opLabel;
   return `${fieldLabel} ${condition} ${value}`;
 }
 
@@ -2640,6 +2808,7 @@ function measureTableWrapLayout() {
     return {
       signature: `1|${Math.round(viewportHeight)}|${Math.round(viewportOffset)}`,
       maxHeight: "",
+      height: "",
     };
   }
   const rect = tableWrapEl.getBoundingClientRect();
@@ -2649,13 +2818,15 @@ function measureTableWrapLayout() {
   return {
     signature: `0|${Math.round(anchorTop)}|${Math.round(viewportHeight)}|${Math.round(viewportOffset)}`,
     maxHeight: available > 200 ? `${Math.round(available)}px` : "",
+    height: available > 200 ? `${Math.round(available)}px` : "",
   };
 }
 
 function applyTableWrapLayoutMeasure(measure) {
   if (!tableWrapEl || !measure) return;
   if (measure.signature === lastTableWrapLayoutSignature &&
-    measure.maxHeight === lastAppliedTableWrapMaxHeight) {
+    measure.maxHeight === lastAppliedTableWrapMaxHeight &&
+    measure.height === tableWrapEl.style.height) {
     return;
   }
   lastTableWrapLayoutSignature = measure.signature;
@@ -2663,6 +2834,10 @@ function applyTableWrapLayoutMeasure(measure) {
     tableWrapEl.style.maxHeight = measure.maxHeight;
     lastAppliedTableWrapMaxHeight = measure.maxHeight;
   }
+  if (measure.height !== tableWrapEl.style.height) {
+    tableWrapEl.style.height = measure.height;
+  }
+  updateTableScrollbarOverlay();
   scheduleTableLayoutSync({
     force: false,
     skipIfUnchanged: true,
@@ -2693,10 +2868,158 @@ function scheduleTableWrapLayout() {
   });
 }
 
+const tableScrollbarOverlayState = {
+  vertical: null,
+  verticalThumb: null,
+  horizontal: null,
+  horizontalThumb: null,
+  drag: null,
+  hideTimer: 0,
+};
+
+function ensureTableScrollbarOverlay() {
+  if (!document.body || tableScrollbarOverlayState.vertical) return;
+  const createOverlay = (axis) => {
+    const overlay = document.createElement("div");
+    overlay.className = `table-scrollbar-overlay table-scrollbar-overlay--${axis}`;
+    overlay.setAttribute("aria-hidden", "true");
+    const thumb = document.createElement("div");
+    thumb.className = "table-scrollbar-overlay__thumb";
+    overlay.appendChild(thumb);
+    document.body.appendChild(overlay);
+    return { overlay, thumb };
+  };
+  const vertical = createOverlay("vertical");
+  const horizontal = createOverlay("horizontal");
+  tableScrollbarOverlayState.vertical = vertical.overlay;
+  tableScrollbarOverlayState.verticalThumb = vertical.thumb;
+  tableScrollbarOverlayState.horizontal = horizontal.overlay;
+  tableScrollbarOverlayState.horizontalThumb = horizontal.thumb;
+  vertical.thumb.addEventListener("pointerdown", (event) => startTableScrollbarDrag(event, "vertical"));
+  horizontal.thumb.addEventListener("pointerdown", (event) => startTableScrollbarDrag(event, "horizontal"));
+}
+
+function setTableScrollbarOverlayVisible(visible) {
+  ensureTableScrollbarOverlay();
+  [tableScrollbarOverlayState.vertical, tableScrollbarOverlayState.horizontal].forEach((el) => {
+    if (el) el.classList.toggle("is-visible", visible);
+  });
+  if (visible && !tableScrollbarOverlayState.drag) {
+    window.clearTimeout(tableScrollbarOverlayState.hideTimer);
+    tableScrollbarOverlayState.hideTimer = window.setTimeout(() => {
+      if (!tableScrollbarOverlayState.drag) setTableScrollbarOverlayVisible(false);
+    }, 1300);
+  }
+}
+
+function updateTableScrollbarOverlay({ reveal = false } = {}) {
+  if (!tableWrapEl) return;
+  ensureTableScrollbarOverlay();
+  const rect = tableWrapEl.getBoundingClientRect();
+  const verticalOverflow = tableWrapEl.scrollHeight > tableWrapEl.clientHeight + 1;
+  const horizontalOverflow = tableWrapEl.scrollWidth > tableWrapEl.clientWidth + 1;
+  const inset = 8;
+  const edgeInset = 30;
+  const verticalOffset = 15.5;
+  const horizontalOffset = 14.5;
+  const thickness = 8;
+  if (tableScrollbarOverlayState.vertical) {
+    const overlay = tableScrollbarOverlayState.vertical;
+    const thumb = tableScrollbarOverlayState.verticalThumb;
+    if (verticalOverflow && rect.width > 0 && rect.height > 0) {
+      const trackHeight = Math.max(0, rect.height - edgeInset * 2);
+      const thumbHeight = Math.max(42, Math.round(trackHeight * tableWrapEl.clientHeight / tableWrapEl.scrollHeight));
+      const maxScroll = Math.max(1, tableWrapEl.scrollHeight - tableWrapEl.clientHeight);
+      const maxTravel = Math.max(0, trackHeight - thumbHeight);
+      const thumbTop = Math.round(tableWrapEl.scrollTop / maxScroll * maxTravel);
+      overlay.style.left = `${Math.round(rect.right - inset - thickness + verticalOffset)}px`;
+      overlay.style.top = `${Math.round(rect.top + edgeInset)}px`;
+      overlay.style.width = `${thickness}px`;
+      overlay.style.height = `${Math.round(trackHeight)}px`;
+      thumb.style.height = `${thumbHeight}px`;
+      thumb.style.transform = `translateY(${thumbTop}px)`;
+      overlay.hidden = false;
+    } else {
+      overlay.hidden = true;
+    }
+  }
+  if (tableScrollbarOverlayState.horizontal) {
+    const overlay = tableScrollbarOverlayState.horizontal;
+    const thumb = tableScrollbarOverlayState.horizontalThumb;
+    if (horizontalOverflow && rect.width > 0 && rect.height > 0) {
+      const trackWidth = Math.max(0, rect.width - edgeInset * 2);
+      const thumbWidth = Math.max(42, Math.round(trackWidth * tableWrapEl.clientWidth / tableWrapEl.scrollWidth));
+      const maxScroll = Math.max(1, tableWrapEl.scrollWidth - tableWrapEl.clientWidth);
+      const maxTravel = Math.max(0, trackWidth - thumbWidth);
+      const thumbLeft = Math.round(tableWrapEl.scrollLeft / maxScroll * maxTravel);
+      overlay.style.left = `${Math.round(rect.left + edgeInset)}px`;
+      overlay.style.top = `${Math.round(rect.bottom - inset - thickness + horizontalOffset)}px`;
+      overlay.style.width = `${Math.round(trackWidth)}px`;
+      overlay.style.height = `${thickness}px`;
+      thumb.style.width = `${thumbWidth}px`;
+      thumb.style.transform = `translateX(${thumbLeft}px)`;
+      overlay.hidden = false;
+    } else {
+      overlay.hidden = true;
+    }
+  }
+  if (reveal && (verticalOverflow || horizontalOverflow)) setTableScrollbarOverlayVisible(true);
+}
+
+function startTableScrollbarDrag(event, axis) {
+  if (!tableWrapEl) return;
+  event.preventDefault();
+  const overlay = axis === "vertical" ? tableScrollbarOverlayState.vertical : tableScrollbarOverlayState.horizontal;
+  const thumb = axis === "vertical" ? tableScrollbarOverlayState.verticalThumb : tableScrollbarOverlayState.horizontalThumb;
+  if (!overlay || !thumb) return;
+  const overlayRect = overlay.getBoundingClientRect();
+  const thumbRect = thumb.getBoundingClientRect();
+  tableScrollbarOverlayState.drag = {
+    axis,
+    pointerId: event.pointerId,
+    startPointer: axis === "vertical" ? event.clientY : event.clientX,
+    startScroll: axis === "vertical" ? tableWrapEl.scrollTop : tableWrapEl.scrollLeft,
+    trackSize: axis === "vertical" ? overlayRect.height : overlayRect.width,
+    thumbSize: axis === "vertical" ? thumbRect.height : thumbRect.width,
+    maxScroll: axis === "vertical"
+      ? Math.max(1, tableWrapEl.scrollHeight - tableWrapEl.clientHeight)
+      : Math.max(1, tableWrapEl.scrollWidth - tableWrapEl.clientWidth),
+  };
+  try { thumb.setPointerCapture(event.pointerId); } catch { }
+  setTableScrollbarOverlayVisible(true);
+  window.addEventListener("pointermove", handleTableScrollbarDrag);
+  window.addEventListener("pointerup", stopTableScrollbarDrag);
+  window.addEventListener("pointercancel", stopTableScrollbarDrag);
+}
+
+function handleTableScrollbarDrag(event) {
+  const drag = tableScrollbarOverlayState.drag;
+  if (!drag || !tableWrapEl) return;
+  const currentPointer = drag.axis === "vertical" ? event.clientY : event.clientX;
+  const travel = Math.max(1, drag.trackSize - drag.thumbSize);
+  const deltaScroll = (currentPointer - drag.startPointer) / travel * drag.maxScroll;
+  if (drag.axis === "vertical") {
+    tableWrapEl.scrollTop = drag.startScroll + deltaScroll;
+  } else {
+    tableWrapEl.scrollLeft = drag.startScroll + deltaScroll;
+  }
+  updateTableScrollbarOverlay({ reveal: true });
+}
+
+function stopTableScrollbarDrag() {
+  tableScrollbarOverlayState.drag = null;
+  window.removeEventListener("pointermove", handleTableScrollbarDrag);
+  window.removeEventListener("pointerup", stopTableScrollbarDrag);
+  window.removeEventListener("pointercancel", stopTableScrollbarDrag);
+  updateTableScrollbarOverlay({ reveal: true });
+}
+
 if (tableWrapEl) {
   tableWrapEl.setAttribute("tabindex", "0");
   scheduleTableWrapLayout();
   window.addEventListener("resize", scheduleTableWrapLayout);
+  window.addEventListener("resize", () => updateTableScrollbarOverlay());
+  window.addEventListener("scroll", () => updateTableScrollbarOverlay(), true);
   // visualViewport resize disabled to avoid mobile scroll/URL-bar resize jank
   //if (window.visualViewport) {
   //  window.visualViewport.addEventListener("resize", scheduleTableWrapLayout);
@@ -2707,6 +3030,8 @@ if (tableWrapEl) {
   }
   lastTableScrollTop = tableWrapEl.scrollTop;
   tableWrapEl.addEventListener("scroll", handleTableWrapScroll, { passive: true });
+  tableWrapEl.addEventListener("scroll", () => updateTableScrollbarOverlay({ reveal: true }), { passive: true });
+  tableWrapEl.addEventListener("mouseenter", () => updateTableScrollbarOverlay({ reveal: true }));
   tableWrapEl.addEventListener("wheel", cancelTableScrollSnap, { passive: true });
   tableWrapEl.addEventListener("touchstart", () => {
     cancelTableScrollSnap();
@@ -2773,8 +3098,12 @@ function isSeriesExpansionActive() {
 
 function tableCanSnapScroll() {
   if (!tableWrapEl || !tbody || !tableEl) return false;
-  // Disable the "auto align to nearest row" behavior on iOS
-  if (IS_IOS) return false;
+  if (TABLE_SCROLL_SNAP_DISABLED) return false;
+  // Disable the "auto align to nearest row" behavior on touch/mobile layouts.
+  if (IS_IOS || root.classList.contains("is-coarse")) return false;
+  try {
+    if (window.matchMedia && window.matchMedia("(max-width: 900px)").matches) return false;
+  } catch { }
   if (pendingScrollAnchor) return false;
   if (tableEl.classList.contains("is-batching")) return false;
   if (isSeriesExpansionActive()) return false;
@@ -2941,6 +3270,10 @@ function snapTableScroll() {
 }
 
 function scheduleTableScrollSnap() {
+  if (TABLE_SCROLL_SNAP_DISABLED) {
+    cancelTableScrollSnap();
+    return;
+  }
   if (tableScrollSnapTimer) {
     window.clearTimeout(tableScrollSnapTimer);
   }
@@ -3235,10 +3568,113 @@ function scheduleChipGroupLayout() {
   });
 }
 
-function setFiltersCollapsed(collapsed) {
+const FILTERS_COLLAPSE_ANIM_MS = 380;
+let filtersCollapseTimer = null;
+let filtersCollapseFrame = 0;
+const TOOLBAR_COLLAPSE_ANIM_MS = 380;
+let toolbarCollapseTimer = null;
+let toolbarExpandFrame = 0;
+
+function getCollapsedFiltersWidth() {
+  if (!filtersEl) return 0;
+  const footer = filtersEl.querySelector(".filters-footer");
+  if (!footer) return 0;
+  const footerRect = footer.getBoundingClientRect();
+  const computed = window.getComputedStyle(filtersEl);
+  const borderLeft = parseFloat(computed.borderLeftWidth || "0") || 0;
+  const borderRight = parseFloat(computed.borderRightWidth || "0") || 0;
+  return Math.ceil(footerRect.width + borderLeft + borderRight);
+}
+
+function getFiltersBodyEl() {
+  return filtersEl ? filtersEl.querySelector(".filters-body") : null;
+}
+
+function measureFiltersBodyHeight() {
+  const filtersBody = getFiltersBodyEl();
+  return filtersBody ? Math.ceil(filtersBody.scrollHeight) : 0;
+}
+
+function setFiltersBodyHeight(height) {
+  const filtersBody = getFiltersBodyEl();
+  if (!filtersBody) return;
+  filtersBody.style.setProperty("--filters-body-height", `${Math.max(0, Math.ceil(height))}px`);
+}
+
+function clearFiltersBodyHeight() {
+  const filtersBody = getFiltersBodyEl();
+  if (!filtersBody) return;
+  filtersBody.style.removeProperty("--filters-body-height");
+}
+
+function setFiltersCollapsed(collapsed, options = {}) {
   if (!filtersEl) return;
+  const immediate = Boolean(options && options.immediate);
   filtersCollapsed = Boolean(collapsed);
-  filtersEl.classList.toggle("filters--collapsed", filtersCollapsed);
+  if (filtersCollapseTimer) {
+    window.clearTimeout(filtersCollapseTimer);
+    filtersCollapseTimer = null;
+  }
+  if (filtersCollapseFrame) {
+    window.cancelAnimationFrame(filtersCollapseFrame);
+    filtersCollapseFrame = 0;
+  }
+  filtersEl.classList.remove("filters--collapsing");
+  if (filtersCollapsed) {
+    if (immediate) {
+      filtersEl.style.width = "";
+      clearFiltersBodyHeight();
+      filtersEl.classList.add("filters--collapsed");
+    } else {
+      const expandedWidth = Math.ceil(filtersEl.getBoundingClientRect().width);
+      const collapsedWidth = getCollapsedFiltersWidth();
+      setFiltersBodyHeight(measureFiltersBodyHeight());
+      filtersEl.style.width = `${expandedWidth}px`;
+      void filtersEl.offsetWidth;
+      filtersEl.classList.remove("filters--collapsed");
+      filtersEl.classList.add("filters--collapsing");
+      filtersCollapseFrame = window.requestAnimationFrame(() => {
+        filtersCollapseFrame = 0;
+        if (!filtersEl || !filtersCollapsed) return;
+        if (collapsedWidth > 0) {
+          filtersEl.style.width = `${collapsedWidth}px`;
+        }
+        setFiltersBodyHeight(0);
+      });
+      filtersCollapseTimer = window.setTimeout(() => {
+        filtersCollapseTimer = null;
+        if (!filtersEl || !filtersCollapsed) return;
+        filtersEl.classList.remove("filters--collapsing");
+        filtersEl.classList.add("filters--collapsed");
+        filtersEl.style.width = "";
+        clearFiltersBodyHeight();
+        scheduleTableWrapLayout();
+      }, FILTERS_COLLAPSE_ANIM_MS);
+    }
+  } else {
+    if (immediate) {
+      clearFiltersBodyHeight();
+      filtersEl.classList.remove("filters--collapsed");
+      filtersEl.style.width = "";
+    } else {
+      setFiltersBodyHeight(0);
+      filtersEl.classList.remove("filters--collapsed");
+      filtersEl.style.width = "";
+      void filtersEl.offsetWidth;
+      const expandedHeight = measureFiltersBodyHeight();
+      filtersCollapseFrame = window.requestAnimationFrame(() => {
+        filtersCollapseFrame = 0;
+        if (!filtersEl || filtersCollapsed) return;
+        setFiltersBodyHeight(expandedHeight);
+      });
+      filtersCollapseTimer = window.setTimeout(() => {
+        filtersCollapseTimer = null;
+        if (!filtersEl || filtersCollapsed) return;
+        clearFiltersBodyHeight();
+        scheduleTableWrapLayout();
+      }, FILTERS_COLLAPSE_ANIM_MS);
+    }
+  }
   if (filtersToggleBtn) {
     filtersToggleBtn.setAttribute("aria-expanded", String(!filtersCollapsed));
     filtersToggleBtn.title = filtersCollapsed ? t("Show filters and chips") : t("Hide filters and chips");
@@ -3413,7 +3849,17 @@ let playbackProvider = cachedPlaybackProvider;
 let overlayProvider = "";
 let playbackLabel = sourceLabelFromKey(playbackProvider) || "Playback";
 let playbackSupportsItemRefresh = playbackProvider === "tautulli";
-let playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "tracearr" || playbackProvider === "streamystats" || playbackProvider === "plex" || playbackProvider === "jellyfin";
+function providerSupportsPlaybackDiagnostics(provider) {
+  const key = String(provider || "").trim().toLowerCase();
+  return key === "tautulli"
+    || key === "tracearr"
+    || key === "streamystats"
+    || key === "plex"
+    || key === "jellyfin"
+    || key === "emby";
+}
+
+let playbackSupportsDiagnostics = providerSupportsPlaybackDiagnostics(playbackProvider);
 let backgroundLoading = false;
 let chipsVisible = true;
 let filtersCollapsed = false;
@@ -3443,7 +3889,8 @@ const STATUS_PILL_LOADED_MS = 5000;
 let tautulliRefreshReloadTimer = null;
 let copyToastEl = null;
 let copyToastTimer = null;
-const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null, security: null };
+const statusState = { apps: { sonarr: null, radarr: null }, tautulli: null, enrichment: null, security: null };
+let latestInsightsStatusPayload = null;
 const healthState = { sonarr: null, radarr: null, lastFetchedAt: { sonarr: 0, radarr: 0 }, dismissed: { sonarr: {}, radarr: {} } };
 const HEALTH_DISMISS_KEY = "Sortarr-health-dismissed";
 let columnVisibilityVersion = 0;
@@ -3760,6 +4207,7 @@ const CSV_COLUMNS_BY_APP = {
 const CSV_COLUMNS_KEY = "Sortarr-csv-columns";
 const FILTERS_COLLAPSED_KEY = "Sortarr-filters-collapsed";
 const CHIPS_ENABLED_KEY = "Sortarr-chips-enabled";
+const TOOLBAR_COLLAPSED_KEY = "Sortarr-toolbar-collapsed";
 const VIEW_STATE_KEY = "Sortarr-view-state";
 const PLEX_LIBRARY_SELECTION_KEY = "Sortarr-plex-library-selection";
 const csvColumnsState = { sonarr: false, radarr: false };
@@ -4430,9 +4878,12 @@ const configState = {
   insightsProvider: "",
   historySourcesAvailable: [],
   plexLibraries: { sonarr: [], radarr: [] },
+  providerState: {},
+  providerCapabilities: {},
   optionSet: {},
   optionCapabilities: {},
   optionSelected: {},
+  optionEffective: {},
 };
 const plexLibraryState = {
   available: { sonarr: [], radarr: [] },
@@ -5132,15 +5583,9 @@ function markStartupReady() {
   updateInsightsButton();
   updateMismatchCenterButtonVisibility();
   const playbackReady = Boolean(statusState.tautulli?.configured || configState.playbackConfigured);
-  const playbackProviderKey = statusState.tautulli?.provider || configState.playbackProvider;
-  const showDeepRefresh = shouldShowDeepRefreshButton(playbackReady, playbackProviderKey);
   setElementVisible(refreshTautulliBtn, playbackReady);
   if (refreshTautulliBtn) {
     refreshTautulliBtn.disabled = !playbackReady;
-  }
-  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
-  if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
   }
 }
 
@@ -5209,9 +5654,175 @@ function formatCacheStatus(label, ageSeconds) {
   return tp("cacheAgeAgo", { label, age: formatAgeShort(ageSeconds) }, "%(label)s: %(age)s ago");
 }
 
+function setStatusBlockActivity(block, active, tone = "") {
+  if (!block) return;
+  block.classList.toggle("status-block--busy", Boolean(active));
+  block.dataset.busy = active ? "1" : "0";
+  if (tone) {
+    block.dataset.busyTone = tone;
+  } else {
+    delete block.dataset.busyTone;
+  }
+}
+
+function formatEnrichmentReadyStatus(providerKey, ageSeconds) {
+  const label = sourceLabelFromKey(providerKey);
+  if (ageSeconds == null) {
+    return {
+      value: t("sourceReady", "Ready"),
+      busy: false,
+      tone: "enrichment",
+      title: tp("providerReady", { label }, "%(label)s is ready."),
+    };
+  }
+  const age = formatAgeShort(ageSeconds);
+  return {
+    value: tp("readyWithAge", { age }, "Ready (%(age)s ago)"),
+    busy: false,
+    tone: "enrichment",
+    title: tp("providerReadyWithAge", { label, age }, "%(label)s ready (%(age)s ago)."),
+  };
+}
+
+function loadedInsightsAgeSeconds(providerKey) {
+  const provider = String(providerKey || "").trim().toLowerCase();
+  const data = latestInsightsStatusPayload;
+  if (!provider || !data || typeof data !== "object" || !data.ok) return null;
+  const payloadProvider = String(data.provider || "").trim().toLowerCase();
+  if (payloadProvider && payloadProvider !== provider) return null;
+  const matchHealth = data.match_health && typeof data.match_health === "object" ? data.match_health : null;
+  if (matchHealth) {
+    if (matchHealth.refresh_in_progress || matchHealth.available === false) return null;
+  }
+  const fetchedAt = Number(data.fetched_at || data.cache_ts || 0);
+  if (!Number.isFinite(fetchedAt) || fetchedAt <= 0) return 0;
+  if (lastStatusFetchAt != null && fetchedAt * 1000 < lastStatusFetchAt) return null;
+  return Math.max(0, Math.floor(Date.now() / 1000 - fetchedAt));
+}
+
+function getEnrichmentAwaitingMatchData(appState, tautulliState) {
+  if (!tautulliState?.configured || !tautulliState?.refresh_in_progress) return null;
+  const total = Number.isFinite(appState?.progress?.total)
+    ? Math.max(0, appState.progress.total)
+    : 0;
+  const processed = Number.isFinite(appState?.progress?.processed)
+    ? Math.max(0, Math.min(total || appState.progress.processed, appState.progress.processed))
+    : 0;
+  if (total > 0) {
+    return { total, processed };
+  }
+  if (!isPlaybackCountsSettled(appState)) {
+    return { total: 0, processed: 0 };
+  }
+  return null;
+}
+
+function formatEnrichmentAwaitingMatchStatus(providerKey, matchProgress) {
+  const enrichment = sourceLabelFromKey(providerKey);
+  const history = getPlaybackLabel();
+  const total = Number.isFinite(matchProgress?.total) ? matchProgress.total : 0;
+  const processed = Number.isFinite(matchProgress?.processed) ? matchProgress.processed : 0;
+  if (total > 0) {
+    return {
+      value: tp(
+        "awaitingMatchDataProgress",
+        { processed, total },
+        "Awaiting match data %(processed)s/%(total)s"
+      ),
+      busy: true,
+      tone: "enrichment",
+      title: tp(
+        "awaitingProviderMatchDataProgress",
+        { enrichment, history, processed, total },
+        "%(enrichment)s is waiting for %(history)s match data (%(processed)s/%(total)s processed)."
+      ),
+    };
+  }
+  return {
+    value: t("awaitingMatchData", "Awaiting match data"),
+    busy: true,
+    tone: "enrichment",
+    title: tp(
+      "awaitingProviderMatchData",
+      { enrichment, history },
+      "%(enrichment)s is waiting for %(history)s match data."
+    ),
+  };
+}
+
+function formatEnrichmentStatus(state, providerKey, appState = null, tautulliState = null) {
+  if (!providerKey) {
+    return { value: "--", busy: false, tone: "enrichment", title: "" };
+  }
+  const age = withElapsedAge(state?.index_age_seconds);
+  const loadedInsightsAge = loadedInsightsAgeSeconds(providerKey);
+  if (state?.refresh_in_progress) {
+    return {
+      value: t("refreshingInsights", "Refreshing insights..."),
+      busy: true,
+      tone: "enrichment",
+      title: tp("refreshingProviderInsights", { label: sourceLabelFromKey(providerKey) }, "Refreshing %(label)s insights..."),
+    };
+  }
+  if (state?.status === "pending") {
+    return {
+      value: t("buildingInsightsCache", "Building cache..."),
+      busy: true,
+      tone: "enrichment",
+      title: tp("buildingProviderInsightsCache", { label: sourceLabelFromKey(providerKey) }, "Building %(label)s cache..."),
+    };
+  }
+  if (state?.status === "stale" || !state?.available) {
+    if (loadedInsightsAge != null) {
+      return formatEnrichmentReadyStatus(providerKey, loadedInsightsAge);
+    }
+    const matchProgress = getEnrichmentAwaitingMatchData(appState, tautulliState);
+    if (matchProgress) {
+      return formatEnrichmentAwaitingMatchStatus(providerKey, matchProgress);
+    }
+    return {
+      value: t("awaitingData", "Awaiting data"),
+      busy: true,
+      tone: "enrichment",
+      title: tp("awaitingProviderInsightsData", { label: sourceLabelFromKey(providerKey) }, "Awaiting %(label)s data..."),
+    };
+  }
+  if (age == null) {
+    return formatEnrichmentReadyStatus(providerKey, loadedInsightsAge);
+  }
+  return formatEnrichmentReadyStatus(providerKey, age);
+}
+
+function formatMediaStatus(appState, app, isActiveLoad) {
+  const label = getActiveMediaCacheLabel(app);
+  const appAgeSeconds = appState?.cache?.memory_age_seconds ?? appState?.cache?.disk_age_seconds;
+  const refreshing = Boolean(appState?.refresh_in_progress);
+  if (refreshing) {
+    return {
+      value: t("refreshingCache", "Refreshing cache..."),
+      busy: true,
+      tone: "media",
+      title: tp("refreshingMediaCache", { label }, "Refreshing %(label)s cache..."),
+    };
+  }
+  if (isActiveLoad) {
+    return {
+      value: t("loadingLibrary", "Loading library..."),
+      busy: true,
+      tone: "media",
+      title: tp("loadingMediaLibrary", { label }, "Loading %(label)s library..."),
+    };
+  }
+  return {
+    value: formatCacheStatus(label, withElapsedAge(appAgeSeconds)),
+    busy: false,
+    tone: "media",
+    title: tp("mediaCacheAge", { label }, "%(label)s cache status"),
+  };
+}
+
 function getActiveMediaCacheLabel(app = activeApp) {
-  const selected = (configState && configState.optionSelected) || {};
-  const mediaSource = String(selected.media_source || "").trim().toLowerCase();
+  const mediaSource = String(configState.mediaSource || configState.optionEffective?.media_source || "").trim().toLowerCase();
   if (mediaSource === "plex" || mediaSource === "emby" || mediaSource === "jellyfin") {
     return sourceLabelFromKey(mediaSource);
   }
@@ -5713,8 +6324,8 @@ function formatArrRefreshStatusLabel(app, suffix) {
 }
 
 function updatePrimaryRefreshButton() {
-  if (!refreshTabBtn) return;
   const appLabel = getAppLabel(activeApp);
+  if (!refreshTabBtn) return;
   const configured = getAppConfigured(activeApp);
 
   refreshTabBtn.textContent = t(
@@ -5823,16 +6434,26 @@ function updateArrRefreshButtons() {
 }
 
 function updateStatusPanel() {
-  if (!progressStatusEl && !tautulliStatusEl && !cacheStatusEl) return;
+  if (!mediaStatusEl && !progressStatusEl && !enrichmentStatusEl) return;
   const appState = statusState.apps?.[activeApp];
   const tautulli = statusState.tautulli;
+  const enrichmentState = statusState.enrichment;
+  const historyExplanation = providerRoleExplanation("history");
+  const mediaProvider = String(configState.mediaSource || "").trim().toLowerCase();
+  const historyProvider = String(configState.historyProvider || "").trim().toLowerCase();
+  const enrichmentProvider = String(configState.insightsProvider || "").trim().toLowerCase();
   const loadingPhase = document.body.classList.contains("sortarr-loading");
   const progressBlock = progressStatusEl?.closest(".status-block");
+  const mediaBlock = mediaStatusEl?.closest(".status-block");
+  const enrichmentBlock = enrichmentStatusEl?.closest(".status-block");
+  if (mediaBlock) {
+    mediaBlock.classList.toggle("hidden", !mediaProvider);
+  }
   if (progressBlock) {
-    progressBlock.classList.toggle(
-      "hidden",
-      !(configState.playbackConfigured || (tautulli && tautulli.configured))
-    );
+    progressBlock.classList.toggle("hidden", !historyProvider);
+  }
+  if (enrichmentBlock) {
+    enrichmentBlock.classList.toggle("hidden", !enrichmentProvider);
   }
   const ageSeed = appState?.cache?.memory_age_seconds ??
     appState?.cache?.disk_age_seconds ??
@@ -5843,60 +6464,60 @@ function updateStatusPanel() {
 
   updateProgressTargets(activeApp, appState?.progress, tautulli);
   renderProgressStatus(appState, tautulli);
-  if (tautulliStatusEl) {
-    if (loadingPhase && !(tautulli && tautulli.configured)) {
-      if (tautulliStatusEl.dataset.hasValue !== "1") {
-        tautulliStatusEl.textContent = "--";
-        tautulliStatusEl.dataset.hasValue = "0";
-      }
-    } else {
-      const holdConfiguredPlaybackValue = Boolean(
-        configState.playbackConfigured &&
-        !(tautulli && tautulli.configured) &&
-        tautulliStatusEl.dataset.hasValue === "1"
-      );
-      if (!holdConfiguredPlaybackValue) {
-        const next = formatTautulliStatus(tautulli, appState?.progress, appState);
-        tautulliStatusEl.textContent = next;
-        tautulliStatusEl.dataset.hasValue = (next && next !== "--") ? "1" : "0";
-      }
+  if (progressStatusEl) {
+    progressStatusEl.title = historyExplanation || "";
+  }
+  const historyBusy = Boolean(
+    tautulli?.configured && (
+      tautulli?.refresh_in_progress ||
+      tautulli?.status === "stale" ||
+      tautulli?.partial ||
+      !isPlaybackCountsSettled(appState)
+    )
+  );
+  setStatusBlockActivity(
+    progressBlock,
+    historyBusy,
+    "history"
+  );
+  if (historyStatusMetaEl) {
+    historyStatusMetaEl.textContent = providerRoleMetaLabel("history") || sourceLabelFromKey(historyProvider || "history");
+    historyStatusMetaEl.title = historyExplanation || "";
+  }
+  if (mediaStatusEl) {
+    const mediaStatus = formatMediaStatus(appState, activeApp, Boolean(isLoading || (loadingPhase && !statusReadyAfterFirstData)));
+    if (statusState.apps?.[activeApp]?.configured) {
+      mediaStatusEl.textContent = mediaStatus.value;
+      mediaStatusEl.title = mediaStatus.title;
+      mediaStatusEl.dataset.hasValue = "1";
+      setStatusBlockActivity(mediaBlock, mediaStatus.busy, mediaStatus.tone);
+    } else if (!(mediaStatusEl.dataset.hasValue === "1" && statusFetchInFlight)) {
+      mediaStatusEl.textContent = "--";
+      mediaStatusEl.title = "";
+      mediaStatusEl.dataset.hasValue = "0";
+      setStatusBlockActivity(mediaBlock, false, "media");
+    }
+    if (mediaStatusMetaEl) {
+      mediaStatusMetaEl.textContent = providerRoleMetaLabel("media") || sourceLabelFromKey(mediaProvider || "media");
+      mediaStatusMetaEl.title = providerRoleExplanation("media") || "";
     }
   }
-  if (cacheStatusEl) {
-    const parts = [];
-    const appCache = statusState.apps?.[activeApp]?.cache;
-    if (statusState.apps?.[activeApp]?.configured) {
-      const label = getActiveMediaCacheLabel(activeApp);
-      const appAgeSeconds = appCache?.memory_age_seconds ?? appCache?.disk_age_seconds;
-      parts.push(formatCacheStatus(label, withElapsedAge(appAgeSeconds)));
-    }
-    if (tautulli && tautulli.configured) {
-      parts.push(formatCacheStatus(getPlaybackLabel(), withElapsedAge(tautulli.index_age_seconds)));
-    }
-    if (parts.length) {
-      cacheStatusEl.textContent = parts.join(" | ");
-      cacheStatusEl.dataset.hasValue = "1";
-    } else if (
-      !(
-        cacheStatusEl.dataset.hasValue === "1" &&
-        (statusFetchInFlight || configState.playbackConfigured)
-      )
-    ) {
-      cacheStatusEl.textContent = "--";
-      cacheStatusEl.dataset.hasValue = "0";
+  if (enrichmentStatusEl) {
+    const enrichmentStatus = formatEnrichmentStatus(enrichmentState, enrichmentProvider, appState, tautulli);
+    enrichmentStatusEl.textContent = enrichmentStatus.value;
+    enrichmentStatusEl.title = enrichmentStatus.title;
+    enrichmentStatusEl.dataset.hasValue = enrichmentStatus.value && enrichmentStatus.value !== "--" ? "1" : "0";
+    setStatusBlockActivity(enrichmentBlock, enrichmentStatus.busy, enrichmentStatus.tone);
+    if (enrichmentStatusMetaEl) {
+      enrichmentStatusMetaEl.textContent = sourceLabelFromKey(enrichmentProvider || "enrichment");
+      enrichmentStatusMetaEl.title = providerRoleExplanation("enrichment") || "";
     }
   }
   setPartialBanner(Boolean(tautulli?.partial));
   const playbackReady = Boolean((tautulli && tautulli.configured) || configState.playbackConfigured);
-  const playbackProviderKey = tautulli?.provider || configState.playbackProvider;
-  const showDeepRefresh = shouldShowDeepRefreshButton(playbackReady, playbackProviderKey);
   setElementVisible(refreshTautulliBtn, playbackReady);
   if (refreshTautulliBtn) {
     refreshTautulliBtn.disabled = !playbackReady;
-  }
-  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
-  if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
   }
   updatePrimaryRefreshButton();
 }
@@ -5955,10 +6576,12 @@ function handleTautulliRefreshState(prevTautulli, nextTautulli) {
 
 function scheduleStatusPoll() {
   if (statusPollTimer) return;
-  if (!statusState.tautulli?.refresh_in_progress) return;
+  const tautulliRefreshing = Boolean(statusState.tautulli?.refresh_in_progress);
+  const enrichmentRefreshing = Boolean(statusState.enrichment?.refresh_in_progress);
+  if (!tautulliRefreshing && !enrichmentRefreshing) return;
   const progress = statusState.apps?.[activeApp]?.progress;
   const hasProgress = Number.isFinite(progress?.total) && Number.isFinite(progress?.processed);
-  const interval = hasProgress && progress.processed < progress.total
+  const interval = tautulliRefreshing && hasProgress && progress.processed < progress.total
     ? TAUTULLI_STATUS_POLL_INTERVAL_MS
     : TAUTULLI_POLL_INTERVAL_MS;
   statusPollTimer = window.setTimeout(() => {
@@ -6614,6 +7237,7 @@ async function fetchStatusNow({ silent = false, lite = false } = {}) {
     const prevTautulli = statusState.tautulli;
     statusState.apps = mergeStatusApps(statusState.apps, data.apps) || statusState.apps;
     statusState.tautulli = data.tautulli || statusState.tautulli;
+    statusState.enrichment = data.enrichment || statusState.enrichment;
     statusState.security = data.security || null;
     tautulliMatched = Boolean(statusState.tautulli?.configured || tautulliEnabled);
     applyPlexScopeFromStatus(data.scope || {});
@@ -6902,6 +7526,7 @@ function resetUiState() {
   localStorage.removeItem(CSV_COLUMNS_KEY);
   localStorage.removeItem(FILTERS_COLLAPSED_KEY);
   localStorage.removeItem(CHIPS_ENABLED_KEY);
+  localStorage.removeItem(TOOLBAR_COLLAPSED_KEY);
   localStorage.removeItem(VIEW_STATE_KEY);
   localStorage.removeItem(PLEX_LIBRARY_SELECTION_KEY);
   localStorage.removeItem("Sortarr-theme");
@@ -7761,7 +8386,7 @@ async function handleMatchDiagnosticsClick(btn, event) {
     return;
   }
   if (!playbackSupportsDiagnostics) {
-    setStatus(`${getPlaybackLabel()} diagnostics are unavailable.`);
+    setStatus(`${getPlaybackLabel()} match diagnostics are unavailable for this provider.`);
     return;
   }
   try {
@@ -7885,7 +8510,7 @@ async function handleRowRefreshClick(btn) {
     ? (row.SeriesId ?? row.seriesId)
     : (row.MovieId ?? row.movieId);
   if (!itemId) {
-    setStatusFor("Refresh failed: item ID missing.", ROW_REFRESH_FOLLOWUP_MS);
+    setStatusFor(t("refreshFailedItemIdMissing", "Refresh failed: item ID missing."), ROW_REFRESH_FOLLOWUP_MS);
     return;
   }
   const instanceId = row.InstanceId ?? row.instanceId ?? "";
@@ -7896,11 +8521,14 @@ async function handleRowRefreshClick(btn) {
   const playbackLabel = getPlaybackLabel();
   setRowRefreshPending(rowEl, true);
   btn.disabled = true;
-  const initialParts = [`${appLabel} refresh queued.`];
+  const initialParts = [t("appRefreshQueued", "%(app)s refresh queued.", { app: appLabel })];
   if (playbackItemRefresh) {
-    initialParts.push(`${playbackLabel} refresh queued.`);
+    initialParts.push(t("appRefreshQueued", "%(app)s refresh queued.", { app: playbackLabel }));
   }
-  setRowRefreshNotice(statusToken, `Refreshing ${rowTitle} - ${initialParts.join(" ")}`);
+  setRowRefreshNotice(statusToken, t("refreshingRowItemStatus", "Refreshing %(title)s - %(details)s", {
+    title: rowTitle,
+    details: initialParts.join(" "),
+  }));
   try {
     const arrPromise = requestArrRefresh(app, { itemId, instanceId });
     const playbackPromise = playbackItemRefresh
@@ -9127,7 +9755,7 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId, providerItem
   const seasonSortSelect = shell.querySelector('[data-role="series-season-sort"]');
   const episodeSortFieldSelect = shell.querySelector('[data-role="series-episode-sort-field"]');
   const episodeSortSelect = shell.querySelector('[data-role="series-episode-sort"]');
-  if (seasonSortSelect && episodeSortFieldSelect && episodeSortSelect && !shouldUseNativeSelects()) {
+  if (seasonSortSelect && episodeSortFieldSelect && episodeSortSelect) {
     const sortIdBase = String(seriesKey || seriesId || "series")
       .replace(/[^a-zA-Z0-9_-]+/g, "-")
       .replace(/^-+|-+$/g, "")
@@ -9138,6 +9766,8 @@ function buildSeriesExpansionShell(seriesKey, seriesId, instanceId, providerItem
     initCustomSelect(seasonSortSelect);
     initCustomSelect(episodeSortFieldSelect);
     initCustomSelect(episodeSortSelect);
+    root.classList.add("custom-selects");
+    ensureCustomSelectGlobalHandlers();
   }
   const body = shell.querySelector('[data-role="series-expansion-body"]') || shell;
   const statusEl = shell.querySelector('[data-role="series-expansion-status"]');
@@ -9186,20 +9816,11 @@ function setSeasonExtrasState(block, enabled) {
   const season = block.dataset.season || "";
   const seasonKey = seriesKey && season ? `${seriesKey}::${season}` : "";
   const episodesWrap = block.querySelector(".series-season-episodes");
-  const toggle = block.querySelector('[data-role="episode-extras-toggle"]');
   if (episodesWrap) {
-    episodesWrap.classList.toggle("series-episode-extras", enabled);
-  }
-  if (toggle) {
-    toggle.setAttribute("aria-pressed", enabled ? "true" : "false");
-    toggle.classList.toggle("is-active", enabled);
+    episodesWrap.classList.add("series-episode-extras");
   }
   if (!seasonKey) return;
-  if (enabled) {
-    sonarrExpansionState.extrasBySeason.add(seasonKey);
-  } else {
-    sonarrExpansionState.extrasBySeason.delete(seasonKey);
-  }
+  sonarrExpansionState.extrasBySeason.add(seasonKey);
 }
 
 function updateSeriesExpansionStatus(statusEl, text, options = {}) {
@@ -9393,20 +10014,9 @@ function renderSeasonList(container, seriesKey, seasons) {
     meta.className = "series-season-meta";
     meta.textContent = buildSeasonMetaText(season);
 
-    const headerWrap = document.createElement("div");
-    headerWrap.className = "series-season-header";
-
     const metaWrap = document.createElement("div");
     metaWrap.className = "series-season-main";
-    const extrasToggle = document.createElement("button");
-    extrasToggle.type = "button";
-    extrasToggle.className = "series-expansion-toggle series-season-extras";
-    extrasToggle.setAttribute("aria-pressed", "false");
-    extrasToggle.setAttribute("data-role", "episode-extras-toggle");
-    extrasToggle.textContent = t("label_extras", "Extras");
-
-    headerWrap.append(label, extrasToggle);
-    metaWrap.append(headerWrap, meta);
+    metaWrap.append(label, meta);
 
     row.append(toggle, metaWrap);
 
@@ -9415,12 +10025,8 @@ function renderSeasonList(container, seriesKey, seasons) {
     episodesWrap.dataset.seriesKey = seriesKey;
     episodesWrap.dataset.season = String(seasonNumber);
     episodesWrap.setAttribute("aria-hidden", "true");
-    const extrasEnabled = sonarrExpansionState.extrasBySeason.has(seasonKey);
-    if (extrasEnabled) {
-      episodesWrap.classList.add("series-episode-extras");
-      extrasToggle.setAttribute("aria-pressed", "true");
-      extrasToggle.classList.add("is-active");
-    }
+    episodesWrap.classList.add("series-episode-extras");
+    sonarrExpansionState.extrasBySeason.add(seasonKey);
 
     if (sonarrExpansionState.expandedSeasons.has(seasonKey)) {
       toggle.setAttribute("aria-expanded", "true");
@@ -12305,22 +12911,31 @@ function resetColumnsPanelPosition() {
 
 function positionColumnsPanel() {
   if (!columnsPanel || !columnsBtn) return;
-  const isSmall = window.innerWidth <= 700;
-  if (!isSmall) {
-    resetColumnsPanelPosition();
-    return;
-  }
   const btnRect = columnsBtn.getBoundingClientRect();
   const viewportWidth = window.visualViewport?.width || window.innerWidth;
-  const maxWidth = Math.round(Math.min(viewportWidth * 0.94, 360));
+  const isSmall = viewportWidth <= 700;
   const top = Math.round(btnRect.bottom + 8);
   columnsPanel.style.position = "fixed";
-  columnsPanel.style.left = "50%";
   columnsPanel.style.right = "auto";
   columnsPanel.style.top = `${top}px`;
-  columnsPanel.style.transform = "translateX(-50%)";
-  columnsPanel.style.width = `${maxWidth}px`;
-  columnsPanel.style.maxWidth = `${maxWidth}px`;
+  if (isSmall) {
+    const maxWidth = Math.round(Math.min(viewportWidth * 0.94, 360));
+    columnsPanel.style.left = "50%";
+    columnsPanel.style.transform = "translateX(-50%)";
+    columnsPanel.style.width = `${maxWidth}px`;
+    columnsPanel.style.maxWidth = `${maxWidth}px`;
+    return;
+  }
+  columnsPanel.style.width = "";
+  columnsPanel.style.maxWidth = `${Math.max(300, Math.round(viewportWidth - 32))}px`;
+  columnsPanel.style.transform = "none";
+  columnsPanel.style.left = "0px";
+  const panelWidth = Math.ceil(columnsPanel.getBoundingClientRect().width || columnsPanel.offsetWidth || 300);
+  const minLeft = 16;
+  const maxLeft = Math.max(minLeft, Math.floor(viewportWidth - panelWidth - 16));
+  const alignedLeft = Math.round(btnRect.left);
+  const left = Math.min(maxLeft, Math.max(minLeft, alignedLeft));
+  columnsPanel.style.left = `${left}px`;
 }
 
 function updateColumnFilter() {
@@ -13041,12 +13656,13 @@ function buildTitleLink(row, app) {
   }
 }
 
-const ROW_REFRESH_ICON_HTML = '<span aria-hidden="true">↻</span>';
+const ROW_REFRESH_ICON_HTML =
+  '<span class="row-refresh-icon" aria-hidden="true"><svg viewBox="0 0 24 24" focusable="false"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></span>';
 const ROW_REFRESH_BUTTON_HTML =
   `<button class="row-refresh-btn row-refresh-btn--title" type="button" title="${escapeHtml(t("Refresh in Arr (and playback if supported)"))}" aria-label="${escapeHtml(t("Refresh item"))}">${ROW_REFRESH_ICON_HTML}</button>`;
 const SERIES_EXPAND_ICON_HTML = '<span aria-hidden="true">+</span>';
 const DIAG_BUTTON_HTML =
-  `<div class="diag-actions"><button class="match-diag-btn" type="button" title="${escapeHtml(t("Copy match diagnostics"))}" aria-label="${escapeHtml(t("Copy match diagnostics"))}">i</button></div>`;
+  `<div class="diag-actions"><button class="match-diag-btn" type="button" title="${escapeHtml(t("Copy playback match diagnostics"))}" aria-label="${escapeHtml(t("Copy playback match diagnostics"))}">i</button></div>`;
 
 function buildSeriesExpanderButton(row) {
   const seriesId = row.SeriesId ?? row.seriesId ?? "";
@@ -14871,33 +15487,6 @@ if (refreshRadarrBtn) {
 if (refreshTautulliBtn) {
   refreshTautulliBtn.addEventListener("click", async () => {
     const label = getPlaybackLabel();
-    setStatusTransient(t("refreshingPlayback", "Refreshing %(label)s…", { label }));
-    try {
-      const res = await fetch(apiUrl("/api/tautulli/refresh"), {
-        method: "POST",
-        headers: withCsrfHeaders(),
-      });
-      if (!res.ok) {
-        const txt = await res.text();
-        throw new Error(`${res.status} ${res.statusText}: ${txt}`);
-      }
-      const data = await res.json();
-      if (data.refresh_in_progress || data.started) {
-        setStatusNotice(getPlaybackMatchingNotice());
-        if (configState.sonarrConfigured) setTautulliPending("sonarr", true);
-        if (configState.radarrConfigured) setTautulliPending("radarr", true);
-        updateBackgroundLoading();
-      }
-      fetchStatus({ silent: true });
-      setStatusTransient(t("playbackRefreshStarted", "%(label)s refresh started.", { label }));
-    } catch (e) {
-      setStatus(t("errorPrefix", "Error: ") + e.message);
-    }
-  });
-}
-if (deepRefreshTautulliBtn) {
-  deepRefreshTautulliBtn.addEventListener("click", async () => {
-    const label = getPlaybackLabel();
     setStatusTransient(t("refreshingPlaybackData", "Refreshing %(label)s data...", { label }));
     try {
       const res = await fetch(apiUrl("/api/tautulli/deep_refresh"), {
@@ -14934,6 +15523,11 @@ if (clearCachesBtn) {
     )) return;
     setStatus(t("clearingCaches", "Clearing caches..."));
     try {
+      latestInsightsStatusPayload = null;
+      if (typeof insightsDrawerState === "object" && insightsDrawerState) {
+        insightsDrawerState.data = null;
+      }
+      updateStatusPanel();
       const res = await fetch(apiUrl("/api/caches/clear"), {
         method: "POST",
         headers: withCsrfHeaders(),
@@ -15108,48 +15702,36 @@ async function prefetch(app, refresh, options = {}) {
 
 function updatePlaybackLabels() {
   const label = getPlaybackLabel();
-  const historyProvider = String(configState?.optionSelected?.history_source || "").trim().toLowerCase();
+  const historyProvider = String(configState?.historyProvider || configState?.optionEffective?.history_source || "").trim().toLowerCase();
   const historyLabel = historyProvider ? sourceLabelFromKey(historyProvider) : label;
+  const historyExplanation = providerRoleExplanation("history");
+  const historyShortNote = providerRoleShortNote("history");
 
   playbackLabelEls.forEach(el => {
     el.textContent = label;
+    el.title = historyExplanation || "";
   });
 
   playbackTitleEls.forEach(el => {
     el.textContent = playbackProvider
       ? t("playbackTitleWithLabel", "Playback (%(label)s)", { label })
       : t("playbackTitle", "Playback");
+    el.title = historyExplanation || "";
   });
 
   playbackMatchTitleEls.forEach(el => {
     el.textContent = playbackProvider
       ? t("matchTitleWithLabel", "Match (%(label)s)", { label })
       : t("matchTitle", "Match");
+    el.title = historyExplanation || "";
   });
 
   if (refreshTautulliBtn) {
     refreshTautulliBtn.textContent = historyProvider
-      ? t("refreshPlaybackProvider", "Re-match from %(label)s", { label: historyLabel })
-      : t("refreshPlayback", "Re-match from playback");
+      ? t("refreshPlaybackProviderData", "Refresh %(label)s data", { label: historyLabel })
+      : t("refreshPlaybackData", "Refresh playback data");
 
     refreshTautulliBtn.title = historyProvider
-      ? t(
-        "refreshPlaybackProviderMatchTitle",
-        "Re-match using current %(label)s data",
-        { label: historyLabel }
-      )
-      : t(
-        "refreshPlaybackMatchTitle",
-        "Re-match using current playback data"
-      );
-  }
-
-  if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.textContent = historyProvider
-      ? t("deepRefreshPlaybackProvider", "Rebuild %(label)s data", { label: historyLabel })
-      : t("deepRefreshPlayback", "Rebuild playback data");
-
-    deepRefreshTautulliBtn.title = historyProvider
       ? t(
         "refreshPlaybackProviderTitle",
         "Refresh %(label)s library data, then rebuild matches",
@@ -15159,6 +15741,9 @@ function updatePlaybackLabels() {
         "refreshPlaybackTitle",
         "Refresh playback library data, then rebuild matches"
       );
+    if (historyExplanation) {
+      refreshTautulliBtn.title = `${refreshTautulliBtn.title} ${historyExplanation}`;
+    }
   }
 }
 
@@ -15167,7 +15752,7 @@ function setPlaybackProvider(provider) {
   playbackProvider = provider || "";
   playbackLabel = sourceLabelFromKey(playbackProvider) || "History";
   playbackSupportsItemRefresh = playbackProvider === "tautulli";
-  playbackSupportsDiagnostics = playbackProvider === "tautulli" || playbackProvider === "tracearr" || playbackProvider === "streamystats" || playbackProvider === "plex" || playbackProvider === "jellyfin";
+  playbackSupportsDiagnostics = providerSupportsPlaybackDiagnostics(playbackProvider);
   try {
     localStorage.setItem(PLAYBACK_PROVIDER_STORAGE_KEY, playbackProvider);
   } catch {
@@ -15179,15 +15764,9 @@ function setPlaybackProvider(provider) {
 function setTautulliEnabled(enabled, provider = "") {
   tautulliEnabled = Boolean(enabled);
   tautulliMatched = tautulliEnabled;
-  const playbackProviderKey = provider || playbackProvider;
-  const showDeepRefresh = shouldShowDeepRefreshButton(tautulliEnabled, playbackProviderKey);
   setElementVisible(refreshTautulliBtn, tautulliEnabled);
   if (refreshTautulliBtn) {
     refreshTautulliBtn.disabled = !tautulliEnabled;
-  }
-  setElementVisible(deepRefreshTautulliBtn, showDeepRefresh);
-  if (deepRefreshTautulliBtn) {
-    deepRefreshTautulliBtn.disabled = !showDeepRefresh;
   }
   setPlaybackProvider(provider);
   updateAdvancedHelpText();
@@ -15380,14 +15959,6 @@ if (tbody) {
         setRowSelection(rowEl, { scroll: false });
       }
     }
-    const episodeExtrasToggle = e.target.closest('[data-role="episode-extras-toggle"]');
-    if (episodeExtrasToggle) {
-      const block = episodeExtrasToggle.closest(".series-season-block");
-      if (!block) return;
-      const enabled = episodeExtrasToggle.getAttribute("aria-pressed") !== "true";
-      setSeasonExtrasState(block, enabled);
-      return;
-    }
     const expandBtn = e.target.closest(".series-expander");
     if (expandBtn) {
       handleSeriesExpanderClick(expandBtn);
@@ -15438,6 +16009,7 @@ if (tbody) {
 }
 
 if (columnsBtn && columnsPanel) {
+  ensureColumnsPanelPortal();
   setColumnsPanelHiddenState(columnsPanel.classList.contains("hidden"));
 
   columnsBtn.addEventListener("click", e => {
@@ -15445,6 +16017,7 @@ if (columnsBtn && columnsPanel) {
     const nowHidden = !columnsPanel.classList.contains("hidden");
     setColumnsPanelHiddenState(nowHidden);
     if (!nowHidden) {
+      ensureColumnsPanelPortal();
       closeAllCustomSelects();
     }
     if (!nowHidden) {
@@ -15546,6 +16119,73 @@ function setTheme(theme) {
   }
 }
 
+function setToolbarCollapsed(collapsed, options = {}) {
+  const enabled = Boolean(collapsed);
+  const immediate = Boolean(options && options.immediate);
+  if (toolbarCollapseTimer) {
+    window.clearTimeout(toolbarCollapseTimer);
+    toolbarCollapseTimer = null;
+  }
+  if (toolbarExpandFrame) {
+    window.cancelAnimationFrame(toolbarExpandFrame);
+    toolbarExpandFrame = 0;
+  }
+  document.body.classList.remove("toolbar--collapsing");
+  document.body.classList.remove("toolbar--expanding");
+  document.body.classList.remove("toolbar--layout-collapsed");
+  if (enabled) {
+    if (immediate) {
+      root.setAttribute("data-toolbar-collapsed", "1");
+      document.body.classList.add("toolbar--collapsed-final");
+    } else {
+      document.body.classList.remove("toolbar--collapsed-final");
+      root.setAttribute("data-toolbar-collapsed", "0");
+      document.body.classList.add("toolbar--collapsing");
+      toolbarCollapseTimer = window.setTimeout(() => {
+        toolbarCollapseTimer = null;
+        if (!root || root.getAttribute("data-toolbar-collapsed") === "1") return;
+        document.body.classList.remove("toolbar--collapsing");
+        root.setAttribute("data-toolbar-collapsed", "1");
+        document.body.classList.add("toolbar--collapsed-final");
+      }, TOOLBAR_COLLAPSE_ANIM_MS);
+    }
+  } else {
+    if (immediate) {
+      document.body.classList.remove("toolbar--collapsed-final");
+      root.setAttribute("data-toolbar-collapsed", "0");
+    } else {
+      document.body.classList.remove("toolbar--collapsed-final");
+      root.setAttribute("data-toolbar-collapsed", "0");
+      document.body.classList.add("toolbar--expanding");
+      toolbarExpandFrame = window.requestAnimationFrame(() => {
+        toolbarExpandFrame = 0;
+        if (!root) return;
+        document.body.classList.remove("toolbar--expanding");
+        toolbarCollapseTimer = window.setTimeout(() => {
+          toolbarCollapseTimer = null;
+          if (!root || root.getAttribute("data-toolbar-collapsed") !== "0") return;
+          document.body.classList.remove("toolbar--expanding");
+        }, TOOLBAR_COLLAPSE_ANIM_MS);
+      });
+    }
+  }
+  if (toolbarCollapseBtn) {
+    toolbarCollapseBtn.setAttribute("aria-expanded", enabled ? "false" : "true");
+    toolbarCollapseBtn.setAttribute(
+      "title",
+      enabled ? t("Show toolbar details") : t("Hide toolbar details")
+    );
+    toolbarCollapseBtn.setAttribute(
+      "aria-label",
+      enabled ? t("Show toolbar details") : t("Hide toolbar details")
+    );
+  }
+  try {
+    localStorage.setItem(TOOLBAR_COLLAPSED_KEY, enabled ? "1" : "0");
+  } catch {
+  }
+}
+
 function updateRuntimeLabels(fn = t) {
   const labelMap = {
     ContentHours: fn("label_runtime_hhmm", "Runtime (hh:mm)"),
@@ -15622,10 +16262,23 @@ function normalizeSonarrRuntimeOrder(scope = document) {
 const savedTheme = localStorage.getItem("Sortarr-theme") || "dark";
 setTheme(savedTheme);
 
+let savedToolbarCollapsed = false;
+try {
+  savedToolbarCollapsed = localStorage.getItem(TOOLBAR_COLLAPSED_KEY) === "1";
+} catch {
+}
+setToolbarCollapsed(savedToolbarCollapsed, { immediate: true });
+
 themeBtn.addEventListener("click", () => {
   const current = root.getAttribute("data-theme") || "dark";
   setTheme(current === "dark" ? "light" : "dark");
 });
+if (toolbarCollapseBtn) {
+  toolbarCollapseBtn.addEventListener("click", () => {
+    const collapsed = root.getAttribute("data-toolbar-collapsed") === "1";
+    setToolbarCollapsed(!collapsed);
+  });
+}
 if (tableFullscreenBtn) {
   // Initialize from storage
   applyTableFullscreen(isTableFullscreenEnabled());
@@ -15669,7 +16322,7 @@ document.addEventListener("fullscreenchange", () => {
 
 const savedFiltersCollapsed = localStorage.getItem(FILTERS_COLLAPSED_KEY) === "1";
 if (filtersEl) {
-  setFiltersCollapsed(savedFiltersCollapsed);
+  setFiltersCollapsed(savedFiltersCollapsed, { immediate: true });
 }
 if (filtersToggleBtn) {
   filtersToggleBtn.addEventListener("click", () => {
@@ -15702,8 +16355,8 @@ function buildFrontendConfigUiSignature(payload, normalizedState) {
     embyConfigured: Boolean(state.embyConfigured),
     jellyfinConfigured: Boolean(state.jellyfinConfigured),
     insightsProvider: state.insightsProvider || "",
-    historySourcesAvailable: Array.isArray(state.historySourcesAvailable) ? state.historySourcesAvailable : [],
-    optionSet: state.optionSet || {},
+    providerState: state.providerState || {},
+    providerCapabilities: state.providerCapabilities || {},
     plexLibraries: state.plexLibraries || { sonarr: [], radarr: [] },
     sonarrBase: state.sonarrBase || "",
     radarrBase: state.radarrBase || "",
@@ -15737,25 +16390,41 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
   configState.radarrConfigured = payload.radarr_configured == null
     ? radarrInstances.length > 0
     : Boolean(payload.radarr_configured);
-  configState.mediaSource = String(payload.media_source || payload.option_set?.selected?.media_source || "").trim().toLowerCase();
-  configState.historyProvider = String(payload.history_provider || payload.option_set?.selected?.history_source || "").trim().toLowerCase();
-  configState.overlayProvider = String(payload.overlay_provider || payload.playback_provider || "").trim().toLowerCase();
+  configState.providerState = (payload.provider_state && typeof payload.provider_state === "object")
+    ? payload.provider_state
+    : {};
+  configState.providerCapabilities = (payload.provider_capabilities && typeof payload.provider_capabilities === "object")
+    ? payload.provider_capabilities
+    : {};
+  const localOptionSet = buildLocalOptionSet(configState.providerState, configState.providerCapabilities);
+  configState.mediaSource = String(
+    payload.provider_state?.media?.effective
+    || ""
+  ).trim().toLowerCase();
+  configState.historyProvider = String(
+    payload.provider_state?.history?.effective
+    || ""
+  ).trim().toLowerCase();
+  configState.overlayProvider = String(
+    payload.provider_state?.enrichment?.effective
+    || ""
+  ).trim().toLowerCase();
   configState.playbackProvider = configState.historyProvider;
-  configState.playbackConfigured = Boolean(
-    payload.playback_configured ?? payload.tautulli_configured
-  );
+  configState.playbackConfigured = Boolean(payload.playback_configured);
   configState.plexConfigured = Boolean(payload.plex_configured);
   configState.embyConfigured = Boolean(payload.emby_configured);
   configState.jellyfinConfigured = Boolean(payload.jellyfin_configured);
-  configState.insightsProvider = String(payload.insights_provider || "").trim().toLowerCase();
-  configState.historySourcesAvailable = Array.isArray(payload.history_sources_available)
-    ? payload.history_sources_available.map(value => String(value || "").trim().toLowerCase()).filter(Boolean)
+  configState.insightsProvider = String(
+    payload.provider_state?.enrichment?.effective
+    || ""
+  ).trim().toLowerCase();
+  configState.historySourcesAvailable = Array.isArray(localOptionSet.configured?.history_sources)
+    ? localOptionSet.configured.history_sources
     : [];
-  configState.optionSet = (payload.option_set && typeof payload.option_set === "object")
-    ? payload.option_set
-    : {};
-  configState.optionCapabilities = configState.optionSet.capabilities || {};
-  configState.optionSelected = configState.optionSet.selected || {};
+  configState.optionSet = localOptionSet;
+  configState.optionCapabilities = localOptionSet.capabilities || {};
+  configState.optionSelected = localOptionSet.selected || {};
+  configState.optionEffective = localOptionSet.effective || {};
   const plexLibraries = (payload.plex_libraries && typeof payload.plex_libraries === "object")
     ? payload.plex_libraries
     : {};
@@ -15778,6 +16447,8 @@ function applyFrontendConfig(cfg, { updateUi = true } = {}) {
     embyConfigured: configState.embyConfigured,
     jellyfinConfigured: configState.jellyfinConfigured,
     insightsProvider: configState.insightsProvider,
+    providerState: configState.providerState,
+    providerCapabilities: configState.providerCapabilities,
     historySourcesAvailable: configState.historySourcesAvailable,
     optionSet: configState.optionSet,
     plexLibraries: configState.plexLibraries,
@@ -16102,8 +16773,8 @@ function closeHistoryDrawer() {
   document.body.classList.remove("history-open");
 }
 
-// Plex insights drawer state and helpers
-const plexInsightsState = {
+// Provider insights drawer state and helpers
+const insightsDrawerState = {
   open: false,
   loading: false,
   data: null,
@@ -16114,26 +16785,26 @@ const plexInsightsState = {
   live: false,
   liveStatus: "",
 };
-let plexOverlayEl = null;
-let plexDrawerEl = null;
-let plexBodyEl = null;
-let plexMetaEl = null;
-let plexTitleEl = null;
-let plexPrimaryTitleEl = null;
-let plexSecondaryTitleEl = null;
-let plexHubChipsEl = null;
-let plexHubItemsEl = null;
-let plexSectionChipsEl = null;
-let plexActivitiesEl = null;
-let plexButlerEl = null;
-let plexMatchEl = null;
-let plexRefreshBtn = null;
-let plexLiveBtn = null;
-let plexLiveSource = null;
-let plexLiveRefreshTimer = null;
+let insightsOverlayEl = null;
+let insightsDrawerEl = null;
+let insightsBodyEl = null;
+let insightsMetaEl = null;
+let insightsTitleEl = null;
+let insightsPrimaryTitleEl = null;
+let insightsSecondaryTitleEl = null;
+let insightsHubChipsEl = null;
+let insightsHubItemsEl = null;
+let insightsSectionChipsEl = null;
+let insightsActivitiesEl = null;
+let insightsButlerEl = null;
+let insightsMatchEl = null;
+let insightsRefreshBtn = null;
+let insightsLiveBtn = null;
+let insightsLiveSource = null;
+let insightsLiveRefreshTimer = null;
 
 function currentInsightsProvider() {
-  const dataProvider = String(plexInsightsState?.data?.provider || "").trim().toLowerCase();
+  const dataProvider = String(insightsDrawerState?.data?.provider || "").trim().toLowerCase();
   if (dataProvider === "plex" || dataProvider === "jellyfin" || dataProvider === "emby") return dataProvider;
   return getInsightsProvider();
 }
@@ -16142,78 +16813,84 @@ function currentInsightsProviderLabel() {
   return getInsightsProviderLabel(currentInsightsProvider());
 }
 
-function getInsightsIncludeValue(provider) {
-  if (provider === "jellyfin") {
-    return "sections,sessions,activities,match_health";
-  }
-  if (provider === "emby") {
-    return "sections,sessions,match_health";
-  }
-  return "hubs,activities,butler,sections,match_health";
+function insightsProviderAvailable(provider = getInsightsProvider()) {
+  return providerCapabilityEnabled("insights_by_provider", provider, false);
 }
 
-function ensurePlexOverlay() {
-  if (plexOverlayEl && plexDrawerEl) return;
-  plexOverlayEl = document.createElement("div");
-  plexOverlayEl.className = "plex-overlay hidden";
-  plexOverlayEl.innerHTML = `
-    <div class="plex-scrim" data-plex-close="1"></div>
-    <div class="plex-drawer glass-panel">
-      <div class="plex-header">
-        <div class="plex-title" data-role="plex-title">${escapeHtml(t("providerInsightsFallback", "Provider Insights"))}</div>
-        <div class="plex-actions">
-          <button class="plex-btn" type="button" data-role="plex-refresh">${escapeHtml(t("Refresh"))}</button>
-          <button class="plex-btn plex-live-toggle" type="button" data-role="plex-live">${escapeHtml(t("Live"))}</button>
-          <button class="plex-close" type="button" aria-label="${escapeHtml(t("Close"))}" data-plex-close="1">\u00d7</button>
+function getInsightsIncludeValue(provider) {
+  return insightsViewProfile(provider).include;
+}
+
+function insightsSectionDisplayTitle(section, provider = currentInsightsProvider()) {
+  const item = (section && typeof section === "object") ? section : {};
+  if (isSessionBasedInsightsProvider(provider)) {
+    return item.name || item.title || t("Untitled", "Untitled");
+  }
+  return item.title || item.name || t("Untitled", "Untitled");
+}
+
+function ensureInsightsOverlay() {
+  if (insightsOverlayEl && insightsDrawerEl) return;
+  insightsOverlayEl = document.createElement("div");
+  insightsOverlayEl.className = "insights-overlay hidden";
+  insightsOverlayEl.innerHTML = `
+    <div class="insights-scrim" data-insights-close="1"></div>
+    <div class="insights-drawer glass-panel">
+      <div class="insights-header">
+        <div class="insights-title" data-role="insights-title">${escapeHtml(t("providerInsightsFallback", "Provider Insights"))}</div>
+        <div class="insights-actions">
+          <button class="insights-btn" type="button" data-role="insights-refresh">${escapeHtml(t("Refresh"))}</button>
+          <button class="insights-btn insights-live-toggle" type="button" data-role="insights-live">${escapeHtml(t("Live"))}</button>
+          <button class="insights-close" type="button" aria-label="${escapeHtml(t("Close"))}" data-insights-close="1">\u00d7</button>
         </div>
       </div>
-      <div class="plex-meta" data-role="plex-meta"></div>
-      <div class="plex-body" data-role="plex-body">
-        <div class="plex-section">
-          <div class="plex-section-title" data-role="plex-primary-title">${escapeHtml(t("Hubs"))}</div>
-          <div class="plex-hub-filters">
-            <span class="plex-label">${escapeHtml(t("Library"))}</span>
-            <div class="plex-section-chips" data-role="plex-section-chips"></div>
+      <div class="insights-meta" data-role="insights-meta"></div>
+      <div class="insights-body" data-role="insights-body">
+        <div class="insights-section">
+          <div class="insights-section-title" data-role="insights-primary-title">${escapeHtml(t("Hubs"))}</div>
+          <div class="insights-hub-filters">
+            <span class="insights-label">${escapeHtml(t("Library"))}</span>
+            <div class="insights-section-chips" data-role="insights-section-chips"></div>
           </div>
-          <div class="plex-hub-chips" data-role="plex-hub-chips"></div>
-          <div class="plex-hub-items" data-role="plex-hub-items"></div>
+          <div class="insights-hub-chips" data-role="insights-hub-chips"></div>
+          <div class="insights-hub-items" data-role="insights-hub-items"></div>
         </div>
-        <div class="plex-section">
-          <div class="plex-section-title">${escapeHtml(t("Match Health"))}</div>
-          <div class="plex-match" data-role="plex-match"></div>
+        <div class="insights-section">
+          <div class="insights-section-title">${escapeHtml(t("Match Health"))}</div>
+          <div class="insights-match" data-role="insights-match"></div>
         </div>
-        <div class="plex-section">
-          <div class="plex-section-title">${escapeHtml(t("Activities"))}</div>
-          <div class="plex-activities" data-role="plex-activities"></div>
+        <div class="insights-section">
+          <div class="insights-section-title">${escapeHtml(t("Activities"))}</div>
+          <div class="insights-activities" data-role="insights-activities"></div>
         </div>
-        <div class="plex-section">
-          <div class="plex-section-title" data-role="plex-secondary-title">${escapeHtml(t("Butler"))}</div>
-          <div class="plex-butler" data-role="plex-butler"></div>
+        <div class="insights-section">
+          <div class="insights-section-title" data-role="insights-secondary-title">${escapeHtml(t("Butler"))}</div>
+          <div class="insights-secondary-panel" data-role="insights-secondary-panel"></div>
         </div>
       </div>
     </div>
     `;
-  document.body.appendChild(plexOverlayEl);
-  plexDrawerEl = plexOverlayEl.querySelector(".plex-drawer");
-  plexBodyEl = plexOverlayEl.querySelector('[data-role="plex-body"]');
-  plexMetaEl = plexOverlayEl.querySelector('[data-role="plex-meta"]');
-  plexTitleEl = plexOverlayEl.querySelector('[data-role="plex-title"]');
-  plexPrimaryTitleEl = plexOverlayEl.querySelector('[data-role="plex-primary-title"]');
-  plexSecondaryTitleEl = plexOverlayEl.querySelector('[data-role="plex-secondary-title"]');
-  plexHubChipsEl = plexOverlayEl.querySelector('[data-role="plex-hub-chips"]');
-  plexHubItemsEl = plexOverlayEl.querySelector('[data-role="plex-hub-items"]');
-  plexSectionChipsEl = plexOverlayEl.querySelector('[data-role="plex-section-chips"]');
-  plexActivitiesEl = plexOverlayEl.querySelector('[data-role="plex-activities"]');
-  plexButlerEl = plexOverlayEl.querySelector('[data-role="plex-butler"]');
-  plexMatchEl = plexOverlayEl.querySelector('[data-role="plex-match"]');
-  plexRefreshBtn = plexOverlayEl.querySelector('[data-role="plex-refresh"]');
-  plexLiveBtn = plexOverlayEl.querySelector('[data-role="plex-live"]');
+  document.body.appendChild(insightsOverlayEl);
+  insightsDrawerEl = insightsOverlayEl.querySelector(".insights-drawer");
+  insightsBodyEl = insightsOverlayEl.querySelector('[data-role="insights-body"]');
+  insightsMetaEl = insightsOverlayEl.querySelector('[data-role="insights-meta"]');
+  insightsTitleEl = insightsOverlayEl.querySelector('[data-role="insights-title"]');
+  insightsPrimaryTitleEl = insightsOverlayEl.querySelector('[data-role="insights-primary-title"]');
+  insightsSecondaryTitleEl = insightsOverlayEl.querySelector('[data-role="insights-secondary-title"]');
+  insightsHubChipsEl = insightsOverlayEl.querySelector('[data-role="insights-hub-chips"]');
+  insightsHubItemsEl = insightsOverlayEl.querySelector('[data-role="insights-hub-items"]');
+  insightsSectionChipsEl = insightsOverlayEl.querySelector('[data-role="insights-section-chips"]');
+  insightsActivitiesEl = insightsOverlayEl.querySelector('[data-role="insights-activities"]');
+  insightsButlerEl = insightsOverlayEl.querySelector('[data-role="insights-secondary-panel"]');
+  insightsMatchEl = insightsOverlayEl.querySelector('[data-role="insights-match"]');
+  insightsRefreshBtn = insightsOverlayEl.querySelector('[data-role="insights-refresh"]');
+  insightsLiveBtn = insightsOverlayEl.querySelector('[data-role="insights-live"]');
 }
 
-function closePlexOverlay() {
-  plexInsightsState.open = false;
-  if (plexOverlayEl) plexOverlayEl.classList.add("hidden");
-  stopPlexLive();
+function closeInsightsOverlay() {
+  insightsDrawerState.open = false;
+  if (insightsOverlayEl) insightsOverlayEl.classList.add("hidden");
+  stopInsightsLive();
 }
 
 function formatEpochAge(ts) {
@@ -16222,102 +16899,88 @@ function formatEpochAge(ts) {
   return tp("progressAgeAgo", { age: formatAgeShort(ageSeconds) }, "%(age)s ago");
 }
 
-function updatePlexMeta(text, warn = false) {
-  if (!plexMetaEl) return;
-  plexMetaEl.textContent = text || "";
-  plexMetaEl.classList.toggle("plex-meta--warn", Boolean(warn));
+function updateInsightsMeta(text, warn = false) {
+  if (!insightsMetaEl) return;
+  insightsMetaEl.textContent = text || "";
+  insightsMetaEl.classList.toggle("insights-meta--warn", Boolean(warn));
 }
 
-function updatePlexTitle() {
-  if (!plexTitleEl) return;
+function updateInsightsTitle() {
+  if (!insightsTitleEl) return;
   const label = currentInsightsProviderLabel();
-  plexTitleEl.textContent = label
+  insightsTitleEl.textContent = label
     ? tp("providerInsightsLabel", { label }, "%(label)s Insights")
     : t("providerInsightsFallback", "Provider Insights");
 }
 
-function getPlexSectionLabel() {
+function getInsightsSectionLabel() {
   const provider = currentInsightsProvider();
-  if (provider === "jellyfin" || provider === "emby") {
-    const sectionId = plexInsightsState.sectionId;
-    if (!sectionId) return t("All Libraries");
-    const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
-    const match = sections.find(section => String(section.id) === String(sectionId));
-    if (match && match.name) return match.name;
-    if (match && match.title) return match.title;
-    return t("All Libraries");
-  }
-  const sectionId = plexInsightsState.sectionId;
+  const sectionId = insightsDrawerState.sectionId;
   if (!sectionId) return t("All Libraries");
-  const sections = Array.isArray(plexInsightsState.sections) ? plexInsightsState.sections : [];
+  const sections = Array.isArray(insightsDrawerState.sections) ? insightsDrawerState.sections : [];
   const match = sections.find(section => String(section.id) === String(sectionId));
-  if (match && match.title) return match.title;
+  if (match) return insightsSectionDisplayTitle(match, provider);
   return t("All Libraries");
 }
 
-function renderPlexSections(sections) {
-  if (!plexSectionChipsEl) return;
+function renderInsightsSections(sections) {
+  if (!insightsSectionChipsEl) return;
   const list = Array.isArray(sections) ? sections : [];
-  plexInsightsState.sections = list;
+  insightsDrawerState.sections = list;
   const provider = currentInsightsProvider();
   const validIds = new Set(list.map(section => String(section.id || "")));
-  if (plexInsightsState.sectionId && !validIds.has(String(plexInsightsState.sectionId))) {
-    plexInsightsState.sectionId = "";
+  if (insightsDrawerState.sectionId && !validIds.has(String(insightsDrawerState.sectionId))) {
+    insightsDrawerState.sectionId = "";
   }
   const chips = [];
-  const allActive = !plexInsightsState.sectionId;
+  const allActive = !insightsDrawerState.sectionId;
   chips.push(
-    `<button class="plex-chip${allActive ? " plex-chip--active" : ""}" type="button" data-plex-section="">${escapeHtml(t("All Libraries"))}</button>`
+    `<button class="insights-chip${allActive ? " insights-chip--active" : ""}" type="button" data-insights-section="">${escapeHtml(t("All Libraries"))}</button>`
   );
   for (const section of list) {
     const id = String(section.id || "");
     if (!id) continue;
-    const title = escapeHtml(
-      ((provider === "jellyfin" || provider === "emby") ? section.name : section.title) || section.title || section.name || t("Untitled", "Untitled")
-    );
-    const active = String(plexInsightsState.sectionId) === id ? " plex-chip--active" : "";
+    const title = escapeHtml(insightsSectionDisplayTitle(section, provider));
+    const active = String(insightsDrawerState.sectionId) === id ? " insights-chip--active" : "";
     chips.push(
-      `<button class="plex-chip${active}" type="button" data-plex-section="${escapeHtml(id)}">${title}</button>`
+      `<button class="insights-chip${active}" type="button" data-insights-section="${escapeHtml(id)}">${title}</button>`
     );
   }
-  plexSectionChipsEl.innerHTML = chips.join("");
+  insightsSectionChipsEl.innerHTML = chips.join("");
 }
 
-function renderPlexHubChips(hubs) {
-  if (!plexHubChipsEl) return;
-  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
-    plexHubChipsEl.innerHTML = "";
+function renderInsightsHubChips(hubs) {
+  if (!insightsHubChipsEl) return;
+  const profile = insightsViewProfile();
+  if (profile.sessionBased) {
+    insightsHubChipsEl.innerHTML = "";
     return;
   }
   if (!Array.isArray(hubs) || !hubs.length) {
-    plexHubChipsEl.innerHTML = `<span class="plex-empty">${escapeHtml(t("No hubs available"))}</span>`;
+    insightsHubChipsEl.innerHTML = `<span class="insights-empty">${escapeHtml(t("No hubs available"))}</span>`;
     return;
   }
-  if (plexInsightsState.selectedHub >= hubs.length) {
-    plexInsightsState.selectedHub = 0;
+  if (insightsDrawerState.selectedHub >= hubs.length) {
+    insightsDrawerState.selectedHub = 0;
   }
   const chips = hubs.map((hub, idx) => {
     const title = escapeHtml(hub.title || t("Untitled", "Untitled"));
-    const active = idx === plexInsightsState.selectedHub ? " plex-chip--active" : "";
-    return `<button class="plex-chip${active}" type="button" data-plex-hub="${idx}">${title}</button>`;
+    const active = idx === insightsDrawerState.selectedHub ? " insights-chip--active" : "";
+    return `<button class="insights-chip${active}" type="button" data-insights-hub="${idx}">${title}</button>`;
   });
-  plexHubChipsEl.innerHTML = chips.join("");
+  insightsHubChipsEl.innerHTML = chips.join("");
 }
 
-function renderPlexHubItems(hubs) {
-  if (!plexHubItemsEl) return;
-  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
-    renderJellyfinSessions((plexInsightsState.data || {}).sessions || []);
-    return;
-  }
+function renderLibraryHubItems(hubs) {
+  if (!insightsHubItemsEl) return;
   if (!Array.isArray(hubs) || !hubs.length) {
-    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No hub items"))}</div>`;
+    insightsHubItemsEl.innerHTML = `<div class="insights-empty">${escapeHtml(t("No hub items"))}</div>`;
     return;
   }
-  const hub = hubs[Math.max(0, Math.min(plexInsightsState.selectedHub, hubs.length - 1))];
+  const hub = hubs[Math.max(0, Math.min(insightsDrawerState.selectedHub, hubs.length - 1))];
   const items = Array.isArray(hub?.items) ? hub.items : [];
   if (!items.length) {
-    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No hub items"))}</div>`;
+    insightsHubItemsEl.innerHTML = `<div class="insights-empty">${escapeHtml(t("No hub items"))}</div>`;
     return;
   }
   const rows = items.map(item => {
@@ -16327,19 +16990,29 @@ function renderPlexHubItems(hubs) {
     const viewed = item.last_viewed_at ? `· ${formatEpochAge(item.last_viewed_at)}` : "";
     const watched = item.view_count ? `· ${item.view_count}x` : "";
     return `
-      <div class="plex-hub-item">
-        <div class="plex-hub-title">${title}</div>
-        <div class="plex-hub-meta">${[year, type, watched, viewed].filter(Boolean).join(" ")}</div>
+      <div class="insights-hub-item">
+        <div class="insights-hub-title">${title}</div>
+        <div class="insights-hub-meta">${[year, type, watched, viewed].filter(Boolean).join(" ")}</div>
       </div>
     `;
   });
-  plexHubItemsEl.innerHTML = rows.join("");
+  insightsHubItemsEl.innerHTML = rows.join("");
 }
 
-function renderJellyfinSessions(sessions) {
-  if (!plexHubItemsEl) return;
+function renderInsightsPrimaryPanel(data) {
+  const payload = (data && typeof data === "object") ? data : {};
+  const profile = insightsViewProfile();
+  if (profile.sessionBased) {
+    renderProviderSessions(payload.sessions || []);
+    return;
+  }
+  renderLibraryHubItems(payload.hubs || []);
+}
+
+function renderProviderSessions(sessions) {
+  if (!insightsHubItemsEl) return;
   if (!Array.isArray(sessions) || !sessions.length) {
-    plexHubItemsEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No sessions available"))}</div>`;
+    insightsHubItemsEl.innerHTML = `<div class="insights-empty">${escapeHtml(t("No sessions available"))}</div>`;
     return;
   }
   const rows = sessions.map(session => {
@@ -16353,33 +17026,50 @@ function renderJellyfinSessions(sessions) {
     const mediaType = session.type ? escapeHtml(session.type) : "";
     const meta = [user, client || device, mediaType, progress, state].filter(Boolean).join(" · ");
     return `
-      <div class="plex-hub-item">
-        <div class="plex-hub-title">${title}</div>
-        <div class="plex-hub-meta">${meta}</div>
+      <div class="insights-hub-item">
+        <div class="insights-hub-title">${title}</div>
+        <div class="insights-hub-meta">${meta}</div>
       </div>
     `;
   });
-  plexHubItemsEl.innerHTML = rows.join("");
+  insightsHubItemsEl.innerHTML = rows.join("");
 }
 
-function renderJellyfinActivities(activities) {
-  if (!plexActivitiesEl) return;
+function normalizeInsightsActivityItem(activity, provider = currentInsightsProvider()) {
+  const raw = (activity && typeof activity === "object") ? activity : {};
+  if (insightsViewProfile(provider).sessionBased) {
+    return {
+      title: escapeHtml(raw.title || raw.name || t("Untitled", "Untitled")),
+      subtitle: raw.subtitle || raw.shortDescription || "",
+      meta: [raw.state || "", raw.date || ""].filter(Boolean).map(value => escapeHtml(value)).join(" · "),
+    };
+  }
+  let progress = Number(raw.progress || 0);
+  if (progress > 0 && progress <= 1) progress = Math.round(progress * 100);
+  else progress = Math.round(progress);
+  const progressLabel = progress ? `${progress}%` : "";
+  return {
+    title: escapeHtml(raw.title || t("Untitled", "Untitled")),
+    subtitle: raw.subtitle || "",
+    meta: [progressLabel, raw.state || ""].filter(Boolean).map(value => escapeHtml(value)).join(" · "),
+  };
+}
+
+function renderInsightsActivities(activities) {
+  if (!insightsActivitiesEl) return;
   if (!Array.isArray(activities) || !activities.length) {
-    plexActivitiesEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No active tasks"))}</div>`;
+    insightsActivitiesEl.innerHTML = `<div class="insights-empty">${escapeHtml(t("No active tasks"))}</div>`;
     return;
   }
-  plexActivitiesEl.innerHTML = activities.map(activity => {
-    const title = escapeHtml(activity.title || activity.name || t("Untitled", "Untitled"));
-    const subtitleText = activity.subtitle || activity.shortDescription || "";
-    const subtitle = subtitleText ? `<div class="plex-sub">${escapeHtml(subtitleText)}</div>` : "";
-    const state = activity.state ? escapeHtml(activity.state) : "";
-    const date = activity.date ? escapeHtml(activity.date) : "";
-    const meta = [state, date].filter(Boolean).join(" · ");
+  const provider = currentInsightsProvider();
+  insightsActivitiesEl.innerHTML = activities.map(activity => {
+    const item = normalizeInsightsActivityItem(activity, provider);
+    const subtitle = item.subtitle ? `<div class="insights-sub">${escapeHtml(item.subtitle)}</div>` : "";
     return `
-      <div class="plex-task">
-        <div class="plex-task-row">
-          <div class="plex-task-title">${title}</div>
-          <div class="plex-task-meta">${meta}</div>
+      <div class="insights-task">
+        <div class="insights-task-row">
+          <div class="insights-task-title">${item.title}</div>
+          <div class="insights-task-meta">${item.meta}</div>
         </div>
         ${subtitle}
       </div>
@@ -16387,82 +17077,43 @@ function renderJellyfinActivities(activities) {
   }).join("");
 }
 
-function renderPlexActivities(activities) {
-  if (!plexActivitiesEl) return;
-  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
-    renderJellyfinActivities(activities);
+function normalizeInsightsSecondaryItem(item, provider = currentInsightsProvider()) {
+  const raw = (item && typeof item === "object") ? item : {};
+  if (insightsViewProfile(provider).sessionBased) {
+    const count = Number(raw.item_count || 0);
+    return {
+      title: escapeHtml(raw.name || raw.title || t("Untitled", "Untitled")),
+      subtitle: "",
+      meta: [raw.type || "", count ? `${count} items` : "", raw.path || ""].filter(Boolean).map(value => escapeHtml(value)).join(" · "),
+    };
+  }
+  return {
+    title: escapeHtml(raw.title || t("Untitled", "Untitled")),
+    subtitle: raw.description || "",
+    meta: [raw.schedule || "", raw.status || ""].filter(Boolean).map(value => escapeHtml(value)).join(" · "),
+  };
+}
+
+function renderInsightsSecondaryPanel(data) {
+  if (!insightsButlerEl) return;
+  const provider = currentInsightsProvider();
+  const profile = insightsViewProfile(provider);
+  const items = data?.[profile.secondaryItemsKey] || [];
+  const emptyText = profile.secondaryEmptyText;
+  if (!Array.isArray(items) || !items.length) {
+    insightsButlerEl.innerHTML = `<div class="insights-empty">${escapeHtml(emptyText)}</div>`;
     return;
   }
-  if (!Array.isArray(activities) || !activities.length) {
-    plexActivitiesEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No active tasks"))}</div>`;
-    return;
-  }
-  plexActivitiesEl.innerHTML = activities.map(activity => {
-    const title = escapeHtml(activity.title || "");
-    const subtitle = activity.subtitle ? `<div class="plex-sub">${escapeHtml(activity.subtitle)}</div>` : "";
-    let progress = Number(activity.progress || 0);
-    if (progress > 0 && progress <= 1) progress = Math.round(progress * 100);
-    else progress = Math.round(progress);
-    const progressLabel = progress ? `${progress}%` : "";
-    const state = activity.state ? escapeHtml(activity.state) : "";
+  insightsButlerEl.innerHTML = items.map(item => {
+    const normalized = normalizeInsightsSecondaryItem(item, provider);
+    const subtitle = normalized.subtitle ? `<div class="insights-sub">${escapeHtml(normalized.subtitle)}</div>` : "";
     return `
-      <div class="plex-task">
-        <div class="plex-task-row">
-          <div class="plex-task-title">${title}</div>
-          <div class="plex-task-meta">${[progressLabel, state].filter(Boolean).join(" · ")}</div>
+      <div class="insights-task">
+        <div class="insights-task-row">
+          <div class="insights-task-title">${normalized.title}</div>
+          <div class="insights-task-meta">${normalized.meta}</div>
         </div>
         ${subtitle}
-      </div>
-    `;
-  }).join("");
-}
-
-function renderPlexButler(tasks) {
-  if (!plexButlerEl) return;
-  if (currentInsightsProvider() === "jellyfin" || currentInsightsProvider() === "emby") {
-    renderJellyfinLibraries((plexInsightsState.data || {}).sections || []);
-    return;
-  }
-  if (!Array.isArray(tasks) || !tasks.length) {
-    plexButlerEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No butler tasks"))}</div>`;
-    return;
-  }
-  plexButlerEl.innerHTML = tasks.map(task => {
-    const title = escapeHtml(task.title || "");
-    const schedule = task.schedule ? escapeHtml(task.schedule) : "";
-    const status = task.status ? escapeHtml(task.status) : "";
-    const desc = task.description ? `<div class="plex-sub">${escapeHtml(task.description)}</div>` : "";
-    const meta = [schedule, status].filter(Boolean).join(" · ");
-    return `
-      <div class="plex-task">
-        <div class="plex-task-row">
-          <div class="plex-task-title">${title}</div>
-          <div class="plex-task-meta">${meta}</div>
-        </div>
-        ${desc}
-      </div>
-    `;
-  }).join("");
-}
-
-function renderJellyfinLibraries(libraries) {
-  if (!plexButlerEl) return;
-  if (!Array.isArray(libraries) || !libraries.length) {
-    plexButlerEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No libraries available"))}</div>`;
-    return;
-  }
-  plexButlerEl.innerHTML = libraries.map(library => {
-    const title = escapeHtml(library.name || library.title || t("Untitled", "Untitled"));
-    const type = escapeHtml(library.type || "");
-    const path = escapeHtml(library.path || "");
-    const count = Number(library.item_count || 0);
-    const meta = [type, count ? `${count} items` : "", path].filter(Boolean).join(" · ");
-    return `
-      <div class="plex-task">
-        <div class="plex-task-row">
-          <div class="plex-task-title">${title}</div>
-          <div class="plex-task-meta">${meta}</div>
-        </div>
       </div>
     `;
   }).join("");
@@ -16499,25 +17150,25 @@ function normalizeInsightsMatchHealth(appHealth, fallbackLabel) {
   return { label, counts, total, buckets, reasons };
 }
 
-function renderPlexMatchHealth(matchHealth) {
-  if (!plexMatchEl) return;
+function renderInsightsMatchHealth(matchHealth) {
+  if (!insightsMatchEl) return;
   if (!matchHealth || !matchHealth.apps) {
-    plexMatchEl.innerHTML = `<div class="plex-empty">${escapeHtml(t("No match data"))}</div>`;
+    insightsMatchEl.innerHTML = `<div class="insights-empty">${escapeHtml(t("No match data"))}</div>`;
     return;
   }
   const provider = currentInsightsProvider();
   const apps = ["sonarr", "radarr"];
   const cards = apps.map(app => {
-    const fallbackLabel = (provider === "jellyfin" || provider === "emby" || provider === "plex")
+    const fallbackLabel = (insightsProviderAvailable(provider))
       ? (app === "sonarr" ? t("Series", "Series") : t("Movies", "Movies"))
       : (app === "sonarr" ? t("Sonarr") : t("Radarr"));
     const appHealth = matchHealth.apps?.[app] || {};
     const { label, counts, total, buckets, reasons } = normalizeInsightsMatchHealth(appHealth, fallbackLabel);
     if (!total) {
       return `
-        <div class="plex-match-card">
-          <div class="plex-match-title">${escapeHtml(label)}</div>
-          <div class="plex-empty">${escapeHtml(t("No match data"))}</div>
+        <div class="insights-match-card">
+          <div class="insights-match-title">${escapeHtml(label)}</div>
+          <div class="insights-empty">${escapeHtml(t("No match data"))}</div>
         </div>
       `;
     }
@@ -16533,138 +17184,171 @@ function renderPlexMatchHealth(matchHealth) {
     const bucketText = buckets.map(item => `${item.label} (${item.count})`).join(", ");
     const reasonText = reasons.map(item => `${item.label} (${item.count})`).join(", ");
     const bucketLine = bucketText
-      ? `<div class="plex-match-line"><span class="plex-match-label">${escapeHtml(t("Matched by"))}</span>${escapeHtml(bucketText)}</div>`
+      ? `<div class="insights-match-line"><span class="insights-match-label">${escapeHtml(t("Matched by"))}</span>${escapeHtml(bucketText)}</div>`
       : "";
     const reasonLine = reasonText
-      ? `<div class="plex-match-line"><span class="plex-match-label">${escapeHtml(t("Top reasons"))}</span>${escapeHtml(reasonText)}</div>`
+      ? `<div class="insights-match-line"><span class="insights-match-label">${escapeHtml(t("Top reasons"))}</span>${escapeHtml(reasonText)}</div>`
       : "";
     return `
-      <div class="plex-match-card">
-        <div class="plex-match-title">${escapeHtml(label)}</div>
-        <div class="plex-match-grid">${grid}</div>
+      <div class="insights-match-card">
+        <div class="insights-match-title">${escapeHtml(label)}</div>
+        <div class="insights-match-grid">${grid}</div>
         ${bucketLine}
         ${reasonLine}
       </div>
     `;
   });
-  plexMatchEl.innerHTML = cards.join("") || `<div class="plex-empty">${escapeHtml(t("No match data"))}</div>`;
+  insightsMatchEl.innerHTML = cards.join("") || `<div class="insights-empty">${escapeHtml(t("No match data"))}</div>`;
 }
 
-function renderPlexInsights() {
-  if (!plexOverlayEl) return;
-  const data = plexInsightsState.data || {};
-  const provider = currentInsightsProvider();
-  updatePlexTitle();
-  if (plexPrimaryTitleEl) {
-    plexPrimaryTitleEl.textContent = (provider === "jellyfin" || provider === "emby") ? t("Sessions") : t("Hubs");
+function renderInsightsLoadingState() {
+  if (insightsSectionChipsEl) {
+    insightsSectionChipsEl.innerHTML = `<span class="insights-empty">${escapeHtml(t("Loading libraries...", "Loading libraries..."))}</span>`;
   }
-  if (plexSecondaryTitleEl) {
-    plexSecondaryTitleEl.textContent = (provider === "jellyfin" || provider === "emby") ? t("Libraries") : t("Butler");
+  if (insightsHubChipsEl) {
+    insightsHubChipsEl.innerHTML = "";
   }
-  if (plexLiveBtn) {
-    setElementVisible(plexLiveBtn, insightsProviderSupportsLive(provider));
+  if (insightsHubItemsEl) {
+    insightsHubItemsEl.innerHTML = `
+      <div class="drawer-loading-state">
+        <div class="drawer-loading-title">${escapeHtml(t("Loading provider insights...", "Loading provider insights..."))}</div>
+        <div class="drawer-loading-copy">${escapeHtml(t("Fetching library hubs, match health, and current activity.", "Fetching library hubs, match health, and current activity."))}</div>
+      </div>
+      <div class="drawer-skeleton-list">
+        <div class="drawer-skeleton-card"></div>
+        <div class="drawer-skeleton-card"></div>
+        <div class="drawer-skeleton-card"></div>
+      </div>
+    `;
   }
-  renderPlexSections(data.sections || []);
-  renderPlexHubChips(data.hubs || []);
-  renderPlexHubItems(data.hubs || []);
-  renderPlexMatchHealth(data.match_health || {});
-  renderPlexActivities(data.activities || []);
-  renderPlexButler(data.butler || []);
+  if (insightsMatchEl) {
+    insightsMatchEl.innerHTML = `<div class="drawer-loading-inline">${escapeHtml(t("Match health will populate once provider data is ready.", "Match health will populate once provider data is ready."))}</div>`;
+  }
+  if (insightsActivitiesEl) {
+    insightsActivitiesEl.innerHTML = `<div class="drawer-loading-inline">${escapeHtml(t("Checking recent provider activity...", "Checking recent provider activity..."))}</div>`;
+  }
+  if (insightsButlerEl) {
+    insightsButlerEl.innerHTML = `<div class="drawer-loading-inline">${escapeHtml(t("Loading secondary provider details...", "Loading secondary provider details..."))}</div>`;
+  }
 }
 
-function updatePlexLiveButton() {
-  if (!plexLiveBtn) return;
-  if (!insightsProviderSupportsLive(currentInsightsProvider())) {
-    plexLiveBtn.classList.remove("is-active");
-    plexLiveBtn.textContent = t("Live");
-    plexLiveBtn.removeAttribute("title");
+function renderProviderInsights() {
+  if (!insightsOverlayEl) return;
+  if (insightsDrawerState.loading && !insightsDrawerState.data) {
+    renderInsightsLoadingState();
     return;
   }
-  plexLiveBtn.classList.toggle("is-active", plexInsightsState.live);
-  plexLiveBtn.textContent = plexInsightsState.live ? t("Live on") : t("Live");
-  if (plexInsightsState.liveStatus) {
-    plexLiveBtn.title = plexInsightsState.liveStatus;
+  const data = insightsDrawerState.data || {};
+  const provider = currentInsightsProvider();
+  const profile = insightsViewProfile(provider);
+  updateInsightsTitle();
+  if (insightsPrimaryTitleEl) {
+    insightsPrimaryTitleEl.textContent = profile.primaryTitle;
+  }
+  if (insightsSecondaryTitleEl) {
+    insightsSecondaryTitleEl.textContent = profile.secondaryTitle;
+  }
+  if (insightsLiveBtn) {
+    setElementVisible(insightsLiveBtn, insightsProviderSupportsLive(provider));
+  }
+  renderInsightsSections(data.sections || []);
+  renderInsightsHubChips(data.hubs || []);
+  renderInsightsPrimaryPanel(data);
+  renderInsightsMatchHealth(data.match_health || {});
+  renderInsightsActivities(data.activities || []);
+  renderInsightsSecondaryPanel(data);
+}
+
+function updateInsightsLiveButton() {
+  if (!insightsLiveBtn) return;
+  if (!insightsProviderSupportsLive(currentInsightsProvider())) {
+    insightsLiveBtn.classList.remove("is-active");
+    insightsLiveBtn.textContent = t("Live");
+    insightsLiveBtn.removeAttribute("title");
+    return;
+  }
+  insightsLiveBtn.classList.toggle("is-active", insightsDrawerState.live);
+  insightsLiveBtn.textContent = insightsDrawerState.live ? t("Live on") : t("Live");
+  if (insightsDrawerState.liveStatus) {
+    insightsLiveBtn.title = insightsDrawerState.liveStatus;
   } else {
-    plexLiveBtn.removeAttribute("title");
+    insightsLiveBtn.removeAttribute("title");
   }
 }
 
-function schedulePlexInsightsRefresh() {
-  if (!plexInsightsState.open) return;
-  if (plexLiveRefreshTimer) return;
-  plexLiveRefreshTimer = setTimeout(() => {
-    plexLiveRefreshTimer = null;
-    fetchPlexInsights({ refresh: true, silent: true });
+function scheduleInsightsRefresh() {
+  if (!insightsDrawerState.open) return;
+  if (insightsLiveRefreshTimer) return;
+  insightsLiveRefreshTimer = setTimeout(() => {
+    insightsLiveRefreshTimer = null;
+    fetchProviderInsights({ refresh: false, silent: true });
   }, 1500);
 }
 
-function startPlexLive() {
-  if (plexLiveSource) return;
+function startInsightsLive() {
+  if (insightsLiveSource) return;
   if (!insightsProviderSupportsLive(currentInsightsProvider())) {
-    plexInsightsState.liveStatus = t("Live unavailable");
-    updatePlexLiveButton();
+    insightsDrawerState.liveStatus = t("Live unavailable");
+    updateInsightsLiveButton();
     return;
   }
   if (!window.EventSource) {
-    plexInsightsState.liveStatus = t("Live unavailable");
-    updatePlexLiveButton();
+    insightsDrawerState.liveStatus = t("Live unavailable");
+    updateInsightsLiveButton();
     return;
   }
-  plexInsightsState.live = true;
-  plexInsightsState.liveStatus = "";
-  updatePlexLiveButton();
-  plexLiveSource = new EventSource(apiUrl("/api/plex/events"));
-  plexLiveSource.onmessage = () => {
-    schedulePlexInsightsRefresh();
+  insightsDrawerState.live = true;
+  insightsDrawerState.liveStatus = "";
+  updateInsightsLiveButton();
+  insightsLiveSource = new EventSource(apiUrl("/api/plex/events"));
+  insightsLiveSource.onmessage = () => {
+    scheduleInsightsRefresh();
   };
-  plexLiveSource.onerror = () => {
-    plexInsightsState.liveStatus = t("Live connection unstable");
-    updatePlexLiveButton();
+  insightsLiveSource.onerror = () => {
+    insightsDrawerState.liveStatus = t("Live connection unstable");
+    updateInsightsLiveButton();
   };
 }
 
-function stopPlexLive() {
-  plexInsightsState.live = false;
-  plexInsightsState.liveStatus = "";
-  if (plexLiveSource) {
-    plexLiveSource.close();
-    plexLiveSource = null;
+function stopInsightsLive() {
+  insightsDrawerState.live = false;
+  insightsDrawerState.liveStatus = "";
+  if (insightsLiveSource) {
+    insightsLiveSource.close();
+    insightsLiveSource = null;
   }
-  if (plexLiveRefreshTimer) {
-    clearTimeout(plexLiveRefreshTimer);
-    plexLiveRefreshTimer = null;
+  if (insightsLiveRefreshTimer) {
+    clearTimeout(insightsLiveRefreshTimer);
+    insightsLiveRefreshTimer = null;
   }
-  updatePlexLiveButton();
+  updateInsightsLiveButton();
 }
 
-async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
+async function fetchProviderInsights({ refresh = false, silent = false } = {}) {
   const provider = getInsightsProvider();
   const providerLabel = getInsightsProviderLabel(provider);
   const includeValue = getInsightsIncludeValue(provider);
-  const configured = provider === "plex"
-    ? configState.plexConfigured
-    : provider === "emby"
-      ? configState.embyConfigured
-      : provider === "jellyfin"
-        ? configState.jellyfinConfigured
-        : false;
+  const configured = insightsProviderAvailable(provider);
   if (!configured) return;
-  ensurePlexOverlay();
-  updatePlexTitle();
+  ensureInsightsOverlay();
+  updateInsightsTitle();
   if (!silent) {
-    updatePlexMeta(
+    updateInsightsMeta(
       providerLabel
         ? tp("fetchingProviderInsights", { label: providerLabel }, "Fetching %(label)s insights...")
-        : t("Fetching Plex insights...")
+        : t("Fetching provider insights...")
     );
   }
-  plexInsightsState.loading = true;
+  insightsDrawerState.loading = true;
+  if (!insightsDrawerState.data) {
+    renderProviderInsights();
+  }
   try {
     const payload = {
       hub_count: 6,
       item_count: 8,
       include: includeValue,
-      ...(plexInsightsState.sectionId ? { section_id: plexInsightsState.sectionId } : {}),
+      ...(insightsDrawerState.sectionId ? { section_id: insightsDrawerState.sectionId } : {}),
     };
     let res;
     if (refresh) {
@@ -16679,18 +17363,23 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
       params.set("item_count", "8");
       params.set("include", includeValue);
       if (provider) params.set("provider", provider);
-      if (plexInsightsState.sectionId) params.set("section_id", plexInsightsState.sectionId);
+      if (insightsDrawerState.sectionId) params.set("section_id", insightsDrawerState.sectionId);
       res = await fetch(apiUrl(`/api/playback/insights?${params.toString()}`));
     }
     if (!res.ok) {
       throw new Error(await res.text());
     }
     const responsePayload = await res.json();
-    plexInsightsState.data = responsePayload || {};
-    plexInsightsState.loading = false;
-    renderPlexInsights();
+    insightsDrawerState.data = responsePayload || {};
+    latestInsightsStatusPayload = responsePayload || null;
+    insightsDrawerState.loading = false;
+    renderProviderInsights();
+    updateStatusPanel();
+    if (refresh) {
+      fetchStatus({ silent: true, lite: true });
+    }
     const fetchedAt = responsePayload?.fetched_at || responsePayload?.cache_ts || 0;
-    const sectionLabel = getPlexSectionLabel();
+    const sectionLabel = getInsightsSectionLabel();
     const metaBits = [];
     if (fetchedAt) {
       metaBits.push(`${t("Updated")} ${formatEpochAge(fetchedAt)}`);
@@ -16698,37 +17387,32 @@ async function fetchPlexInsights({ refresh = false, silent = false } = {}) {
     if (sectionLabel) {
       metaBits.push(`${t("Library")}: ${sectionLabel}`);
     }
-    updatePlexMeta(metaBits.join(" · "));
+    updateInsightsMeta(metaBits.join(" · "));
   } catch (err) {
-    plexInsightsState.loading = false;
-    updatePlexMeta(
+    insightsDrawerState.loading = false;
+    updateInsightsMeta(
       providerLabel
         ? tp("providerInsightsUnavailable", { label: providerLabel }, "%(label)s insights unavailable.")
-        : t("Plex insights unavailable."),
+        : t("Provider insights unavailable."),
       true
     );
   }
 }
 
-function openPlexInsights() {
+function openProviderInsights() {
   const provider = getInsightsProvider();
-  const configured = provider === "plex"
-    ? configState.plexConfigured
-    : provider === "emby"
-      ? configState.embyConfigured
-      : provider === "jellyfin"
-        ? configState.jellyfinConfigured
-        : false;
+  const configured = insightsProviderAvailable(provider);
   if (!configured) return;
-  ensurePlexOverlay();
-  updatePlexTitle();
-  plexInsightsState.open = true;
-  if (plexOverlayEl) plexOverlayEl.classList.remove("hidden");
-  if (!plexInsightsState.data || String(plexInsightsState.data.provider || "").trim().toLowerCase() !== provider) {
-    plexInsightsState.data = null;
-    fetchPlexInsights({ refresh: true });
+  ensureInsightsOverlay();
+  updateInsightsTitle();
+  insightsDrawerState.open = true;
+  if (insightsOverlayEl) insightsOverlayEl.classList.remove("hidden");
+  if (!insightsDrawerState.data || String(insightsDrawerState.data.provider || "").trim().toLowerCase() !== provider) {
+    insightsDrawerState.data = null;
+    latestInsightsStatusPayload = null;
+    fetchProviderInsights({ refresh: false });
   } else {
-    renderPlexInsights();
+    renderProviderInsights();
   }
 }
 
@@ -16772,8 +17456,8 @@ function ensureMismatchCenterOverlay() {
           <div class="mismatch-meta" data-role="mismatch-meta"></div>
         </div>
         <div class="mismatch-actions">
-          <button type="button" data-role="mismatch-refresh">${escapeHtml(t("Refresh", "Refresh"))}</button>
-          <button type="button" data-role="mismatch-export">${escapeHtml(t("Export CSV", "Export CSV"))}</button>
+          <button type="button" data-role="mismatch-refresh">${escapeHtml(t("Refresh mismatch data", "Refresh mismatch data"))}</button>
+          <button type="button" data-role="mismatch-export">${escapeHtml(t("Export mismatch CSV", "Export mismatch CSV"))}</button>
           <button type="button" data-mismatch-close>${escapeHtml(t("Close", "Close"))}</button>
         </div>
       </div>
@@ -16798,6 +17482,7 @@ function ensureMismatchCenterOverlay() {
             <option value="provider_conflict">${escapeHtml(t("Provider conflict", "Provider conflict"))}</option>
             <option value="unmatched_all">${escapeHtml(t("Unmatched all", "Unmatched all"))}</option>
             <option value="skipped_all">${escapeHtml(t("Skipped all", "Skipped all"))}</option>
+            <option value="pending_all">${escapeHtml(t("Pending", "Pending"))}</option>
             <option value="unavailable_all">${escapeHtml(t("Unavailable all", "Unavailable all"))}</option>
           </select>
         </label>
@@ -16872,6 +17557,86 @@ function mismatchStatusClass(status) {
   if (key === "skipped") return "is-skipped";
   if (key === "pending") return "is-pending";
   return "is-unavailable";
+}
+
+function mismatchProviderStatusLabel(provider) {
+  const status = String(provider?.status || "").trim().toLowerCase();
+  if (status === "pending" || provider?.refresh_in_progress) return t("Pending", "Pending");
+  if (status === "ready") return t("Ready", "Ready");
+  return mismatchCategoryLabel(status === "unavailable" ? "unavailable_all" : status);
+}
+
+function mismatchRowStatusLabel(status) {
+  const key = String(status || "").trim().toLowerCase();
+  if (key === "matched") return t("Matched", "Matched");
+  if (key === "unmatched") return t("Unmatched", "Unmatched");
+  if (key === "skipped") return t("Skipped", "Skipped");
+  if (key === "pending") return t("Pending", "Pending");
+  return t("Unavailable", "Unavailable");
+}
+
+function mismatchProviderDiagnosticsText(providerSummary) {
+  if (!providerSummary) return "";
+  if (providerSummary.diagnostics_supported) {
+    return t("Diagnostics ready", "Diagnostics ready");
+  }
+  return providerSummary.diagnostics_reason
+    || t("Diagnostics unavailable for this provider.", "Diagnostics unavailable for this provider.");
+}
+
+function mismatchProviderMetaLabel(providerSummary) {
+  const statusText = mismatchProviderStatusLabel(providerSummary);
+  const diagnosticsText = mismatchProviderDiagnosticsText(providerSummary);
+  return diagnosticsText ? `${statusText}; ${diagnosticsText}` : statusText;
+}
+
+function mismatchProviderActionHint(provider, entry, providerSummary) {
+  const providerLabel = mismatchProviderLabel(provider);
+  const status = String(entry?.status || "").trim().toLowerCase();
+  if (status === "pending") {
+    return t(
+      "Refresh mismatch data after %(provider)s finishes refreshing.",
+      "Refresh mismatch data after %(provider)s finishes refreshing.",
+      { provider: providerLabel }
+    );
+  }
+  if (!providerSummary?.diagnostics_supported) {
+    return mismatchProviderDiagnosticsText(providerSummary);
+  }
+  if (status && status !== "matched") {
+    return t("Use row diagnostics for more detail.", "Use row diagnostics for more detail.");
+  }
+  return "";
+}
+
+function mismatchConflictPairs(row, providerFilter = "any") {
+  const providers = row?.providers || {};
+  const ordered = Object.entries(providers)
+    .filter(([provider]) => providerFilter === "any" || provider === providerFilter)
+    .map(([provider, entry]) => ({
+      provider,
+      label: mismatchProviderLabel(provider),
+      status: String(entry?.status || "").trim().toLowerCase() || "unavailable",
+      statusLabel: mismatchRowStatusLabel(entry?.status || ""),
+      reason: String(entry?.reason || "").trim(),
+    }))
+    .filter(entry => entry.status && entry.status !== "matched");
+  return ordered;
+}
+
+function mismatchConflictSummary(row, providerFilter = "any") {
+  if (String(row?.mismatch_category || "") !== "provider_conflict") return "";
+  const pairs = mismatchConflictPairs(row, providerFilter);
+  if (!pairs.length) return "";
+  return pairs.map(entry => `${entry.label}: ${entry.statusLabel}`).join(" vs ");
+}
+
+function mismatchConflictReasonSummary(row, providerFilter = "any") {
+  if (String(row?.mismatch_category || "") !== "provider_conflict") return "";
+  const pairs = mismatchConflictPairs(row, providerFilter)
+    .filter(entry => entry.reason)
+    .map(entry => `${entry.label}: ${entry.reason}`);
+  return pairs.join(" vs ");
 }
 
 function mismatchStatusMatchesFilter(row, providerFilter, statusFilter) {
@@ -17003,6 +17768,11 @@ function renderMismatchRows(rows, data) {
 
   const groupBy = mismatchCenterState.filters.groupBy || "none";
   const providerFilter = mismatchCenterState.filters.provider || "any";
+  const providerSummaries = new Map(
+    (Array.isArray(data?.providers) ? data.providers : [])
+      .map(item => [String(item?.provider || "").trim().toLowerCase(), item])
+      .filter(([provider]) => Boolean(provider))
+  );
   const groups = new Map();
   if (groupBy === "none") {
     groups.set("", rows);
@@ -17035,13 +17805,21 @@ function renderMismatchRows(rows, data) {
       const providerCells = [];
       const providers = row?.providers || {};
       const ordered = providerOrder.length ? providerOrder : Object.keys(providers);
+      const conflictSummary = mismatchConflictSummary(row, providerFilter);
+      const conflictReasons = mismatchConflictReasonSummary(row, providerFilter);
+      const reasonPrimary = conflictSummary || String(row.mismatch_reason || "");
+      const reasonSecondary = conflictReasons && conflictReasons !== reasonPrimary
+        ? conflictReasons
+        : (conflictSummary ? String(row.mismatch_reason || "") : "");
       ordered.forEach(provider => {
         if (providerFilter !== "any" && provider !== providerFilter) return;
         const entry = providers[provider];
         if (!entry) return;
         const status = String(entry.status || "").trim().toLowerCase() || "unavailable";
         const reason = String(entry.reason || "");
-        providerCells.push(`<div class="mismatch-provider-row ${mismatchStatusClass(status)}"><span class="mismatch-provider-name">${escapeHtml(mismatchProviderLabel(provider))}</span><span class="mismatch-provider-status">${escapeHtml(status)}</span><span class="mismatch-provider-reason">${escapeHtml(reason)}</span></div>`);
+        const providerSummary = providerSummaries.get(provider);
+        const actionHint = mismatchProviderActionHint(provider, entry, providerSummary);
+        providerCells.push(`<div class="mismatch-provider-row ${mismatchStatusClass(status)}"><span class="mismatch-provider-name">${escapeHtml(mismatchProviderLabel(provider))}</span><span class="mismatch-provider-status">${escapeHtml(mismatchRowStatusLabel(status))}</span><span class="mismatch-provider-reason">${escapeHtml(reason)}</span>${actionHint ? `<div class="mismatch-provider-hint">${escapeHtml(actionHint)}</div>` : ""}</div>`);
       });
       html.push(`<tr>
         <td>
@@ -17050,7 +17828,7 @@ function renderMismatchRows(rows, data) {
         </td>
         <td>${escapeHtml(row.instance_name || row.instance_id || "")}</td>
         <td><span class="mismatch-category-pill">${escapeHtml(mismatchCategoryLabel(row.mismatch_category || ""))}</span></td>
-        <td>${escapeHtml(row.mismatch_reason || "")}</td>
+        <td>${escapeHtml(reasonPrimary)}${reasonSecondary ? `<div class="mismatch-sub muted">${escapeHtml(reasonSecondary)}</div>` : ""}</td>
         <td>${providerCells.join("")}</td>
       </tr>`);
     });
@@ -17061,11 +17839,29 @@ function renderMismatchRows(rows, data) {
   mismatchBodyEl.innerHTML = html.join("");
 }
 
+function renderMismatchLoadingState() {
+  if (!mismatchBodyEl || !mismatchSummaryEl || !mismatchMetaEl) return;
+  const appLabel = activeApp === "sonarr" ? t("Shows", "Shows") : t("Movies", "Movies");
+  mismatchMetaEl.textContent = appLabel;
+  mismatchSummaryEl.textContent = t("Loading mismatch data...", "Loading mismatch data...");
+  mismatchBodyEl.innerHTML = `
+    <div class="drawer-loading-state">
+      <div class="drawer-loading-title">${escapeHtml(t("Loading mismatch data...", "Loading mismatch data..."))}</div>
+      <div class="drawer-loading-copy">${escapeHtml(t("Comparing provider indexes and preparing mismatch rows.", "Comparing provider indexes and preparing mismatch rows."))}</div>
+    </div>
+    <div class="drawer-skeleton-list">
+      <div class="drawer-skeleton-card drawer-skeleton-card--table"></div>
+      <div class="drawer-skeleton-card drawer-skeleton-card--table"></div>
+      <div class="drawer-skeleton-card drawer-skeleton-card--table"></div>
+    </div>
+  `;
+}
+
 function renderMismatchCenter() {
   if (!mismatchOverlayEl || !mismatchBodyEl || !mismatchSummaryEl || !mismatchMetaEl) return;
   const data = mismatchCenterState.dataByApp[activeApp];
   if (mismatchCenterState.loading) {
-    mismatchBodyEl.innerHTML = `<div class="mismatch-empty">${escapeHtml(t("Loading mismatch data...", "Loading mismatch data..."))}</div>`;
+    renderMismatchLoadingState();
     return;
   }
   if (!data) {
@@ -17076,17 +17872,81 @@ function renderMismatchCenter() {
   populateMismatchProviderFilter(data);
   const rows = getFilteredMismatchRows(data);
   const total = Array.isArray(data.rows) ? data.rows.length : 0;
-  mismatchSummaryEl.textContent = t("showingMismatchRows", "Showing %(filtered)s of %(total)s mismatches", {
-    filtered: rows.length,
-    total,
-  });
+  const rowsScanned = Number(data?.summary?.rows_scanned || 0);
+  const totalMismatchRows = Math.max(total, Number(data?.summary?.mismatch_rows || 0));
+  const rowsCapped = totalMismatchRows > total;
+  const matchedRows = Math.max(0, rowsScanned - totalMismatchRows);
+  const categoryCounts = data?.summary?.categories || {};
+  const breakdownParts = [
+    [t("Matched", "Matched"), matchedRows],
+    [t("Provider conflict", "Provider conflict"), Number(categoryCounts.provider_conflict || 0)],
+    [t("Unmatched all", "Unmatched all"), Number(categoryCounts.unmatched_all || 0)],
+    [t("Skipped all", "Skipped all"), Number(categoryCounts.skipped_all || 0)],
+    [t("Pending", "Pending"), Number(categoryCounts.pending_all || 0)],
+    [t("Unavailable all", "Unavailable all"), Number(categoryCounts.unavailable_all || 0)],
+  ]
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${label}: ${count}`);
+  mismatchSummaryEl.textContent = rowsCapped
+    ? t("showingLoadedMismatchRows", "Showing %(filtered)s of %(loaded)s loaded mismatches", {
+      filtered: rows.length,
+      loaded: total,
+    })
+    : t("showingMismatchRows", "Showing %(filtered)s of %(total)s mismatches", {
+      filtered: rows.length,
+      total,
+    });
+  if (rowsCapped) {
+    mismatchSummaryEl.textContent += ` • ${t("Total mismatches", "Total mismatches")}: ${totalMismatchRows}`;
+  }
+  if (breakdownParts.length) {
+    mismatchSummaryEl.textContent += ` • ${breakdownParts.join(" • ")}`;
+  }
+  if (rowsCapped) {
+    mismatchSummaryEl.textContent += ` • ${t("Results capped to the first %(count)s rows", "Results capped to the first %(count)s rows", { count: total })}`;
+  }
 
   const providers = Array.isArray(data.providers) ? data.providers : [];
+  const unsupportedDiagnosticsProviders = providers
+    .filter(provider => !provider?.diagnostics_supported)
+    .map(provider => provider.label || mismatchProviderLabel(provider.provider));
+  const pendingProviders = providers
+    .filter(provider => String(provider?.status || "").trim().toLowerCase() === "pending" || provider?.refresh_in_progress)
+    .map(provider => provider.label || mismatchProviderLabel(provider.provider));
   const metaParts = [
     `${activeApp === "sonarr" ? t("Shows", "Shows") : t("Movies", "Movies")}`,
-    providers.map(provider => provider.label || mismatchProviderLabel(provider.provider)).join(" vs "),
+    providers
+      .map(provider => `${provider.label || mismatchProviderLabel(provider.provider)} (${mismatchProviderMetaLabel(provider)})`)
+      .join(" vs "),
   ].filter(Boolean);
   mismatchMetaEl.textContent = metaParts.join(" • ");
+
+  if (mismatchRefreshBtn) {
+    mismatchRefreshBtn.title = t(
+      "Reload mismatch-center rows using the current provider indexes.",
+      "Reload mismatch-center rows using the current provider indexes."
+    );
+    if (pendingProviders.length) {
+      mismatchRefreshBtn.title += ` ${t(
+        "Pending providers: %(providers)s.",
+        "Pending providers: %(providers)s.",
+        { providers: pendingProviders.join(", ") }
+      )}`;
+    }
+  }
+  if (mismatchExportBtn) {
+    mismatchExportBtn.title = t(
+      "Export the currently filtered mismatch rows to CSV.",
+      "Export the currently filtered mismatch rows to CSV."
+    );
+  }
+  if (unsupportedDiagnosticsProviders.length) {
+    mismatchSummaryEl.textContent += ` • ${t(
+      "Diagnostics unavailable for %(providers)s.",
+      "Diagnostics unavailable for %(providers)s.",
+      { providers: unsupportedDiagnosticsProviders.join(", ") }
+    )}`;
+  }
 
   renderMismatchRows(rows, data);
 }
@@ -17167,6 +18027,7 @@ function openMismatchCenter() {
   ensureMismatchCenterOverlay();
   mismatchCenterState.open = true;
   if (mismatchOverlayEl) mismatchOverlayEl.classList.remove("hidden");
+  renderMismatchLoadingState();
   fetchMismatchCenterData(activeApp, { force: true, silent: true }).catch(() => {
     renderMismatchCenter();
   });
@@ -17296,10 +18157,10 @@ document.addEventListener("click", event => {
 });
 
 document.addEventListener("click", event => {
-  const plexBtn = event.target.closest("#plexInsightsBtn");
-  if (plexInsightsBtn && plexBtn) {
+  const insightsBtn = event.target.closest("#plexInsightsBtn");
+  if (providerInsightsBtn && insightsBtn) {
     event.preventDefault();
-    openPlexInsights();
+    openProviderInsights();
     return;
   }
   const mismatchBtn = event.target.closest("#mismatchCenterBtn");
@@ -17308,33 +18169,33 @@ document.addEventListener("click", event => {
     openMismatchCenter();
     return;
   }
-  const sectionBtn = event.target.closest("[data-plex-section]");
+  const sectionBtn = event.target.closest("[data-insights-section]");
   if (sectionBtn) {
-    const nextSection = String(sectionBtn.dataset.plexSection || "");
-    if (String(plexInsightsState.sectionId || "") !== nextSection) {
-      plexInsightsState.sectionId = nextSection;
-      plexInsightsState.selectedHub = 0;
-      fetchPlexInsights({ refresh: true });
+    const nextSection = String(sectionBtn.dataset.insightsSection || "");
+    if (String(insightsDrawerState.sectionId || "") !== nextSection) {
+      insightsDrawerState.sectionId = nextSection;
+      insightsDrawerState.selectedHub = 0;
+      fetchProviderInsights({ refresh: false });
     }
     return;
   }
-  const hubBtn = event.target.closest("[data-plex-hub]");
+  const hubBtn = event.target.closest("[data-insights-hub]");
   if (hubBtn) {
-    const idx = Number(hubBtn.dataset.plexHub || 0);
+    const idx = Number(hubBtn.dataset.insightsHub || 0);
     if (!Number.isNaN(idx)) {
-      plexInsightsState.selectedHub = idx;
-      renderPlexInsights();
+      insightsDrawerState.selectedHub = idx;
+      renderProviderInsights();
     }
     return;
   }
-  if (plexOverlayEl && !plexOverlayEl.classList.contains("hidden")) {
-    if (event.target.matches("[data-plex-close]")) {
-      closePlexOverlay();
-    } else if (plexRefreshBtn && event.target === plexRefreshBtn) {
-      fetchPlexInsights({ refresh: true });
-    } else if (plexLiveBtn && event.target === plexLiveBtn) {
-      if (plexInsightsState.live) stopPlexLive();
-      else startPlexLive();
+  if (insightsOverlayEl && !insightsOverlayEl.classList.contains("hidden")) {
+    if (event.target.matches("[data-insights-close]")) {
+      closeInsightsOverlay();
+    } else if (insightsRefreshBtn && event.target === insightsRefreshBtn) {
+      fetchProviderInsights({ refresh: true });
+    } else if (insightsLiveBtn && event.target === insightsLiveBtn) {
+      if (insightsDrawerState.live) stopInsightsLive();
+      else startInsightsLive();
     }
   }
   if (mismatchOverlayEl && !mismatchOverlayEl.classList.contains("hidden")) {
@@ -17354,8 +18215,8 @@ document.addEventListener("keydown", event => {
 });
 
 document.addEventListener("keydown", event => {
-  if (event.key === "Escape" && plexOverlayEl && !plexOverlayEl.classList.contains("hidden")) {
-    closePlexOverlay();
+  if (event.key === "Escape" && insightsOverlayEl && !insightsOverlayEl.classList.contains("hidden")) {
+    closeInsightsOverlay();
   }
 });
 

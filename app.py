@@ -38,7 +38,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 
 APP_NAME = "Sortarr"
-APP_VERSION = "0.8.10"
+APP_VERSION = "0.9.0"
 CSRF_COOKIE_NAME = "sortarr_csrf"
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_FORM_FIELD = "csrf_token"
@@ -1536,6 +1536,7 @@ def _security_self_check_payload() -> dict:
                 "upstream_auth_header": _upstream_auth_header(cfg),
                 "external_auth_config_issues": _external_auth_config_issues(cfg),
                 "local_auth_bypass_config_issues": _local_auth_bypass_config_issues(cfg),
+                "guidance": _auth_deployment_guidance_messages(cfg),
                 "basic_auth_configured": _basic_auth_configured(cfg),
                 "request_authenticated_via": str(auth_context.get("auth_source") or "none"),
             },
@@ -1597,6 +1598,65 @@ def _security_self_check_payload() -> dict:
         "ok": overall_ok,
         "checks": checks,
     }
+
+
+def _auth_deployment_guidance_messages(cfg: dict | None = None) -> list[str]:
+    source = cfg if cfg is not None else _get_config()
+    guidance: list[str] = []
+    auth_method = _auth_method(source)
+    if auth_method == "external":
+        for issue in _external_auth_config_issues(source):
+            if issue == "external_auth_requires_proxy_mode":
+                guidance.append(
+                    "External auth is only supported behind a trusted reverse proxy. Use Single, Double, or Custom proxy mode."
+                )
+            elif issue == "explicit_trusted_proxy_required":
+                guidance.append(
+                    "Set Waitress trusted proxy to the immediate upstream proxy IP/host. Wildcard-only trusted proxy is not a supported 0.9.0 external-auth deployment."
+                )
+            elif issue == "missing_upstream_auth_header":
+                guidance.append(
+                    "Set the upstream auth header to the verified identity header your reverse proxy injects."
+                )
+            elif issue == "invalid_upstream_auth_header":
+                guidance.append(
+                    "Use a valid upstream auth header name such as X-Forwarded-User."
+                )
+    elif auth_method == "basic_local_bypass":
+        for issue in _local_auth_bypass_config_issues(source):
+            if issue == "local_auth_bypass_not_enabled":
+                guidance.append(
+                    "Enable local auth bypass explicitly before using Basic + local bypass."
+                )
+            elif issue == "local_auth_bypass_requires_direct_proxy_mode":
+                guidance.append(
+                    "Basic + local bypass is only supported with Direct proxy mode. Forwarded headers are never used for bypass decisions."
+                )
+            elif issue == "local_auth_bypass_invalid_cidrs":
+                guidance.append(
+                    "Fix the configured local auth bypass CIDRs before relying on bypass eligibility."
+                )
+    if not _basic_auth_configured(source) and auth_method in {"basic", "basic_local_bypass"}:
+        guidance.append(
+            "Configure Basic Auth username and a password reference before using Sortarr-managed auth."
+        )
+    if not _allow_unsafe_ephemeral_recovery() and _require_persistent_secret_key() and _EPHEMERAL_APP_SECRET_KEY:
+        guidance.append(
+            "Persist a session-secret reference in the config directory or Windows Credential Manager so sessions survive restart."
+        )
+    if _upgrade_setup_required:
+        guidance.append(
+            "Re-save Setup once to complete the current security migration before relying on this install."
+        )
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for message in guidance:
+        normalized = str(message or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
 
 
 _http = requests.Session()
@@ -2154,6 +2214,7 @@ def _security_setup_gate():
     endpoint = str(request.endpoint or "").strip()
     if endpoint in {
         "setup",
+        "api_setup_provider_state",
         "set_lang",
         "static",
     }:
@@ -2875,15 +2936,22 @@ def _normalize_setup_secret_payload(values: dict) -> None:
             values[target_var] = explicit_target
             continue
         if existing_file:
-            values[key] = ""
-            values[file_var] = existing_file
-            values[target_var] = ""
-            continue
+            if _read_secret_from_file(existing_file):
+                values[key] = ""
+                values[file_var] = existing_file
+                values[target_var] = ""
+                continue
+            # Drop stale inherited secret refs during setup save so an unrelated
+            # broken optional provider does not block persistence of working
+            # settings elsewhere in the form.
         if existing_target:
-            values[key] = f"wincred:{existing_target}"
-            values[file_var] = ""
-            values[target_var] = existing_target
-            continue
+            if _wincred_read_secret(existing_target):
+                values[key] = f"wincred:{existing_target}"
+                values[file_var] = ""
+                values[target_var] = existing_target
+                continue
+            # Fall through and clear the stale credential reference instead of
+            # surfacing it as a generic secret-ref error on every save.
         values[key] = existing_raw
         values[file_var] = ""
         values[target_var] = ""
@@ -3764,7 +3832,7 @@ def _setup_same_host_scheme_fallback_allowed(origin: str, token_valid: bool) -> 
     if not origin or not token_valid:
         return False
     endpoint = str(request.endpoint or "").strip()
-    if endpoint not in {"setup", "api_setup_test", "api_setup_secret_key"}:
+    if endpoint not in {"setup", "api_setup_test", "api_setup_secret_key", "api_setup_provider_state"}:
         return False
     try:
         origin_parts = urlsplit(origin)
@@ -5176,6 +5244,67 @@ def _configured_insights_providers(cfg: dict) -> list[str]:
     return available
 
 
+def _setup_provider_state_source(values: dict | None) -> dict:
+    source = dict(values or {})
+
+    def secret_ready(key: str) -> bool:
+        return bool(source.get(key) or source.get(f"{key}_configured"))
+
+    for key in (
+        "plex_token",
+        "emby_api_key",
+        "jellyfin_api_key",
+        "jellyfin_password",
+        "tautulli_api_key",
+        "tracearr_api_key",
+        "jellystat_api_key",
+        "streamystats_api_key",
+        "streamystats_password",
+    ):
+        if secret_ready(key) and not source.get(key):
+            source[key] = "__configured__"
+
+    def build_instances(prefix: str, label: str) -> list[dict]:
+        instances: list[dict] = []
+        base = prefix.lower()
+        for idx in (1, 2, 3):
+            suffix = "" if idx == 1 else f"_{idx}"
+            url_legacy = _normalize_url(str(source.get(f"{base}_url{suffix}") or ""))
+            url_api = _normalize_url(str(source.get(f"{base}_url_api{suffix}") or "")) or url_legacy
+            url_external = _normalize_url(str(source.get(f"{base}_url_external{suffix}") or "")) or url_legacy or url_api
+            api_key_name = f"{base}_api_key{suffix}"
+            if not (url_api and secret_ready(api_key_name)):
+                continue
+            name = str(source.get(f"{base}_name{suffix}") or "").strip()
+            path_map_raw = str(source.get(f"{base}_path_map{suffix}") or "").strip()
+            path_maps = _parse_path_map_entries(path_map_raw)
+            path_map = path_maps[0] if path_maps else None
+            instances.append(
+                {
+                    "id": f"{label.lower()}-{idx}",
+                    "index": idx,
+                    "name": name,
+                    "url": url_api,
+                    "external_url": url_external,
+                    "api_key": "__configured__",
+                    "path_map": path_map,
+                    "path_maps": path_maps,
+                }
+            )
+        if len(instances) == 1:
+            if not instances[0]["name"]:
+                instances[0]["name"] = label
+        elif len(instances) > 1:
+            for instance in instances:
+                if not instance["name"]:
+                    instance["name"] = f"{label} {instance['index']}"
+        return instances
+
+    source["sonarr_instances"] = build_instances("SONARR", "Sonarr")
+    source["radarr_instances"] = build_instances("RADARR", "Radarr")
+    return source
+
+
 def _selected_media_source(cfg: dict) -> str:
     return _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
 
@@ -5314,7 +5443,10 @@ def _setup_provider_selection_warnings(cfg: dict) -> list[str]:
 
 
 def _setup_provider_selection_notice(cfg: dict) -> str:
-    return ""
+    warnings = _setup_provider_selection_warnings(cfg)
+    if not warnings:
+        return ""
+    return " ".join(warnings)
 
 
 def _playback_provider(cfg: dict) -> str:
@@ -5364,14 +5496,18 @@ def _effective_media_source(cfg: dict) -> str:
 def _provider_option_set(cfg: dict) -> dict:
     media_available = _configured_media_sources(cfg)
     history_available = _configured_history_sources(cfg)
-    media_selected = _effective_media_source(cfg)
-    history_selected = _playback_provider(cfg)
-    insights_selected = _playback_insights_provider(cfg)
+    media_selected = _selected_media_source(cfg)
+    history_selected = _selected_history_source(cfg)
+    insights_selected = _selected_insights_provider(cfg)
+    media_effective = _effective_media_source(cfg)
+    history_effective = _playback_provider(cfg)
+    insights_effective = _playback_insights_provider(cfg)
     has_arr = "arr" in media_available
     has_emby = "emby" in media_available
     has_plex = "plex" in media_available
     has_jellyfin = "jellyfin" in media_available or "jellyfin" in history_available
-    supports_tables = has_arr or media_selected in {"plex", "jellyfin", "emby"}
+    supports_tables = has_arr or media_effective in {"plex", "jellyfin", "emby"}
+    supports_plex_insights = bool((insights_effective == "plex") or has_plex)
     return {
         "configured": {
             "media_sources": media_available,
@@ -5380,11 +5516,12 @@ def _provider_option_set(cfg: dict) -> dict:
         "selected": {
             "media_source": media_selected,
             "history_source": history_selected,
+            "insights_provider": insights_selected,
         },
         "effective": {
-            "media_source": media_selected,
-            "history_source": history_selected,
-            "insights_provider": insights_selected,
+            "media_source": media_effective,
+            "history_source": history_effective,
+            "insights_provider": insights_effective,
         },
         "capabilities": {
             "arr_tables": supports_tables,
@@ -5392,14 +5529,27 @@ def _provider_option_set(cfg: dict) -> dict:
             # Playback overlays follow the active history/playback provider only.
             # Direct media providers such as Emby/Jellyfin can still expose
             # provider-specific insights without enabling row-level playback columns.
-            "playback_overlay": bool(history_selected),
-            "plex_insights": has_plex,
-            "plex_live_events": has_plex,
-            "provider_insights": has_plex or has_jellyfin or has_emby,
-            "provider_live_events": has_plex,
+            "playback_overlay": bool(history_effective),
+            "plex_insights": supports_plex_insights,
+            "insights_drawer": has_plex or has_jellyfin or has_emby,
+            "insights_live_events": has_plex,
+            "insights_by_provider": {
+                "plex": has_plex,
+                "jellyfin": has_jellyfin,
+                "emby": has_emby,
+            },
+            "insights_live_by_provider": {
+                "plex": has_plex,
+                "jellyfin": False,
+                "emby": False,
+            },
             "emby_media": has_emby,
         },
     }
+
+
+def _provider_capabilities_payload(cfg: dict) -> dict[str, object]:
+    return dict((_provider_option_set(cfg).get("capabilities") or {}))
 
 
 def _playback_insights_provider(cfg: dict) -> str:
@@ -6196,6 +6346,7 @@ def _bootstrap_setup_api_allowed(endpoint: str, cfg: dict | None = None) -> bool
         "api_config",
         "api_setup_test",
         "api_setup_secret_key",
+        "api_setup_provider_state",
         "api_csrf_diagnostics",
     }
 
@@ -10618,8 +10769,17 @@ def _media_fallback_provider(cfg: dict, app_name: str) -> str:
     return ""
 
 
+def _active_media_provider(cfg: dict, app_name: str) -> str:
+    if app_name not in ("sonarr", "radarr"):
+        return ""
+    effective = _effective_media_source(cfg)
+    if effective in {"emby", "jellyfin", "plex"}:
+        return effective
+    return ""
+
+
 def _get_media_fallback_rows(app_name: str, cfg: dict, force: bool = False) -> tuple[list[dict], str, str, bool]:
-    provider = _media_fallback_provider(cfg, app_name)
+    provider = _active_media_provider(cfg, app_name)
     if provider == "emby":
         return _get_emby_media_rows(app_name, cfg, force=force)
     if provider == "jellyfin":
@@ -10630,7 +10790,7 @@ def _get_media_fallback_rows(app_name: str, cfg: dict, force: bool = False) -> t
 
 
 def _start_media_fallback_refresh(cfg: dict, app_name: str) -> tuple[bool, str, bool]:
-    provider = _media_fallback_provider(cfg, app_name)
+    provider = _active_media_provider(cfg, app_name)
     if provider == "emby":
         started = _start_emby_background_refresh(cfg)
         return bool(started), provider, _emby_refresh_in_progress(cfg)
@@ -11436,6 +11596,25 @@ def _provider_index_ready(cfg: dict, provider: str) -> tuple[dict | None, int, b
     return None, 0, False
 
 
+def _provider_index_snapshot(cfg: dict, provider: str) -> tuple[dict | None, int]:
+    name = str(provider or "").strip().lower()
+    if name == "plex":
+        return _get_plex_index_ready(cfg)
+    if name == "emby":
+        return _cache.get_emby_state()
+    if name == "jellyfin":
+        return _cache.get_jellyfin_state()
+    if name == "tracearr":
+        return _cache.get_tracearr_state()
+    if name == "tautulli":
+        return _cache.get_tautulli_state()
+    if name == "jellystat":
+        return _cache.get_jellystat_state()
+    if name == "streamystats":
+        return _cache.get_streamystats_state()
+    return None, 0
+
+
 def _parse_id_list(raw) -> list[str]:
     if isinstance(raw, list):
         values = [str(item or "").strip() for item in raw]
@@ -11478,7 +11657,7 @@ def _plex_libraries_from_sections(sections: list[dict]) -> dict[str, list[dict]]
     return mapped
 
 
-def _get_plex_library_scope(cfg: dict) -> dict[str, dict[str, list]]:
+def _get_plex_library_scope(cfg: dict, allow_network: bool = True) -> dict[str, dict[str, list]]:
     index = _get_plex_index_cached()
     sections_cache_path = _plex_sections_cache_path(cfg.get("plex_cache_path") or "")
     if not index:
@@ -11489,7 +11668,7 @@ def _get_plex_library_scope(cfg: dict) -> dict[str, dict[str, list]]:
                 return {"available": _plex_libraries_from_sections(cached_sections)}
         base_url = cfg.get("plex_url") or ""
         token = cfg.get("plex_token") or ""
-        if base_url and token:
+        if allow_network and base_url and token:
             client_id = str(cfg.get("plex_client_id") or "").strip() or secrets.token_hex(12)
             request_timeout = 15
             section_filters = _parse_id_list(cfg.get("plex_section_filters") or "")
@@ -18721,6 +18900,8 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
 
     results = []
     cold_cache = False
+    cold_cache_requested = False
+    cold_fetch_completed = False
     cache_seconds = _safe_int(cfg.get("cache_seconds"))
     missing_instances = []
     instance_errors: list[dict] = []
@@ -18789,7 +18970,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
         missing_instances.append(instance)
 
     if not force and missing_instances:
-        cold_cache = True
+        cold_cache_requested = True
         defer_playback_overlay = bool(cached_playback and cached_playback_ts)
     if missing_instances:
         instance_workers = 1
@@ -18810,7 +18991,7 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     force=True,
                     tautulli_index=cached_playback,
                     tautulli_index_ts=cached_playback_ts,
-                    log_cold_start=cold_cache,
+                    log_cold_start=cold_cache_requested,
                     defer_tautulli_overlay=defer_playback_overlay,
                     playback_label=playback_label,
                 )
@@ -18828,6 +19009,8 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     try:
                         _, data, updated, entry = future.result()
                         results.extend(data)
+                        if updated or data or entry:
+                            cold_fetch_completed = True
                         if entry:
                             disk_cache[str(instance.get("id") or "")] = entry
                             disk_dirty = True
@@ -18856,11 +19039,13 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     force=True,
                     tautulli_index=cached_playback,
                     tautulli_index_ts=cached_playback_ts,
-                    log_cold_start=cold_cache,
+                    log_cold_start=cold_cache_requested,
                     defer_tautulli_overlay=defer_playback_overlay,
                     playback_label=playback_label,
                 )
                     results.extend(data)
+                    if updated or data:
+                        cold_fetch_completed = True
                     disk_dirty = disk_dirty or updated
                 except Exception as exc:
                     instance_id = instance.get("id")
@@ -18875,6 +19060,8 @@ def _get_cached_all(app_name: str, instances: list[dict], cfg: dict, force: bool
                     logger.warning("%s instance fetch failed (%s).", app_name, error_kind)
                     if strict_instance_errors:
                         raise
+
+    cold_cache = cold_cache_requested and cold_fetch_completed
 
     if disk_dirty:
         reason = "cold_cache" if cold_cache else "request_refresh"
@@ -19131,7 +19318,7 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
             values[field_name] = " | ".join(entries)
             values[list_key] = entries
 
-    for key in (
+    secret_keys = (
         "sonarr_api_key",
         "sonarr_api_key_2",
         "sonarr_api_key_3",
@@ -19149,10 +19336,20 @@ def _setup_form_values(cfg: dict, form=None) -> dict:
         "streamystats_password",
         "basic_auth_pass",
         "sortarr_secret_key",
-    ):
+    )
+    for key in secret_keys:
         values[key] = ""
+    if form is not None:
+        for key in secret_keys:
+            configured_flag = f"{key}_configured"
+            if form.get(key):
+                values[configured_flag] = True
     values["basic_auth_pass_configured"] = bool(cfg.get("basic_auth_pass"))
     values["sortarr_secret_key_configured"] = bool(cfg.get("sortarr_secret_key")) and not bool(cfg.get("sortarr_secret_key_ephemeral"))
+    if form is not None and form.get("basic_auth_pass"):
+        values["basic_auth_pass_configured"] = True
+    if form is not None and form.get("sortarr_secret_key"):
+        values["sortarr_secret_key_configured"] = True
     if values.get("clear_emby_connection"):
         values["emby_url"] = ""
         values["emby_api_key_configured"] = False
@@ -19545,6 +19742,58 @@ def _setup_resolve_secret_value(data: dict, cfg: dict, key: str) -> str:
     return raw or _setup_cfg_env_value(cfg, key)
 
 
+def _setup_secret_reference_error(data: dict, key: str) -> str:
+    raw = str(data.get(key) or "").strip()
+    file_ref = str(data.get(f"{key}_FILE") or "").strip()
+    if file_ref and not _read_secret_from_file(file_ref):
+        return (
+            "The referenced secret file could not be read. Secret files must live in the active config directory "
+            "or its secrets subdirectory, and Sortarr must be able to read them."
+        )
+    target = str(data.get(f"{key}_CRED_TARGET") or "").strip()
+    if not target and raw.lower().startswith("wincred:"):
+        target = raw.split(":", 1)[1].strip()
+    if target and not _wincred_read_secret(target):
+        return "The referenced credential target could not be read. Check the credential reference for this runtime."
+    return ""
+
+
+def _setup_collect_secret_reference_errors(data: dict, field_errors: dict[str, str]) -> str:
+    secret_fields = [
+        ("SONARR_API_KEY", "sonarr_api_key"),
+        ("SONARR_API_KEY_2", "sonarr_api_key_2"),
+        ("SONARR_API_KEY_3", "sonarr_api_key_3"),
+        ("RADARR_API_KEY", "radarr_api_key"),
+        ("RADARR_API_KEY_2", "radarr_api_key_2"),
+        ("RADARR_API_KEY_3", "radarr_api_key_3"),
+        ("PLEX_TOKEN", "plex_token"),
+        ("EMBY_API_KEY", "emby_api_key"),
+        ("JELLYFIN_API_KEY", "jellyfin_api_key"),
+        ("JELLYFIN_PASSWORD", "jellyfin_password"),
+        ("TAUTULLI_API_KEY", "tautulli_api_key"),
+        ("TRACEARR_API_KEY", "tracearr_api_key"),
+        ("JELLYSTAT_API_KEY", "jellystat_api_key"),
+        ("STREAMYSTATS_API_KEY", "streamystats_api_key"),
+        ("STREAMYSTATS_PASSWORD", "streamystats_password"),
+        ("BASIC_AUTH_PASS", "basic_auth_pass"),
+        ("SORTARR_SECRET_KEY", "sortarr_secret_key"),
+    ]
+    found_error = ""
+    for key, field_name in secret_fields:
+        if not (
+            str(data.get(key) or "").strip()
+            or str(data.get(f"{key}_FILE") or "").strip()
+            or str(data.get(f"{key}_CRED_TARGET") or "").strip()
+        ):
+            continue
+        message = _setup_secret_reference_error(data, key)
+        if message:
+            _setup_add_field_error(field_errors, field_name, message)
+            if not found_error:
+                found_error = "Fix the highlighted secret reference errors."
+    return found_error
+
+
 def _setup_secret_state(key: str) -> tuple[str, str, str]:
     raw = str(os.environ.get(key) or "").strip()
     file_ref = _secret_file_ref(key)
@@ -19568,6 +19817,10 @@ def _setup_secret_changed(data: dict, key: str) -> bool:
     # Without this guard, every save re-tests all configured providers because the
     # form intentionally omits persisted secret values.
     if not (current_raw or current_file or current_target):
+        return False
+    current_value = _setup_resolve_secret_value(data, _get_config(), key)
+    existing_value = _resolve_secret_env(key)
+    if current_value and existing_value and current_value == existing_value:
         return False
     current = (current_raw, current_file, current_target)
     return current != _setup_secret_state(key)
@@ -20097,16 +20350,16 @@ def setup():
         external_auth_error = ""
         if auth_method == "external":
             if proxy_preset == "direct":
-                external_auth_error = "External authentication requires Proxy mode to be Single, Double, or Custom."
+                external_auth_error = "External authentication is not supported with Proxy mode set to Direct. Use Single, Double, or Custom behind a trusted reverse proxy."
             elif not waitress_trusted_proxy or waitress_trusted_proxy == "*":
                 external_auth_error = (
-                    "External authentication requires Waitress trusted proxy to be set to the immediate proxy IP/host."
+                    "External authentication requires Waitress trusted proxy to be set to the immediate proxy IP/host. Wildcard-only proxy trust is not a supported External-auth deployment for 0.9.0."
                 )
         elif auth_method == "basic_local_bypass":
             if not local_auth_bypass_enabled:
                 local_auth_bypass_error = "Local auth bypass must be explicitly enabled for this authentication mode."
             elif proxy_preset != "direct":
-                local_auth_bypass_error = "Local auth bypass requires Proxy mode to be Direct."
+                local_auth_bypass_error = "Basic + local bypass is only supported with Proxy mode set to Direct."
             else:
                 normalized_cidrs, cidr_errors, _, used_defaults = _parse_local_auth_bypass_cidrs(
                     local_auth_bypass_cidrs_input,
@@ -20451,6 +20704,7 @@ def setup():
             data["SORTARR_PROXY_HOPS_PORT"] = proxy_hops_port
             data["SORTARR_PROXY_HOPS_PREFIX"] = proxy_hops_prefix
 
+        secret_ref_error = _setup_collect_secret_reference_errors(data, field_errors)
         config_error = (
             timeout_error
             or fetch_error
@@ -20469,6 +20723,7 @@ def setup():
             or auth_error
             or local_auth_bypass_error
             or external_auth_error
+            or secret_ref_error
         )
 
         redirect_endpoint = "index"
@@ -20585,9 +20840,9 @@ def setup():
                     if auth_method == "basic":
                         completion_message = "Setup saved. Continue into the app and sign in with the updated Basic Auth credentials if prompted."
                     elif auth_method == "basic_local_bypass":
-                        completion_message = "Setup saved. Continue into the app. Trusted direct local-network clients in the configured CIDR ranges can bypass the Basic Auth prompt."
+                        completion_message = "Setup saved. Continue into the app. Only trusted direct local-network clients in the configured CIDR ranges can bypass the Basic Auth prompt."
                     elif auth_method == "external":
-                        completion_message = "Setup saved. Continue into the app through your trusted reverse proxy."
+                        completion_message = "Setup saved. Continue into the app through your trusted reverse proxy. External mode is only supported through that proxy path, not via direct access."
                     if provider_selection_warnings:
                         completion_message += " Review the setup notice for selected providers that are not currently effective."
                     session["sortarr_setup_completed"] = {
@@ -20630,7 +20885,9 @@ def setup():
         field_errors=field_errors,
         setup_required=setup_required,
     )
-    setup_provider_state = _provider_state_payload(setup_values)
+    setup_provider_state_source = _setup_provider_state_source(setup_values)
+    setup_provider_state = _provider_state_payload(setup_provider_state_source)
+    setup_provider_selection_notice = _setup_provider_selection_notice(setup_provider_state_source)
     return render_template(
         "setup.html",
         env_path=ENV_FILE_PATH,
@@ -20643,6 +20900,7 @@ def setup():
         values=setup_values,
         advanced_summary=advanced_summary,
         setup_provider_state=setup_provider_state,
+        setup_provider_selection_notice=setup_provider_selection_notice,
         setup_step_states=setup_step_states,
         error_steps=error_steps,
         focus_field=focus_field,
@@ -20659,20 +20917,13 @@ def setup():
 
 def _frontend_bootstrap_config(cfg: dict) -> dict:
     provider_state = _provider_state_payload(cfg)
-    history_provider = _history_provider(cfg)
-    overlay_provider = _playback_overlay_provider(cfg)
+    provider_capabilities = _provider_capabilities_payload(cfg)
+    history_provider = str((provider_state.get("history") or {}).get("effective") or "").strip().lower()
     playback_enabled = bool(history_provider)
     emby_configured = bool(cfg.get("emby_url") and cfg.get("emby_api_key"))
     plex_configured = bool(cfg.get("plex_url") and cfg.get("plex_token"))
     jellyfin_configured = bool(cfg.get("jellyfin_url") and cfg.get("jellyfin_api_key"))
-    streamystats_configured = bool(cfg.get("streamystats_url") and cfg.get("streamystats_api_key"))
     tracearr_configured = bool(cfg.get("tracearr_url") and cfg.get("tracearr_api_key"))
-    insights_provider = _playback_insights_provider(cfg)
-    media_source_preference = _normalize_media_source_preference(cfg.get("media_source_preference", "arr"))
-    history_source_preference = _normalize_history_source_preference(cfg.get("history_source_preference", "auto"))
-    effective_media_source = _effective_media_source(cfg)
-    history_sources_available = _configured_history_sources(cfg)
-    option_set = _provider_option_set(cfg)
     # The frontend uses sonarr_url/radarr_url as a base for generating clickable links.
     # If split URLs are configured, prefer the external URL, but fall back to the API URL.
     sonarr_instances_public = _public_instances(cfg.get("sonarr_instances", []))
@@ -20689,7 +20940,7 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
     )
     sonarr_configured = bool(cfg.get("sonarr_instances")) or bool(_media_fallback_provider(cfg, "sonarr"))
     radarr_configured = bool(cfg.get("radarr_instances")) or bool(_media_fallback_provider(cfg, "radarr"))
-    plex_scope = _get_plex_library_scope(cfg)
+    plex_scope = _get_plex_library_scope(cfg, allow_network=False)
     tracearr_index = _get_tracearr_index_cached() if tracearr_configured else None
     tracearr_meta = (
         tracearr_index.get("meta")
@@ -20697,6 +20948,9 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
         else {}
     )
     tracearr_capabilities = _tracearr_capabilities_from_meta(tracearr_meta)
+    option_set = _provider_option_set(cfg)
+    media_source = str((provider_state.get("media") or {}).get("effective") or "").strip().lower()
+    insights_provider = str((provider_state.get("enrichment") or {}).get("effective") or "").strip().lower()
     return {
         "sonarr_url": sonarr_public_base,
         "radarr_url": radarr_public_base,
@@ -20704,23 +20958,21 @@ def _frontend_bootstrap_config(cfg: dict) -> dict:
         "radarr_instances": radarr_instances_public,
         "tautulli_configured": playback_enabled,
         "playback_configured": playback_enabled,
-        "playback_provider": overlay_provider,
+        "playback_provider": _playback_overlay_provider(cfg),
         "history_provider": history_provider,
-        "overlay_provider": overlay_provider,
+        "overlay_provider": _playback_overlay_provider(cfg),
+        "media_source": media_source,
+        "insights_provider": insights_provider,
+        "history_source_preference": _selected_history_source(cfg),
+        "history_sources_available": _configured_history_sources(cfg),
+        "option_set": option_set,
         "provider_state": provider_state,
+        "provider_capabilities": provider_capabilities,
         "emby_configured": emby_configured,
         "plex_configured": plex_configured,
         "jellyfin_configured": jellyfin_configured,
-        "streamystats_configured": streamystats_configured,
-        "tracearr_configured": tracearr_configured,
         "tracearr_matching_mode": tracearr_capabilities.get("matching_mode"),
         "tracearr_capabilities": tracearr_capabilities,
-        "insights_provider": insights_provider,
-        "media_source_preference": media_source_preference,
-        "media_source": effective_media_source,
-        "history_source_preference": history_source_preference,
-        "history_sources_available": history_sources_available,
-        "option_set": option_set,
         "plex_libraries": plex_scope.get("available", {}),
         "sonarr_configured": sonarr_configured,
         "radarr_configured": radarr_configured,
@@ -20759,6 +21011,7 @@ def api_status():
     lite = lite_raw in {"1", "true", "yes"}
     history_provider = _history_provider(cfg)
     overlay_provider = _playback_overlay_provider(cfg)
+    insights_provider = _playback_insights_provider(cfg)
     provider, _, playback_ts = _get_playback_index_state(cfg)
     playback_enabled = bool(history_provider)
     refresh_in_progress = _playback_refresh_in_progress(cfg, provider) if playback_enabled else False
@@ -20817,6 +21070,7 @@ def api_status():
                 }
         app_payload = {
             "configured": app_configured,
+            "refresh_in_progress": _arr_refresh_in_progress(app_name),
             "progress": progress_meta,
             "cache": {
                 "memory_ts": effective_memory_ts,
@@ -20862,6 +21116,20 @@ def api_status():
         )
         tracearr_capabilities = _tracearr_capabilities_from_meta(tracearr_meta)
 
+    enrichment_index = None
+    enrichment_ts = 0
+    enrichment_refresh_in_progress = False
+    enrichment_status = "disabled"
+    if insights_provider in {"plex", "jellyfin", "emby"}:
+        enrichment_index, enrichment_ts = _provider_index_snapshot(cfg, insights_provider)
+        enrichment_refresh_in_progress = _playback_refresh_in_progress(cfg, insights_provider)
+        if enrichment_refresh_in_progress:
+            enrichment_status = "refreshing"
+        elif not enrichment_index or _safe_int(enrichment_ts) <= 0:
+            enrichment_status = "stale"
+        else:
+            enrichment_status = "ready"
+
     return jsonify(
         {
             "apps": apps,
@@ -20878,6 +21146,16 @@ def api_status():
                 "index_age_seconds": _age_seconds(playback_ts),
                 "tracearr_matching_mode": tracearr_capabilities.get("matching_mode"),
                 "tracearr_capabilities": tracearr_capabilities,
+            },
+            "enrichment": {
+                "configured": bool(insights_provider),
+                "provider": insights_provider,
+                "label": _playback_label(insights_provider) if insights_provider else "",
+                "status": enrichment_status,
+                "refresh_in_progress": enrichment_refresh_in_progress,
+                "index_ts": _safe_int(enrichment_ts),
+                "index_age_seconds": _age_seconds(_safe_int(enrichment_ts)) if _safe_int(enrichment_ts) else None,
+                "available": bool(enrichment_index and _safe_int(enrichment_ts) > 0),
             },
             "scope": {
                 "plex": {
@@ -21046,6 +21324,55 @@ def api_setup_secret_key():
     return jsonify({"ok": False, "error": "Unknown action."}), 400
 
 
+@app.route("/api/setup/provider_state", methods=["POST"])
+def api_setup_provider_state():
+    cfg = _get_config()
+    configured = _config_complete(cfg)
+    if configured:
+        auth_context = _request_auth_context(cfg, allow_setup_repair=True)
+        if not auth_context.get("authorized"):
+            return _auth_response(auth_context)
+        g.request_auth_context = auth_context
+    values = _setup_form_values(cfg, request.form)
+    for key in (
+        "sonarr_api_key",
+        "sonarr_api_key_2",
+        "sonarr_api_key_3",
+        "radarr_api_key",
+        "radarr_api_key_2",
+        "radarr_api_key_3",
+        "plex_token",
+        "emby_api_key",
+        "jellyfin_api_key",
+        "jellyfin_password",
+        "tautulli_api_key",
+        "tracearr_api_key",
+        "jellystat_api_key",
+        "streamystats_api_key",
+        "streamystats_password",
+        "basic_auth_pass",
+        "sortarr_secret_key",
+    ):
+        inline_secret = str(request.form.get(key, "") or "").strip()
+        if inline_secret:
+            values[key] = inline_secret
+            values[f"{key}_configured"] = True
+            continue
+        if str(request.form.get(f"{key}_configured") or "").strip().lower() in {"1", "true", "yes", "on"}:
+            values[f"{key}_configured"] = True
+    provider_state_source = _setup_provider_state_source(values)
+    provider_state = _provider_state_payload(provider_state_source)
+    provider_selection_warnings = _setup_provider_selection_warnings(provider_state_source)
+    provider_selection_notice = _setup_provider_selection_notice(provider_state_source)
+    return jsonify(
+        {
+            "provider_state": provider_state,
+            "provider_selection_warnings": provider_selection_warnings,
+            "provider_selection_notice": provider_selection_notice,
+        }
+    )
+
+
 @app.route("/api/diagnostics/csrf", methods=["GET"])
 @_auth_required
 def api_csrf_diagnostics():
@@ -21133,8 +21460,8 @@ def api_tautulli_deep_refresh():
 def api_sonarr_refresh():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and fallback_provider:
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if media_provider:
         started, provider, refresh_in_progress = _start_media_fallback_refresh(cfg, "sonarr")
         return jsonify(
             {
@@ -21199,8 +21526,8 @@ def api_sonarr_refresh():
 def api_sonarr_item():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and fallback_provider:
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if media_provider:
         series_id = request.args.get("seriesId") or request.args.get("series_id")
         if not series_id:
             return jsonify({"error": "seriesId is required."}), 400
@@ -21299,8 +21626,8 @@ def api_sonarr_item_playback_refresh():
 def api_sonarr_series_seasons(series_id: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and fallback_provider == "emby":
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if media_provider == "emby":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
         series_item_id = _emby_series_item_id_for_row(cfg, series_id, provider_item_id)
@@ -21317,7 +21644,7 @@ def api_sonarr_series_seasons(series_id: int):
                 "seasons": seasons,
             }
         )
-    if not instances and fallback_provider == "jellyfin":
+    if media_provider == "jellyfin":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
         series_item_id = _jellyfin_series_item_id_for_row(cfg, series_id, provider_item_id)
@@ -21334,7 +21661,7 @@ def api_sonarr_series_seasons(series_id: int):
                 "seasons": seasons,
             }
         )
-    if not instances and fallback_provider == "plex":
+    if media_provider == "plex":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         include_specials = _read_query_bool("include_specials", "includeSpecials", "specials")
         series_item_id = _plex_series_item_id_for_row(cfg, series_id, provider_item_id)
@@ -21391,8 +21718,8 @@ def api_sonarr_series_seasons(series_id: int):
 def api_sonarr_series_episodes(series_id: int, season_number: int):
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and fallback_provider == "emby":
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if media_provider == "emby":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         series_item_id = _emby_series_item_id_for_row(cfg, series_id, provider_item_id)
         if not series_item_id:
@@ -21412,7 +21739,7 @@ def api_sonarr_series_episodes(series_id: int, season_number: int):
                 "episodes": episodes,
             }
         )
-    if not instances and fallback_provider == "jellyfin":
+    if media_provider == "jellyfin":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         series_item_id = _jellyfin_series_item_id_for_row(cfg, series_id, provider_item_id)
         if not series_item_id:
@@ -21428,7 +21755,7 @@ def api_sonarr_series_episodes(series_id: int, season_number: int):
                 "episodes": episodes,
             }
         )
-    if not instances and fallback_provider == "plex":
+    if media_provider == "plex":
         provider_item_id = request.args.get("provider_item_id") or request.args.get("providerItemId") or ""
         series_item_id = _plex_series_item_id_for_row(cfg, series_id, provider_item_id)
         if not series_item_id:
@@ -21487,8 +21814,8 @@ def api_sonarr_series_episodes(series_id: int, season_number: int):
 def api_radarr_refresh():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "radarr")
-    if not instances and fallback_provider:
+    media_provider = _active_media_provider(cfg, "radarr")
+    if media_provider:
         started, provider, refresh_in_progress = _start_media_fallback_refresh(cfg, "radarr")
         return jsonify(
             {
@@ -21553,8 +21880,8 @@ def api_radarr_refresh():
 def api_radarr_item():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "radarr")
-    if not instances and fallback_provider:
+    media_provider = _active_media_provider(cfg, "radarr")
+    if media_provider:
         movie_id = request.args.get("movieId") or request.args.get("movie_id")
         if not movie_id:
             return jsonify({"error": "movieId is required."}), 400
@@ -22379,9 +22706,120 @@ def _mismatch_category_rank(category: str) -> int:
         "provider_conflict": 0,
         "unmatched_all": 1,
         "skipped_all": 2,
-        "unavailable_all": 3,
-        "matched": 4,
-    }.get(str(category or "").strip().lower(), 5)
+        "pending_all": 3,
+        "unavailable_all": 4,
+        "matched": 5,
+    }.get(str(category or "").strip().lower(), 6)
+
+
+def _normalize_mismatch_status(status: str) -> str:
+    key = str(status or "").strip().lower()
+    if key in {"matched", "unmatched", "skipped", "pending", "unavailable"}:
+        return key
+    return "unavailable"
+
+
+def _mismatch_default_reason(provider: str, status: str, provider_error: str = "") -> str:
+    provider_label = _playback_label(provider)
+    normalized_status = _normalize_mismatch_status(status)
+    error_text = str(provider_error or "").strip()
+    if normalized_status == "matched":
+        return f"Matched in {provider_label} data."
+    if normalized_status == "unmatched":
+        return f"No match found in {provider_label} data."
+    if normalized_status == "skipped":
+        return f"Skipped by {provider_label} matching rules."
+    if normalized_status == "pending":
+        return f"{provider_label} refresh queued."
+    if error_text:
+        lowered = error_text.lower()
+        if "refresh queued" in lowered:
+            return f"{provider_label} refresh queued."
+        if "index unavailable" in lowered or "load failed" in lowered or "unsupported provider" in lowered:
+            return f"{provider_label} data is unavailable."
+        return f"{provider_label}: {error_text}"
+    return f"{provider_label} data is unavailable."
+
+
+def _normalize_mismatch_provider_entry(
+    provider: str,
+    compared: dict,
+    provider_error: str = "",
+) -> dict[str, object]:
+    raw_status = compared.get("TautulliMatchStatus")
+    status = _normalize_mismatch_status(raw_status)
+    matched = bool(compared.get("TautulliMatched")) if status == "matched" else False
+    reason = str(compared.get("TautulliMatchReason") or "").strip()
+    if not reason:
+        reason = _mismatch_default_reason(provider, status, provider_error=provider_error)
+    return {
+        "status": status,
+        "reason": reason,
+        "matched": matched,
+    }
+
+
+def _mismatch_row_reason(category: str, provider_entries: dict[str, dict[str, object]]) -> str:
+    normalized_category = str(category or "").strip().lower()
+    if normalized_category == "provider_conflict":
+        return "Providers disagree on match status."
+    if normalized_category == "pending_all":
+        return "Provider refresh is still in progress."
+    priority = {"unmatched": 0, "skipped": 1, "pending": 2, "unavailable": 3, "matched": 4}
+    ordered_entries = sorted(
+        (
+            entry
+            for entry in (provider_entries or {}).values()
+            if isinstance(entry, dict)
+        ),
+        key=lambda entry: priority.get(str(entry.get("status") or "").strip().lower(), 5),
+    )
+    for entry in ordered_entries:
+        reason = str(entry.get("reason") or "").strip()
+        if reason:
+            return reason
+    return ""
+
+
+def _mismatch_summary_categories(category_counts: dict[str, int] | None = None) -> dict[str, int]:
+    counts = dict(category_counts or {})
+    return {
+        "provider_conflict": _safe_int(counts.get("provider_conflict")),
+        "unmatched_all": _safe_int(counts.get("unmatched_all")),
+        "skipped_all": _safe_int(counts.get("skipped_all")),
+        "pending_all": _safe_int(counts.get("pending_all")),
+        "unavailable_all": _safe_int(counts.get("unavailable_all")),
+    }
+
+
+def _mismatch_provider_counts_summary(provider_counts: dict[str, dict[str, int]] | None = None) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
+    for provider, counts in (provider_counts or {}).items():
+        result[str(provider or "").strip().lower()] = {
+            "matched": _safe_int((counts or {}).get("matched")),
+            "unmatched": _safe_int((counts or {}).get("unmatched")),
+            "skipped": _safe_int((counts or {}).get("skipped")),
+            "pending": _safe_int((counts or {}).get("pending")),
+            "unavailable": _safe_int((counts or {}).get("unavailable")),
+        }
+    return result
+
+
+def _mismatch_provider_mismatch_total(counts: dict[str, int] | None = None) -> int:
+    summary = dict(counts or {})
+    return sum(
+        _safe_int(summary.get(key))
+        for key in ("unmatched", "skipped", "pending", "unavailable")
+    )
+
+
+def _mismatch_provider_diagnostics_support(provider: str) -> tuple[bool, str]:
+    key = str(provider or "").strip().lower()
+    if key in {"tautulli", "tracearr", "plex", "jellyfin", "streamystats", "emby"}:
+        return True, ""
+    if key == "jellystat":
+        return False, "Provider playback diagnostics are not implemented for Jellystat yet."
+    return False, "Provider playback diagnostics are unavailable for this provider."
 
 
 @app.route("/api/mismatches", methods=["GET"])
@@ -22398,14 +22836,21 @@ def api_mismatches():
 
     cfg = _get_config()
     providers: list[str] = []
-    for provider in _configured_history_sources(cfg):
-        if provider in ("tautulli", "tracearr", "plex", "jellystat", "streamystats", "jellyfin", "emby"):
-            providers.append(provider)
+    provider_allowlist = {"tautulli", "tracearr", "plex", "jellystat", "streamystats", "jellyfin", "emby"}
+    include_configured = _read_query_bool("include_configured", "includeConfigured", "all_providers", "allProviders")
+    history_provider = _history_provider(cfg)
+    if include_configured:
+        for provider in _configured_history_sources(cfg):
+            if provider in provider_allowlist:
+                providers.append(provider)
+    elif history_provider in provider_allowlist:
+        providers.append(history_provider)
     insights_provider = _playback_insights_provider(cfg)
     if insights_provider in ("plex", "jellyfin", "emby") and insights_provider not in providers:
         providers.append(insights_provider)
 
     provider_states = []
+    provider_errors: dict[str, str] = {}
     provider_rows: dict[str, list[dict]] = {}
 
     if not providers:
@@ -22522,6 +22967,8 @@ def api_mismatches():
                 treat_empty_index_as_available=not provider_error and isinstance(index, dict),
             )
         provider_rows[provider] = rows_for_provider
+        provider_errors[provider] = provider_error
+        diagnostics_supported, diagnostics_reason = _mismatch_provider_diagnostics_support(provider)
         provider_states.append(
             {
                 "provider": provider,
@@ -22532,6 +22979,8 @@ def api_mismatches():
                 "index_age_seconds": _age_seconds(_safe_int(index_ts)) if _safe_int(index_ts) else None,
                 "status": provider_mode,
                 "error": provider_error,
+                "diagnostics_supported": diagnostics_supported,
+                "diagnostics_reason": diagnostics_reason,
             }
         )
 
@@ -22555,14 +23004,14 @@ def api_mismatches():
         for provider in providers:
             provider_row = provider_rows.get(provider, [])
             compared = provider_row[idx] if idx < len(provider_row) else {}
-            status = str(compared.get("TautulliMatchStatus") or "").strip().lower() or "unavailable"
-            reason = str(compared.get("TautulliMatchReason") or "").strip()
-            matched = bool(compared.get("TautulliMatched"))
-            statuses_payload[provider] = {
-                "status": status,
-                "reason": reason,
-                "matched": matched,
-            }
+            normalized_entry = _normalize_mismatch_provider_entry(
+                provider,
+                compared,
+                provider_error=provider_errors.get(provider, ""),
+            )
+            status = str(normalized_entry.get("status") or "").strip().lower() or "unavailable"
+            reason = str(normalized_entry.get("reason") or "").strip()
+            statuses_payload[provider] = normalized_entry
             statuses.append(status)
             if reason:
                 reasons.append(reason)
@@ -22570,15 +23019,11 @@ def api_mismatches():
                 provider_counts[provider][status] += 1
 
         category = _mismatch_category(statuses)
-        if category in {"matched", "pending_all"} or any(status == "pending" for status in statuses):
+        if category == "matched":
             continue
 
         title = str(row.get("Title") or "").strip()
-        reason = ""
-        if category == "provider_conflict":
-            reason = "Providers disagree on match status"
-        elif reasons:
-            reason = reasons[0]
+        reason = _mismatch_row_reason(category, statuses_payload) or (reasons[0] if reasons else "")
 
         category_counts[category] = category_counts.get(category, 0) + 1
         mismatch_rows.append(
@@ -22613,6 +23058,21 @@ def api_mismatches():
     if limit and len(mismatch_rows) > limit:
         mismatch_rows = mismatch_rows[:limit]
 
+    provider_counts_summary = _mismatch_provider_counts_summary(provider_counts)
+    empty_provider_counts = {
+        "matched": 0,
+        "unmatched": 0,
+        "skipped": 0,
+        "pending": 0,
+        "unavailable": 0,
+    }
+    for provider_state in provider_states:
+        provider_key = str(provider_state.get("provider") or "").strip().lower()
+        counts = dict(provider_counts_summary.get(provider_key, empty_provider_counts))
+        provider_state["counts"] = counts
+        provider_state["rows_compared"] = _safe_int(len(rows))
+        provider_state["mismatch_rows"] = _mismatch_provider_mismatch_total(counts)
+
     return jsonify(
         {
             "generated_at": datetime.datetime.now(datetime.timezone.utc)
@@ -22624,8 +23084,8 @@ def api_mismatches():
             "summary": {
                 "rows_scanned": len(rows),
                 "mismatch_rows": len(mismatch_rows),
-                "categories": category_counts,
-                "by_provider": provider_counts,
+                "categories": _mismatch_summary_categories(category_counts),
+                "by_provider": provider_counts_summary,
             },
             "scope": {
                 "selected_library_ids": selected_ids,
@@ -22645,12 +23105,14 @@ def api_playback_match_diagnostics():
 
     cfg = _get_config()
     provider = _playback_provider(cfg)
-    if provider not in ("tautulli", "tracearr", "jellyfin", "streamystats", "plex"):
+    diagnostics_supported, diagnostics_reason = _mismatch_provider_diagnostics_support(provider)
+    if not diagnostics_supported:
         provider_label = _playback_label(provider) if provider else "Playback"
         return jsonify(
             {
-                "error": f"{provider_label} diagnostics are not supported for this provider.",
+                "error": diagnostics_reason or f"{provider_label} diagnostics are not supported for this provider.",
                 "provider": provider or "",
+                "diagnostics_supported": False,
             }
         ), 503
 
@@ -22834,6 +23296,21 @@ def api_playback_match_diagnostics():
         core["refresh_state"]["index_age_seconds"] = _age_seconds(index_ts) if index_ts else None
         core["provider_details"] = {
             "jellyfin": {
+                "index_available": bool(index),
+                "match_health": app_health,
+            }
+        }
+    elif provider == "emby":
+        if not (cfg.get("emby_url") and cfg.get("emby_api_key")):
+            return jsonify({"error": "Emby is not configured.", "provider": provider}), 503
+
+        index, index_ts = _cache.get_emby_state()
+        provider_label = _playback_label("emby")
+        app_health = _summarize_match_health(rows, index or {}, media_type, provider_label)
+        core["refresh_state"]["index_ts"] = _safe_int(index_ts)
+        core["refresh_state"]["index_age_seconds"] = _age_seconds(index_ts) if index_ts else None
+        core["provider_details"] = {
+            "emby": {
                 "index_available": bool(index),
                 "match_health": app_health,
             }
@@ -23553,13 +24030,13 @@ def api_plex_events():
 def api_shows():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and not fallback_provider:
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if not instances and not media_provider:
         return jsonify({"error": "Sonarr is not configured"}), 503
     try:
         plex_available = []
         selected_library_ids = []
-        if fallback_provider == "plex":
+        if media_provider == "plex":
             plex_scope = _get_plex_library_scope(cfg)
             plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
             selected_library_ids = _requested_plex_library_ids("sonarr")
@@ -23570,7 +24047,7 @@ def api_shows():
             }
             if available_ids:
                 selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if fallback_provider:
+        if media_provider:
             data, tautulli_warning, tautulli_notice, cold_cache = _get_media_fallback_rows(
                 "sonarr",
                 cfg,
@@ -23617,13 +24094,13 @@ def api_shows():
 def api_movies():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
-    fallback_provider = _media_fallback_provider(cfg, "radarr")
-    if not instances and not fallback_provider:
+    media_provider = _active_media_provider(cfg, "radarr")
+    if not instances and not media_provider:
         return jsonify({"error": "Radarr is not configured"}), 503
     try:
         plex_available = []
         selected_library_ids = []
-        if fallback_provider == "plex":
+        if media_provider == "plex":
             plex_scope = _get_plex_library_scope(cfg)
             plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
             selected_library_ids = _requested_plex_library_ids("radarr")
@@ -23634,7 +24111,7 @@ def api_movies():
             }
             if available_ids:
                 selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if fallback_provider:
+        if media_provider:
             data, tautulli_warning, tautulli_notice, cold_cache = _get_media_fallback_rows(
                 "radarr",
                 cfg,
@@ -23696,13 +24173,13 @@ def shows_csv():
     cfg = _get_config()
     instances = cfg.get("sonarr_instances", [])
     playback_enabled = _playback_enabled(cfg)
-    fallback_provider = _media_fallback_provider(cfg, "sonarr")
-    if not instances and not fallback_provider:
+    media_provider = _active_media_provider(cfg, "sonarr")
+    if not instances and not media_provider:
         return jsonify({"error": "Sonarr is not configured"}), 503
     try:
         plex_available = []
         selected_library_ids = []
-        if fallback_provider == "plex":
+        if media_provider == "plex":
             plex_scope = _get_plex_library_scope(cfg)
             plex_available = (plex_scope.get("available", {}) or {}).get("sonarr", [])
             selected_library_ids = _requested_plex_library_ids("sonarr")
@@ -23713,7 +24190,7 @@ def shows_csv():
             }
             if available_ids:
                 selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if fallback_provider:
+        if media_provider:
             data, _, _, _ = _get_media_fallback_rows("sonarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:
@@ -23807,13 +24284,13 @@ def movies_csv():
     cfg = _get_config()
     instances = cfg.get("radarr_instances", [])
     playback_enabled = _playback_enabled(cfg)
-    fallback_provider = _media_fallback_provider(cfg, "radarr")
-    if not instances and not fallback_provider:
+    media_provider = _active_media_provider(cfg, "radarr")
+    if not instances and not media_provider:
         return jsonify({"error": "Radarr is not configured"}), 503
     try:
         plex_available = []
         selected_library_ids = []
-        if fallback_provider == "plex":
+        if media_provider == "plex":
             plex_scope = _get_plex_library_scope(cfg)
             plex_available = (plex_scope.get("available", {}) or {}).get("radarr", [])
             selected_library_ids = _requested_plex_library_ids("radarr")
@@ -23824,7 +24301,7 @@ def movies_csv():
             }
             if available_ids:
                 selected_library_ids = [item for item in selected_library_ids if item in available_ids]
-        if fallback_provider:
+        if media_provider:
             data, _, _, _ = _get_media_fallback_rows("radarr", cfg, force=False)
             data = _apply_plex_library_scope(data, selected_library_ids)
         else:

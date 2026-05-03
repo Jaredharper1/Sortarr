@@ -17,8 +17,8 @@
   }
 
   const cfg = parseJsonScript("bootstrap-config-json");
-  const provider = String(cfg.playback_provider || "").toLowerCase();
-  const playbackEnabled = Boolean(cfg.playback_configured ?? cfg.tautulli_configured);
+  const provider = String(cfg.provider_state?.history?.effective || "").toLowerCase();
+  const playbackEnabled = Boolean(cfg.playback_configured);
   const label = provider === "jellystat"
     ? "Jellystat"
     : (provider === "tautulli" ? "Tautulli" : (provider === "plex" ? "Plex" : "Playback"));
