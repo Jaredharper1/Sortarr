@@ -6,6 +6,8 @@
 ![GitHub Repo stars](https://img.shields.io/github/stars/Jaredharper1/Sortarr?style=social)
 ![GHCR](https://img.shields.io/badge/container-ghcr.io-blue)
 
+## As I have started a fairly demanding job and I am generally satisfied with the look, feel and performance of Sortarr, I have put this project into maintenance mode. If you have any new feature requests or encounter any bugs, please open a new Issue and I will do my best to support you when time permits. Thank you for all of your support.
+
 # What is Sortarr?
 
 Sortarr is a read-only analytics and organisation tool for media libraries. It helps you identify missing media, mismatches, and optimisation opportunities using live data from providers like Sonarr, Radarr, Plex, Jellyfin, Tautulli, Jellystat and Streamystats.
